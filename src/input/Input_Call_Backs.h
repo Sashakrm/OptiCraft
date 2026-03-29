@@ -1,0 +1,8 @@
+//
+// Created by noktemor on 28.03.2026.
+//
+
+#ifndef OPTICRAFT_INPUT_CALL_BACKS_H
+#define OPTICRAFT_INPUT_CALL_BACKS_H
+
+#endif //OPTICRAFT_INPUT_CALL_BACKS_H
