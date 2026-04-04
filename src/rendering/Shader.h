@@ -7,27 +7,35 @@
 
 #include <string>
 #include <glm/glm.hpp>
+#include <glad/gl.h>
 
 class Shader {
 private:
     unsigned int m_program_id;
 
-    void check_compile_errors(unsigned int shader, const std::string& type);
+    void compile(const char* vertex_src, const char* fragment_src);
 
 public:
+    // Конструкторы
     Shader() : m_program_id(0) {}
-    Shader(const std::string& vertex_path, const std::string& fragment_path);
+    Shader(const char* vertex_path, const char* fragment_path);
+    Shader(const std::string& vertex_src, const std::string& fragment_src);
+
     ~Shader();
 
-    void use() const;
+    // Активация
+    void use();
 
-    // Uniform setters
-    void set_bool(const std::string& name, bool value) const;
-    void set_int(const std::string& name, int value) const;
-    void set_float(const std::string& name, float value) const;
-    void set_vec3(const std::string& name, const glm::vec3& value) const;
-    void set_mat4(const std::string& name, const glm::mat4& value) const;
+    // Униформы
+    void set_bool(const std::string& name, bool value);
+    void set_int(const std::string& name, int value);
+    void set_float(const std::string& name, float value);
+    void set_vec2(const std::string& name, const glm::vec2& value);
+    void set_vec3(const std::string& name, const glm::vec3& value);
+    void set_vec4(const std::string& name, const glm::vec4& value);
+    void set_mat4(const std::string& name, const glm::mat4& value);
 
+    // Утилита
     unsigned int get_id() const { return m_program_id; }
 };
 

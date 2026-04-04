@@ -26,7 +26,7 @@ bool Texture::load_from_file(const std::string& path) {
 
     unsigned char* data = stbi_load(path.c_str(), &m_width, &m_height, &m_channels, 4);
     if (!data) {
-        LOG_ERROR("Failed to load texture: " + path + " - " + stbi_failure_reason());
+        LOG_ERROR("Failed to load textures: " + path + " - " + stbi_failure_reason());
         return false;
     }
 

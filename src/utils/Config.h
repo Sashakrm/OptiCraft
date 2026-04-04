@@ -6,10 +6,6 @@
 #define OPTICRAFT_CONFIG_H
 
 namespace Config {
-    // Мир
-    constexpr int chunk_size = 16;
-    constexpr int chunk_height = 16;
-    constexpr int chunk_load_radius = 1;
 
     // Игрок
     constexpr float player_width = 0.6f;
@@ -34,6 +30,32 @@ namespace Config {
     constexpr int default_window_width = 1280;
     constexpr int default_window_height = 720;
     constexpr const char* default_window_title = "OptiCraft";
+
+    // 🌍 Вертикальные границы
+    constexpr int world_min_y = 5;
+    constexpr int world_sea_level = 63;
+    constexpr int world_max_y = 512;
+    constexpr int world_vertical_range = world_max_y - world_min_y;
+
+    // 🏔️ Параметры генерации
+    constexpr float terrain_base_scale = 0.008f;
+    constexpr float terrain_detail_scale = 0.03f;
+    constexpr float terrain_height_multiplier = 150.0f;
+
+    // 🌊 Океан
+    constexpr float ocean_depth = 15.0f;
+
+    // 👁️ Дистанция прорисовки
+    constexpr int chunk_load_radius = 3;
+
+    // 🎲 Генерация
+    constexpr int world_seed = 12345;
+    constexpr float tree_spawn_chance = 0.02f;  // 2% шанс на дерево
+
+    // 🧱 Чанк
+    constexpr int chunk_size = 16;
+    constexpr int chunk_height = 512;  // Должен покрыть world_vertical_range (768)
+    // Примечание: возможно понадобится 512 или динамическое
 }
 
 #endif //OPTICRAFT_CONFIG_H

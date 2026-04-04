@@ -26,19 +26,24 @@ Chunk::Chunk(int chunk_x, int chunk_z)
     }
 }
 
-void Chunk::generate_blocks() {
-    // Простая генерация: несколько слоёв
-    for (int y = 0; y < Config::chunk_height; ++y) {
-        for (int z = 0; z < Config::chunk_size; ++z) {
-            for (int x = 0; x < Config::chunk_size; ++x) {
-                if (y == 0) {
-                    m_blocks[y][z][x] = Block_Type::Stone;
-                } else if (y < 4) {
-                    m_blocks[y][z][x] = Block_Type::Dirt;
-                } else if (y == 4) {
-                    m_blocks[y][z][x] = Block_Type::Grass;
-                } else {
-                    m_blocks[y][z][x] = Block_Type::Air;
+void Chunk::generate_blocks(World_Generator* generator) {
+    if (generator) {
+        // ✅ Делегируем генерацию внешнему генератору
+        generator->generate_chunk(this);
+    } else {
+        // 🔄 Fallback: старая плоская генерация (для тестов без генератора)
+        for (int y = 0; y < Config::chunk_height; ++y) {
+            for (int z = 0; z < Config::chunk_size; ++z) {
+                for (int x = 0; x < Config::chunk_size; ++x) {
+                    if (y == 0) {
+                        m_blocks[y][z][x] = Block_Type::Stone;
+                    } else if (y < 4) {
+                        m_blocks[y][z][x] = Block_Type::Dirt;
+                    } else if (y == 4) {
+                        m_blocks[y][z][x] = Block_Type::Grass;
+                    } else {
+                        m_blocks[y][z][x] = Block_Type::Air;
+                    }
                 }
             }
         }
@@ -115,16 +120,16 @@ void Chunk::add_face(int x, int y, int z, int dx, int dy, int dz, Block_Type blo
 
     // === 3. Текстура: получаем свойства блока и выбираем тайл ===
     const Block_Properties& props = get_block_props(block_type);
-
+/*
     // Определяем индекс тайла в зависимости от направления грани
-    int texture_index;
+    */int texture_index;/*
     if (dy == 1) {
         texture_index = props.texture_index_top;      // +Y (верх)
     } else if (dy == -1) {
         texture_index = props.texture_index_bottom;   // -Y (низ)
     } else {
         texture_index = props.texture_index_side;     // боковые грани
-    }
+    }*/
 
     // Если индекс -1 (воздух/невалид) — пропускаем
     if (texture_index < 0) return;
@@ -138,10 +143,11 @@ void Chunk::add_face(int x, int y, int z, int dx, int dy, int dz, Block_Type blo
     int tile_col = texture_index % TILES_PER_ROW;
 
     // UV в диапазоне [0, 1] для всего атласа
-    float u_min = static_cast<float>(tile_col) / static_cast<float>(TILES_PER_ROW);
-    float v_min = 1.0f - static_cast<float>(tile_row + 1) / static_cast<float>(TILES_PER_COLUMN);  // OpenGL V идёт снизу-вверх
-    float u_max = u_min + 1.0f / static_cast<float>(TILES_PER_ROW);
-    float v_max = v_min + 1.0f / static_cast<float>(TILES_PER_COLUMN);
+    float u_min = 0.0f;
+    float v_min = 0.0f;
+    float u_max = 1.0f;
+    float v_max = 1.0f;
+
 
     // === 5. Вершины: порядок ПО ЧАСОВОЙ стрелке (CW) при взгляде СНАРУЖИ ===
     // Формат: {x, y, z, u, v, nx, ny, nz}

@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include "input/Input_Manager.h"
 #include "world/Chunk_Manager.h"
+#include "Camera.h"
 
 class Player {
 private:
@@ -31,11 +32,12 @@ public:
     Player();
 
     // Обновление
-    void update(float delta_time, const Chunk_Manager& chunk_manager);
+    void update(float delta_time, const Chunk_Manager& chunk_manager, const Camera* camera);
     void set_movement_input(const Input_Manager::Move_Input& input);
 
-    // Коллизии (упрощённые)
-    bool check_collision(const glm::vec3& new_pos, const Chunk_Manager& chunk_manager) const;
+    // Коллизии
+    bool check_block_collision(const glm::vec3& new_pos, const Chunk_Manager& chunk_manager) const;
+    glm::vec3 resolve_collision(const glm::vec3& new_pos, const Chunk_Manager& chunk_manager) ;
     Block_Type get_block_at(const glm::vec3& world_pos, const Chunk_Manager& chunk_manager) const;
 
     // Геттеры/Сеттеры

@@ -22,6 +22,8 @@ private:
     bool is_chunk_loaded(int cx, int cz) const;
     void unload_chunk(int cx, int cz);
 
+    std::unique_ptr<World_Generator> m_world_generator;
+
 public:
     Chunk_Manager(int load_radius = Config::chunk_load_radius);
 

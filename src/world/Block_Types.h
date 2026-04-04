@@ -16,6 +16,12 @@ enum class Block_Type : Block_ID {
     Grass = 1,
     Dirt = 2,
     Stone = 3,
+    Wood = 4,
+    Leaves = 5,
+    Sand = 6,
+    Water = 7,
+    Snow = 8,
+    Mycelium = 9,
     Count
 };
 
@@ -25,28 +31,47 @@ struct Block_Properties {
     bool is_transparent;
     float hardness;
 
-    // 🔹 Текстура: индекс тайла в атласе
-    int texture_index_top;    // Для верхней грани (трава)
-    int texture_index_side;   // Для боковых граней
-    int texture_index_bottom; // Для нижней грани (корень травы)
+    // Текстуры: имена файлов (без .png)
+    std::string texture_side;
+    std::string texture_top;
+    std::string texture_bottom;
 
-    // 🔹 Или одно значение для всех граней:
-    int get_texture_index(int face_direction) const {
-        if (face_direction == 1) return texture_index_top;    // +Y
-        if (face_direction == -1) return texture_index_bottom; // -Y
-        return texture_index_side;  // боковые
-    }
+    // OpenGL ID (заполняется при загрузке в Renderer)
+    unsigned int tex_id_side;
+    unsigned int tex_id_top;
+    unsigned int tex_id_bottom;
+
+    Block_Properties(
+        std::string n = "",
+        bool solid = true,
+        bool transp = false,
+        float hard = 1.0f,
+        std::string side = "",
+        std::string top = "",
+        std::string bottom = "",
+        unsigned int id_side = 0,
+        unsigned int id_top = 0,
+        unsigned int id_bottom = 0
+    ) : name(std::move(n)),
+        is_solid(solid),
+        is_transparent(transp),
+        hardness(hard),
+        texture_side(std::move(side)),
+        texture_top(std::move(top)),
+        texture_bottom(std::move(bottom)),
+        tex_id_side(id_side),
+        tex_id_top(id_top),
+        tex_id_bottom(id_bottom)
+    {}
 };
 
 class Block_Registry {
 private:
     Block_Properties m_properties[static_cast<size_t>(Block_Type::Count)];
-
     Block_Registry();
 
 public:
     static Block_Registry& get_instance();
-
     const Block_Properties& get_properties(Block_Type type) const;
     Block_ID get_block_id(const std::string& name) const;
 };

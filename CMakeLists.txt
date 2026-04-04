@@ -52,7 +52,13 @@ set(GLAD_SRC ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/src/gl.c
         src/world/Block_Types.cpp
         src/utils/Hash_Utils.h
         src/utils/Texture.cpp
-        src/utils/Texture.h)
+        src/utils/Texture.h
+        src/world/Biome_Types.cpp
+        src/world/Biome_Types.h
+        src/world/Biome_Generator.cpp
+        src/world/Biome_Generator.h
+        src/utils/Noise.cpp
+        src/utils/Noise.h)
 
 # =============== Создаём исполняемый файл ===============
 add_executable(${PROJECT_NAME} ${SOURCES} ${GLAD_SRC})

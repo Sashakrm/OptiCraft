@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 #include "Block_Types.h"
 #include "utils/Config.h"
+#include "World_Generator.h"
 
 struct Chunk_Vertex {
     float x, y, z;
@@ -41,7 +42,7 @@ public:
     Chunk(int chunk_x, int chunk_z);
 
     // Генерация
-    void generate_blocks();
+    void generate_blocks(World_Generator* generator = nullptr);
     void build_mesh();
 
     // Доступ к блокам

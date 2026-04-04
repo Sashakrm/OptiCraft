@@ -55,29 +55,49 @@ bool Game::initialize() {
     // 4. Рендерер
     m_renderer_ptr = std::make_unique<Renderer>();
 
-    std::string atlas_path =
-    "/home/noktemor/CLionProjects/OptiCraft/assets/texture/texture_atlas.png";
+    // ✅ НОВОЕ: папка с отдельными текстурами вместо одного атласа
+    std::string texture_folder =
+        "/home/noktemor/CLionProjects/OptiCraft/assets/textures";
 
     if (!m_renderer_ptr->initialize(
         "/home/noktemor/CLionProjects/OptiCraft/assets/shaders/vertex.glsl",
         "/home/noktemor/CLionProjects/OptiCraft/assets/shaders/fragment.glsl",
-        atlas_path)) {
+        texture_folder)) {  // ✅ Передаём папку, не файл атласа!
         LOG_ERROR("Failed to initialize renderer");
         return false;
-        }
+    }
 
     // 5. Менеджер чанков
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>();
 
     // 6. Игрок
     m_player_ptr = std::make_unique<Player>();
-    m_player_ptr->set_position(glm::vec3(8.0f, 20.0f, 8.0f));
+    m_player_ptr->set_position(glm::vec3(8.0f, 100.0f, 8.0f));
 
     // Начальная загрузка чанков
     auto player_pos = m_player_ptr->get_position();
     int player_cx = static_cast<int>(std::floor(player_pos.x / Config::chunk_size));
     int player_cz = static_cast<int>(std::floor(player_pos.z / Config::chunk_size));
     m_chunk_manager_ptr->load_around(player_cx, player_cz);
+
+    {
+        int cx = static_cast<int>(std::floor(player_pos.x / Config::chunk_size));
+        int cz = static_cast<int>(std::floor(player_pos.z / Config::chunk_size));
+
+        if (auto* chunk = m_chunk_manager_ptr->get_chunk(cx, cz)) {
+            int lx = static_cast<int>(player_pos.x) % Config::chunk_size;
+            int lz = static_cast<int>(player_pos.z) % Config::chunk_size;
+            if (lx < 0) lx += Config::chunk_size;
+            if (lz < 0) lz += Config::chunk_size;
+
+            LOG_INFO("Loaded chunk (" + std::to_string(cx) + ", " + std::to_string(cz) + ")");
+            std::cout << "[DEBUG] Sample column:\n";
+            for (int ly = 0; ly < 20; ++ly) {
+                Block_Type b = chunk->get_block(lx, ly, lz);
+                std::cout << "  Local Y=" << ly << " → Block=" << static_cast<int>(b) << "\n";
+            }
+        }
+    }
 
     m_is_running = true;
     LOG_INFO("Game initialized successfully");
@@ -132,7 +152,11 @@ void Game::handle_input() {
 
 void Game::update_world() {
     // Обновление игрока
-    m_player_ptr->update(m_delta_time, *m_chunk_manager_ptr);
+    m_player_ptr->update(
+        m_delta_time,
+        *m_chunk_manager_ptr,
+        m_camera_ptr.get()  // ✅ Передаём указатель на камеру
+    );
 
     // Камера следует за игроком
     m_camera_ptr->set_position(

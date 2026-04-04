@@ -9,7 +9,9 @@
 Chunk_Manager::Chunk_Manager(int load_radius)
     : m_player_chunk(0, 0)
     , m_load_radius(load_radius)
+    , m_world_generator(std::make_unique<World_Generator>(Config::world_seed))  // ✅ Инициализация
 {}
+
 
 bool Chunk_Manager::is_chunk_loaded(int cx, int cz) const {
     return m_chunks.find({cx, cz}) != m_chunks.end();
@@ -23,9 +25,6 @@ void Chunk_Manager::unload_chunk(int cx, int cz) {
 }
 
 void Chunk_Manager::load_around(int player_cx, int player_cz) {
-    LOG_INFO("Loading chunks around (" + std::to_string(player_cx) + ", " +
-             std::to_string(player_cz) + ")...");
-
     for (int dx = -m_load_radius; dx <= m_load_radius; ++dx) {
         for (int dz = -m_load_radius; dz <= m_load_radius; ++dz) {
             int cx = player_cx + dx;
@@ -33,22 +32,15 @@ void Chunk_Manager::load_around(int player_cx, int player_cz) {
 
             if (!is_chunk_loaded(cx, cz)) {
                 auto chunk = std::make_unique<Chunk>(cx, cz);
-                chunk->generate_blocks();
-                chunk->build_mesh();
 
-                //  Отладка: где чанк в мире?
-                int world_min_x = cx * Config::chunk_size;
-                int world_min_z = cz * Config::chunk_size;
-                std::cout << "[CHUNK] Loaded chunk (" << cx << ", " << cz
-                          << ") → world X:[" << world_min_x << ", " << world_min_x + Config::chunk_size
-                          << "] Z:[" << world_min_z << ", " << world_min_z + Config::chunk_size << "]\n";
+                // Генерация через World_Generator
+                m_world_generator->generate_chunk(chunk.get());
+                chunk->build_mesh();
 
                 m_chunks[{cx, cz}] = std::move(chunk);
             }
         }
     }
-
-    LOG_INFO("Loaded chunks: " + std::to_string(m_chunks.size()));
 }
 
 void Chunk_Manager::unload_distant(int center_cx, int center_cz, int max_distance) {
