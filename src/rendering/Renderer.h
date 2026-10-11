@@ -12,13 +12,13 @@
 #include <memory>
 #include <unordered_map>
 #include <glm/glm.hpp>
-#include "Shader.h"
-#include "world/Chunk.h"
-#include "world/Chunk_Manager.h"
+#include "rendering/Shader.h"
+#include "world/chunks/Chunk.h"
+#include "world/chunks/Chunk_Manager.h"
 #include "utils/Config.h"
-#include "utils/Hash_Utils.h"
-#include "Texture_Atlas.h"
-#include "Atlas_Registry.h"
+#include "math/Hash_Utils.h"
+#include "rendering/atlas/Texture_Atlas.h"
+#include "rendering/atlas/Atlas_Registry.h"
 
 using Vertex = Chunk_Vertex;
 

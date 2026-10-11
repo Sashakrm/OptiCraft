@@ -1,6 +1,6 @@
-#include "Raycast.h"
-#include "world/Chunk_Manager.h"
-#include "world/Block_Types.h"
+#include "physics/Raycast.h"
+#include "world/chunks/Chunk_Manager.h"
+#include "world/blocks/Block_Types.h"
 #include "utils/Config.h"
 
 #include <cmath>

@@ -74,46 +74,60 @@ cmake --build cmake-build-debug -j 4
 
 ### `src/core/`
 
--   `Application.*` --- state machine приложения.
--   `Game.*` --- связывает подсистемы и реализует игровой цикл.
--   `Window.*` --- окно GLFW.
--   `Events.*` --- события.
--   `Day_Night_Cycle.*` --- время суток, направления солнца/луны и
-    ambient.
+-   `app/` --- `Application.*` (state machine приложения), `Window.*`
+    (окно GLFW), `Events.*` (события).
+-   `game/` --- `Game.*` (связывает подсистемы, игровой цикл) и
+    `Day_Night_Cycle.*` (время суток, направления солнца/луны, ambient).
 
 ### `src/world/`
 
--   `Chunk.*` --- данные одного 32³ чанка и его CPU-меш.
--   `Chunk_Manager.*` --- потоковая загрузка, очереди worker'ов,
-    хранение чанков, редактирование, свет.
--   `World_Generator.*` --- процедурная генерация.
--   `Biome.*` --- старый data-driven парсер `.biome`; основной генератор
-    сейчас не использует его для выбора биома.
--   `Tree_Generator.*` --- формы деревьев.
--   `Structures.*` --- типы структур.
--   `Block_Types.*` --- реестр блоков и загрузка `blocks.json`.
--   `Block_Interaction.*` --- ломание/установка блоков и запрос на
-    открытие контейнера (ПКМ по сундуку/верстаку/печи).
--   `Block_Entity.*` --- данные блока-контейнера (слоты сундука, сетка
-    верстака, слоты печи), см. раздел 46.
--   `Block_Entity_Store.*` --- JSON-сохранение/загрузка Block_Entity.
--   `Container_Session.h` --- логика клика по слотам открытого
-    контейнера и перенос предметов в/из хотбара.
--   `Recipe.*` --- `Recipe_Registry`, рецепты верстака из
-    `assets/recipe.json`.
--   `World_File.*` --- `world.json` и интерфейс постоянного хранения.
--   `Region_File.*` --- бинарное region-хранилище чанков.
--   `Generation_Type.*` --- типы/служебная часть генерационных режимов.
--   `OpenSimplex2S.*` --- реализация шума.
+-   `chunks/` --- `Chunk.*` (данные 32³ чанка и его CPU-меш),
+    `Chunk_Manager.*` (потоковая загрузка, очереди worker'ов, хранение,
+    редактирование, свет), `Chunk_Table.h`.
+-   `generation/` --- `World_Generator.*` (процедурная генерация),
+    `Biome.*` (старый data-driven парсер `.biome`; основной генератор
+    сейчас не использует его для выбора биома), `Tree_Generator.*`
+    (формы деревьев), `Structures.*` (типы структур),
+    `Generation_Type.*` (служебная часть генерационных режимов).
+-   `blocks/` --- `Block.*`, `Block_Types.*` (реестр блоков и загрузка
+    `blocks.json`), `Block_Interaction.*` (ломание/установка блоков и
+    запрос на открытие контейнера: ПКМ по сундуку/верстаку/печи),
+    `Block_Entity.*` (данные блока-контейнера, см. раздел 46),
+    `Block_Entity_Store.*` (JSON-сохранение/загрузка Block_Entity),
+    `Container_Session.h` (клики по слотам открытого контейнера и
+    перенос предметов в/из хотбара).
+-   `crafting/` --- `Recipe.*` (`Recipe_Registry`, рецепты верстака из
+    `assets/recipe.json`), `Smelting.*`, `Crop_Manager.*`.
+-   `storage/` --- `World_File.*` (`world.json` и интерфейс постоянного
+    хранения), `Region_File.*` (бинарное region-хранилище чанков).
+
+### `src/math/`
+
+`Math_Helpers.h` (floor_div, clamp и т.п.), `Hash_Utils.h` (хэши ключей
+чанков) и `PerlinNoise.h`.
+
+### `external/`
+
+Сторонний код, который не правится: `glad`, `stb`, `cgltf` и
+`opensimplex/` --- `OpenSimplex2S.{c,h}`, шум для генерации мира
+(подключается как `#include "OpenSimplex2S.h"`).
 
 ### `src/rendering/`
 
-OpenGL renderer, shader management, texture atlas, frustum и
-mesh-related types.
+OpenGL renderer (`Renderer.*`), шейдеры (`Shader.*`), `Frustum.h`;
+`atlas/` --- `Texture_Atlas.*`, `Atlas_Registry.*`, `Texture.*`;
+`capture/` --- `Isometric_Capture.*`.
 
 ### `src/entities/`
 
-Игрок, камера, инвентарь, мобы (`Pig`, см. раздел 47).
+-   `player/` --- `Player.*`, `Camera.*`, `Inventory.*`.
+-   `animals/` --- `Pig`, `Cow`, `Horse`, `Breeding.h` (см. раздел 47);
+    `animals/ai/` --- `Pig_AI.*`, `Horse_AI.*`.
+-   `items/` --- `Dropped_Item.*`.
+
+### `src/mobs/`
+
+Базовый `Mob` и загрузка glTF-моделей (`Mob_Model.*`).
 
 ### `src/physics/`
 
@@ -125,11 +139,13 @@ Raycast.
 
 ### `src/hud/`
 
-Игровой HUD, меню, панели инвентаря/контейнеров (`Panel_Layouts`), debug overlay и экранные эффекты.
+Игровой HUD, меню, debug overlay и экранные эффекты; `layouts/` ---
+`Panel_Layouts.*` (панели инвентаря/контейнеров).
 
 ### `src/utils/`
 
-Конфигурация, логирование, хеширование, математика и текстуры.
+`Config.h`; `logging/` --- `Logger.*`; `text/` --- `Json.*`,
+`Localization.*`, `Utf8.h`.
 
 ------------------------------------------------------------------------
 
@@ -1306,7 +1322,7 @@ damage    = 2 HP per block above safe height
 
 Инвентарь и контейнеры (сундук/верстак/печь) рисует одна универсальная панель
 `Hud::draw_panel_screen`. Геометрия панелей --- чистые функции в
-`src/hud/Panel_Layouts.*` (`inventory_survival`, `inventory_creative`, `chest`,
+`src/hud/layouts/Panel_Layouts.*` (`inventory_survival`, `inventory_creative`, `chest`,
 `crafting_table`, `furnace`): они возвращают `Hud_Panel_Layout` со слотами,
 подписями и индикаторами прогресса в GUI-пикселях. Каждый слот несёт `id`
 (см. `Panel_Layouts::Panel_Slot_Ids`), а `Game::build_inventory_panel` /
@@ -1339,13 +1355,13 @@ damage    = 2 HP per block above safe height
 шейдером `ui_*.glsl`.
 
 Шрифт: глифы `font_<код Unicode>` --- печатный ASCII, русские буквы и Ё/ё.
-Строки обрабатываются как UTF-8 (`src/utils/Utf8.h`).
+Строки обрабатываются как UTF-8 (`src/utils/text/Utf8.h`).
 
 ### Локализация
 
 Тексты UI лежат в `assets/lang/<код>.json` (плоский словарь ключ -> строка, `{0}`, `{1}`
 --- подстановки). В коде: `tr("menu.singleplayer")`, `tr("worlds.detail", {a, b, c})`
-(`src/utils/Localization.*`). Английский всегда загружается как запасной, отсутствующий
+(`src/utils/text/Localization.*`). Английский всегда загружается как запасной, отсутствующий
 ключ возвращается как есть. Язык переключается в Options и сохраняется в `options.txt`
 (`language=ru`). Новый язык = новый файл в `assets/lang`.
 
@@ -1679,15 +1695,15 @@ Renderer invalidates/upload cache
 При сопровождении проекта следует считать источниками истины:
 
 1.  `src/utils/Config.h` --- размеры и основные runtime constants.
-2.  `src/world/World_Generator.cpp/.h` --- текущая процедурная
+2.  `src/world/generation/World_Generator.cpp/.h` --- текущая процедурная
     генерация.
-3.  `src/world/Chunk.cpp/.h` --- layout чанка и mesh builder.
-4.  `src/world/Chunk_Manager.cpp/.h` --- streaming, workers, lighting.
-5.  `src/world/Block_Types.cpp/.h` --- block registry.
-6.  `src/world/World_File.cpp/.h` и `Region_File.cpp/.h` ---
+3.  `src/world/chunks/Chunk.cpp/.h` --- layout чанка и mesh builder.
+4.  `src/world/chunks/Chunk_Manager.cpp/.h` --- streaming, workers, lighting.
+5.  `src/world/blocks/Block_Types.cpp/.h` --- block registry.
+6.  `src/world/storage/World_File.cpp/.h` и `storage/Region_File.cpp/.h` ---
     persistence.
 7.  `src/rendering/Renderer.cpp/.h` --- GPU rendering.
-8.  `src/core/Game.cpp/.h` --- runtime orchestration.
+8.  `src/core/game/Game.cpp/.h` --- runtime orchestration.
 9.  `assets/blocks.json` --- data-driven block properties.
 10. `assets/shaders/` --- фактическое поведение GPU passes.
 11. `assets/recipe.json` --- рецепты верстака.
@@ -1843,7 +1859,7 @@ streaming limits и mesh section calculations.
 
 ## 47. Мобы
 
-`Pig` (`src/entities/Pig.*`) использует `Pig_AI` для состояний и `Mob`
+`Pig` (`src/entities/animals/Pig.*`) использует `Pig_AI` для состояний и `Mob`
 для модели/анимации. Физика:
 
 -   вертикальная скорость копится каждый кадр:

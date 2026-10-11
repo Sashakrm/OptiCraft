@@ -9,8 +9,8 @@
 #include <cgltf.h>
 
 #define GLM_ENABLE_EXPERIMENTAL
-#include "Mob_Model.h"
-#include "utils/Logger.h"
+#include "mobs/Mob_Model.h"
+#include "utils/logging/Logger.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/matrix_decompose.hpp>

@@ -22,7 +22,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "Mob_Model.h"
+#include "mobs/Mob_Model.h"
 #include "rendering/Shader.h"
 
 class Mob {

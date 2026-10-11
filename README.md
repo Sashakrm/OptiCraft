@@ -375,9 +375,9 @@ WARN на каждую "подозрительную" кость с её оши�
 Первый живой моб на системе выше — свинья с простым конечным автоматом
 поведения (голод/энергия/счастье → Idle/Hungry/Eating/Sleepy/Sleeping/
 Walking/Happy). Логика ИИ портирована из наброска пользователя (изначально
-сгенерирован DeepSeek как консольная демка) в `src/entities/AI/Pig_AI.{h,cpp}`
+сгенерирован DeepSeek как консольная демка) в `src/entities/animals/ai/Pig_AI.{h,cpp}`
 — это чисто поведенческий слой, ничего не знает о GL/Mob/позиции в мире.
-`src/entities/Pig.{h,cpp}` склеивает `Pig_AI` (поведение) с `Mob` (визуал):
+`src/entities/animals/Pig.{h,cpp}` склеивает `Pig_AI` (поведение) с `Mob` (визуал):
 переключает анимацию по имени состояния (`Idle`/`Walk`/`Eat`/`Sleep`/`Happy`
 — если у модели есть такой клип, см. `Mob::has_animation`) и блуждает по XZ,
 пока `Pig_AI` в состоянии `Walking`.
@@ -417,11 +417,11 @@ glTF V идёт сверху вниз, поэтому `Mob_Model` вызывае
 64×32, все тайлы строго 16×16 — из-за этого несимметричная текстура (факел и
 т.п.) в принципе не помещалась нормально. Теперь:
 
-- **`Texture_Atlas`** (`src/rendering/Texture_Atlas.{h,cpp}`) — одна текстура +
+- **`Texture_Atlas`** (`src/rendering/atlas/Texture_Atlas.{h,cpp}`) — одна текстура +
   именованные спрайты с явным пиксельным прямоугольником `{x, y, w, h}`.
   Спрайты внутри одного атласа могут быть КАКОГО УГОДНО размера — 16×16,
   16×24, 32×32, что угодно.
-- **`Atlas_Registry`** (`src/rendering/Atlas_Registry.{h,cpp}`) — синглтон,
+- **`Atlas_Registry`** (`src/rendering/atlas/Atlas_Registry.{h,cpp}`) — синглтон,
   при старте сканирует `assets/atlases/` на файлы `*.atlas.json` и грузит
   каждый. Это и есть механизм "сколько угодно атласов без правки кода":
   чтобы завести новый атлас (UI, 3D-иконки блоков для инвентаря, что
@@ -465,7 +465,7 @@ uv_side/uv_bottom` — `Chunk.cpp` при постройке меша чанка
 используются независимо (HUD, например, спокойно может забиндить свой
 атлас для крестика прицела/рамок, не мешая рендеру мира).
 
-**Общий JSON-парсер** вынесен в `src/utils/Json.{h,cpp}` (раньше был
+**Общий JSON-парсер** вынесен в `src/utils/text/Json.{h,cpp}` (раньше был
 захардкожен прямо внутри `Block_Types.cpp`) — теперь им пользуются и
 `Block_Types.cpp`, и `Atlas_Registry`, а не только blocks.json.
 
@@ -480,12 +480,13 @@ uv_side/uv_bottom` — `Chunk.cpp` при постройке меша чанка
 
 - **stb_image** — `external/stb/stb_image.h` — https://github.com/nothings/stb
 - **glad** — `external/glad/` — https://glad.dav1d.de/
+- **OpenSimplex2S** — `external/opensimplex/OpenSimplex2S.{c,h}` — https://github.com/KdotJPG/OpenSimplex2 — шум для генерации мира (C-версия, подключается через `#include "OpenSimplex2S.h"`)
 - **cgltf** — `external/cgltf/cgltf.h` — https://github.com/jkuhlmann/cgltf — парсер glTF/GLB, используется для загрузки моделей мобов (геометрия, скелет, анимации, материалы)
 
 ## Интерфейс, атлас и локализация
 
 - Интерфейс рисуется из атласа `ui_main` (`assets/texture/ui_atlas.png`). Источник правды ---
   сам PNG; `tools/gen_ui_atlas.py` нужен только для удобного добавления спрайтов.
-- Раскладки инвентаря, сундука, верстака и печи --- в `src/hud/Panel_Layouts.*`, а не в `Game.cpp`.
+- Раскладки инвентаря, сундука, верстака и печи --- в `src/hud/layouts/Panel_Layouts.*`, а не в `Game.cpp`.
 - Тексты UI --- в `assets/lang/en.json` и `ru.json`, язык переключается в Options.
   Шрифт поддерживает ASCII и русскую кириллицу.

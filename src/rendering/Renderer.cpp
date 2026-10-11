@@ -1,8 +1,8 @@
 //
 // Created by noktemor on 11.02.2026.
 //
-#include "Renderer.h"
-#include "utils/Logger.h"
+#include "rendering/Renderer.h"
+#include "utils/logging/Logger.h"
 #include "utils/Config.h"
 
 #include <algorithm>

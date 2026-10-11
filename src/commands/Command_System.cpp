@@ -1,7 +1,7 @@
-#include "Command_System.h"
+#include "commands/Command_System.h"
 
-#include "core/Game.h"
-#include "world/Block_Types.h"
+#include "core/game/Game.h"
+#include "world/blocks/Block_Types.h"
 #include "utils/Config.h"
 
 #include <algorithm>

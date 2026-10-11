@@ -1,7 +1,7 @@
-#include "Hud.h"
-#include "utils/Logger.h"
-#include "utils/Utf8.h"
-#include "rendering/Atlas_Registry.h"
+#include "hud/Hud.h"
+#include "utils/logging/Logger.h"
+#include "utils/text/Utf8.h"
+#include "rendering/atlas/Atlas_Registry.h"
 #include <glad/gl.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>

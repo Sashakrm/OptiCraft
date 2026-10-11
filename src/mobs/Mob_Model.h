@@ -31,7 +31,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
-#include "utils/Texture.h"
+#include "rendering/atlas/Texture.h"
 
 // Максимум костей на одного моба — ограничение размера uniform-массива в
 // шейдере (см. assets/shaders/mob_vertex.glsl, bones[MAX_MOB_BONES]).
