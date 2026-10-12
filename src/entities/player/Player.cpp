@@ -51,7 +51,10 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
         update_crouch(chunk_manager);
     }
 
-    const float current_speed = m_is_flying ? m_fly_speed : m_move_speed;
+    // Shift на земле: медленная ходьба (подкрадывание). В полёте Shift — спуск, скорость не трогаем.
+    const bool sneaking = !m_is_flying && m_pending_input.crouch;
+    const float current_speed = m_is_flying ? m_fly_speed
+        : (sneaking ? m_move_speed * Config::player_sneak_speed_multiplier : m_move_speed);
 
     if (m_pending_input.forward != 0.0f || m_pending_input.strafe != 0.0f) {
         glm::vec3 move_direction = forward * m_pending_input.forward + right * m_pending_input.strafe;
@@ -103,8 +106,16 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
 
     glm::vec3 target = m_position;
 
+    // Подкрадывание: пока стоим на земле, шаг, после которого под ногами пусто, отменяется —
+    // игрок не падает с края блока (как в Minecraft). Прыжок/падение в воздухе не ограничиваем.
+    const bool edge_guard = sneaking && was_on_ground && m_velocity.y <= 0.0f;
+    auto leaves_ground = [&](const glm::vec3& p) {
+        return edge_guard &&
+               !collides_at(p - glm::vec3(0.0f, Config::player_sneak_edge_drop, 0.0f), chunk_manager);
+    };
+
     target.x += m_velocity.x * delta_time;
-    if (collides_at(target, chunk_manager)) {
+    if (collides_at(target, chunk_manager) || leaves_ground(target)) {
         target.x = m_position.x;
         m_velocity.x = 0.0f;
     } else {
@@ -129,7 +140,7 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
 
     target = m_position;
     target.z += m_velocity.z * delta_time;
-    if (collides_at(target, chunk_manager)) {
+    if (collides_at(target, chunk_manager) || leaves_ground(target)) {
         target.z = m_position.z;
         m_velocity.z = 0.0f;
     } else {

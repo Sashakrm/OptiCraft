@@ -241,6 +241,7 @@ void Game::handle_gameplay_input() {
 
         m_horse_ride_input.wish_dir = wish;
         m_horse_ride_input.throttle = move_input.forward;
+        m_horse_ride_input.jump = m_input_ptr->is_key_pressed(GLFW_KEY_SPACE);
         m_horse_ride_input.handbrake = move_input.jump;
         if (m_input_ptr->is_key_pressed(GLFW_KEY_LEFT_SHIFT)) m_dismount_requested = true;
 

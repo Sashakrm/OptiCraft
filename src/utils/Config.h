@@ -68,6 +68,8 @@ namespace Config {
     constexpr float player_gravity = -20.0f;
     constexpr int player_max_health = 20;
     constexpr float player_crouch_height = 1.5f;
+    constexpr float player_sneak_speed_multiplier = 0.3f;  // Shift: скорость ходьбы × это значение
+    constexpr float player_sneak_edge_drop = 0.6f;         // Shift: не шагать туда, где под ногами пусто глубже этого
     constexpr float player_fly_speed = 8.0f;
     // Падение (Survival): первые fall_damage_safe_height блоков падения — без урона (как в
     // Minecraft), дальше — fall_damage_per_block HP за каждый блок сверху.
@@ -251,6 +253,7 @@ namespace Config {
     constexpr float horse_taming_seconds = 5.0f;
     // Езда и дрифт. Скорости — блоки/сек, повороты — рад/сек, grip — скорость гашения
     // бокового скольжения (чем больше, тем «цепче»; при ручнике grip падает почти до нуля).
+    constexpr float horse_ride_jump_speed = 8.5f;    // начальная вертикальная скорость прыжка по пробелу (~1.8 блока)
     constexpr float horse_ride_max_speed = 13.0f;
     constexpr float horse_ride_reverse_speed = 3.0f;
     constexpr float horse_ride_accel = 12.0f;
