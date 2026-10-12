@@ -248,7 +248,7 @@ namespace {
             for (auto id : payload) {
                 if (id >= k_max_block_types) return false;
             }
-            std::memcpy(blocks.data(), payload.data(), payload.size());
+            blocks.assign_flat(payload.data());
             return true;
         }
 

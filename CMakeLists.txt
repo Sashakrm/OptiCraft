@@ -77,6 +77,7 @@ set(SOURCES
         ${SRC_DIR}/world/generation/Tree_Generator.cpp
         ${SRC_DIR}/world/generation/World_Generator.cpp
         ${SRC_DIR}/world/storage/World_File.cpp
+        ${SRC_DIR}/world/fluids/Fluid_Simulator.cpp
 
         # physics
         ${SRC_DIR}/physics/Raycast.cpp

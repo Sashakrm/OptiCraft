@@ -92,8 +92,8 @@ bool Game::initialize() {
     Block_Registry::get_instance();
 
     if (!m_renderer_ptr->initialize(
-            "assets/shaders/vertex.glsl",
-            "assets/shaders/fragment.glsl",
+            "assets/shaders/terrain_vertex.glsl",
+            "assets/shaders/terrain_fragment.glsl",
             "blocks_main")) {
         LOG_ERROR("Failed to initialize renderer");
         return false;
@@ -1159,6 +1159,7 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
     m_player_ptr->update(delta_time, *m_chunk_manager_ptr);
     m_player_ptr->update_hunger(delta_time);
     m_chunk_manager_ptr->update_block_entities(delta_time);
+    m_chunk_manager_ptr->update_fluids(delta_time);
 
     // Survival: смерть -> телепорт обратно на изначальную точку спавна с полным здоровьем.
     if (m_game_mode == Game_Mode::Survival && !m_player_ptr->is_alive()) {

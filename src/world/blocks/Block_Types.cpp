@@ -147,6 +147,14 @@ Block_Registry::Block_Registry() {
 
 void Block_Registry::build_fast_tables() {
     for (size_t id = 0; id < k_max_block_types; ++id) {
+        // Не заданная явно взрывоустойчивость выводится из твёрдости (как у большинства блоков
+        // в Minecraft: ~5 x hardness), жидкости гасят взрыв почти полностью.
+        Block_Properties& props = m_properties[id];
+        if (props.blast_resistance < 0.0f) {
+            props.blast_resistance = props.state == Block_State::Liquid ? 100.0f
+                                                                       : props.hardness * 5.0f;
+        }
+        m_blast_resistance_flat[id] = props.blast_resistance;
         m_transparent_flat[id] = m_properties[id].is_transparent;
         // light_emission в Block_Properties — int (0..max_light_level), а таблица — uint8_t,
         // чтобы обе плоские таблицы весили ровно 256 байт и лежали в кэше одинаково дёшево;
@@ -329,6 +337,21 @@ void Block_Registry::load_from_file(const std::string& path) {
             }
             if (const auto* v = entry.find("hardness")) {
                 properties.hardness = read_float(*v, properties.hardness);
+            }
+            if (const auto* v = entry.find("fluid_tick_delay")) {
+                properties.fluid_tick_delay = std::max(1, read_int(*v, properties.fluid_tick_delay));
+            }
+            if (const auto* v = entry.find("fluid_drop_off")) {
+                properties.fluid_drop_off = std::max(1, read_int(*v, properties.fluid_drop_off));
+            }
+            if (const auto* v = entry.find("fluid_slope_distance")) {
+                properties.fluid_slope_distance = std::clamp(read_int(*v, properties.fluid_slope_distance), 0, 8);
+            }
+            if (const auto* v = entry.find("fluid_infinite")) {
+                properties.fluid_infinite = read_bool(*v, properties.fluid_infinite);
+            }
+            if (const auto* v = entry.find("blast_resistance")) {
+                properties.blast_resistance = std::max(0.0f, read_float(*v, properties.blast_resistance));
             }
             if (const auto* v = entry.find("light_emission")) {
                 properties.light_emission = read_int(*v, properties.light_emission);

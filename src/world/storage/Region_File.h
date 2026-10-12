@@ -127,6 +127,8 @@ private:
     // аллоцировало по 32 КБ каждый раз.
     std::vector<uint8_t> m_scratch_compress;
     std::vector<uint8_t> m_scratch_read;
+    // Плоский (распакованный) вид чанка: на диске формат прежний, а в памяти чанк палитровый.
+    std::vector<uint8_t> m_scratch_flat;
 
     bool open_locked();
     bool create_empty_locked();

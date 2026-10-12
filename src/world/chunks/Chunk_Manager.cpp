@@ -209,6 +209,10 @@ void Chunk_Manager::sync_block_entity(int wx, int wy, int wz, Block_Types old_ty
     }
 }
 
+void Chunk_Manager::update_fluids(float delta_time) {
+    m_fluids.update(*this, delta_time);
+}
+
 void Chunk_Manager::update_block_entities(float delta_time) {
     const Smelting_Registry& smelting = Smelting_Registry::get_instance();
     constexpr int k_max_stack = 64;
@@ -458,10 +462,37 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                 return 0;
             };
 
+            // Метаданные соседа (уровень жидкости) — из тех же снимков граней. Нет снимка — 0
+            // (источник), как и у моря, которое достраивает генератор.
+            Chunk_Meta_Lookup meta_lookup = [&snapshot](int wx, int wy, int wz) -> uint8_t {
+                const int local_x = wx - snapshot.position.x * Config::chunk_size;
+                const int local_y = wy - snapshot.position.y * Config::chunk_height;
+                const int local_z = wz - snapshot.position.z * Config::chunk_size;
+
+                int neighbor_index = -1;
+                if (local_x < 0) neighbor_index = 0;
+                else if (local_x >= Config::chunk_size) neighbor_index = 1;
+                else if (local_y < 0) neighbor_index = 2;
+                else if (local_y >= Config::chunk_height) neighbor_index = 3;
+                else if (local_z < 0) neighbor_index = 4;
+                else if (local_z >= Config::chunk_size) neighbor_index = 5;
+
+                if (neighbor_index >= 0 && snapshot.neighbor_blocks[neighbor_index]) {
+                    const int nlx = ((local_x % Config::chunk_size) + Config::chunk_size) % Config::chunk_size;
+                    const int nly = ((local_y % Config::chunk_height) + Config::chunk_height) % Config::chunk_height;
+                    const int nlz = ((local_z % Config::chunk_size) + Config::chunk_size) % Config::chunk_size;
+                    const auto& face = *snapshot.neighbor_blocks[neighbor_index];
+                    if (neighbor_index == 0 || neighbor_index == 1) return face.get_meta(nlz, nly);
+                    if (neighbor_index == 2 || neighbor_index == 3) return face.get_meta(nlx, nlz);
+                    return face.get_meta(nlx, nly);
+                }
+                return 0;
+            };
+
             Chunk_Meshes meshes = build_chunk_mesh(mesh_job.own_blocks, mesh_job.own_light,
                                                     mesh_job.position.x, mesh_job.position.y, mesh_job.position.z,
                                                     lookup, light_lookup, *m_texture_atlas,
-                                                    mesh_job.clip.active);
+                                                    mesh_job.clip.active, meta_lookup);
 
             std::lock_guard<std::mutex> lock(m_completed_mutex);
             m_completed_mesh_jobs.push({mesh_job.position, mesh_job.generation_id, std::move(meshes)});
@@ -572,6 +603,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
                     for (int z = 0; z < Config::chunk_size; ++z) {
                         const size_t idx = static_cast<size_t>(y) * Config::chunk_size + z;
                         block_face.data[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(x, y, z)));
+                        block_face.meta[idx] = neighbor->get_meta(x, y, z);
                         light_face.data[idx] = neighbor->get_packed_light(x, y, z);
                     }
                 }
@@ -581,6 +613,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
                     for (int x = 0; x < Config::chunk_size; ++x) {
                         const size_t idx = static_cast<size_t>(z) * Config::chunk_size + x;
                         block_face.data[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(x, y, z)));
+                        block_face.meta[idx] = neighbor->get_meta(x, y, z);
                         light_face.data[idx] = neighbor->get_packed_light(x, y, z);
                     }
                 }
@@ -590,6 +623,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
                     for (int x = 0; x < Config::chunk_size; ++x) {
                         const size_t idx = static_cast<size_t>(y) * Config::chunk_size + x;
                         block_face.data[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(x, y, z)));
+                        block_face.meta[idx] = neighbor->get_meta(x, y, z);
                         light_face.data[idx] = neighbor->get_packed_light(x, y, z);
                     }
                 }
@@ -746,6 +780,26 @@ void Chunk_Manager::collect_finished_chunks() {
         m_columns_pending_sky_recompute.insert(
             (static_cast<uint64_t>(static_cast<uint32_t>(result.position.x)) << 32) |
             static_cast<uint32_t>(result.position.z));
+
+        // Чанк с текущей водой (метаданные жидкости хранятся только у течений): тики
+        // не сохраняются, поэтому назначаем их заново — иначе течение, оставшееся без источника
+        // до выгрузки, так и висело бы в воздухе.
+        if (new_chunk->get_blocks().has_meta()) {
+            const int base_x = result.position.x * Config::chunk_size;
+            const int base_y = result.position.y * Config::chunk_height;
+            const int base_z = result.position.z * Config::chunk_size;
+            for (const auto& [index, value] : new_chunk->get_blocks().meta_entries()) {
+                (void)value;
+                const int x = index % Config::chunk_size;
+                const int z = (index / Config::chunk_size) % Config::chunk_size;
+                const int y = index / (Config::chunk_size * Config::chunk_size);
+                const Block_Types block = new_chunk->get_block(x, y, z);
+                if (get_block_props(block).state == Block_State::Liquid) {
+                    m_fluids.schedule({base_x + x, base_y + y, base_z + z},
+                                      get_block_props(block).fluid_tick_delay);
+                }
+            }
+        }
 
         // Mesh generation is intentionally deferred until insertion: only then can
         // the async job snapshot include currently loaded neighbors.
@@ -908,6 +962,7 @@ void Chunk_Manager::clear() {
     m_pending_mesh_rebuilds.clear();
     m_mesh_rebuild_requeue.clear();
     m_light_sources.clear();
+    m_fluids.clear();
     m_columns_pending_sky_recompute.clear();
     m_frames_since_sky_recompute = 0;
     m_player_chunk = {std::numeric_limits<int>::min(), std::numeric_limits<int>::min()};
@@ -1065,19 +1120,32 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
     if (new_emits_light) {
         m_light_sources.push_back(world_pos);
     }
-    recompute_lighting(removed_source_position);
+    // Если блок и до, и после прозрачен для света и ничего не излучает (воздух <-> вода, цветок
+    // <-> воздух, смена уровня жидкости), освещение измениться не может: пересчёт пропускаем.
+    // Иначе каждый шаг растекания воды гонял бы пересчёт света по целому столбцу чанков.
+    const bool* transparency = Block_Registry::get_instance().transparent_table();
+    const bool light_unaffected =
+        transparency[static_cast<Block_ID>(old_type) & 0xFFu] &&
+        transparency[static_cast<Block_ID>(type) & 0xFFu] &&
+        !old_emits_light && !new_emits_light;
+    if (!light_unaffected) {
+        recompute_lighting(removed_source_position);
 
-    // Изменение непрозрачности может открыть/закрыть вертикальный луч солнца или вход в пещеру.
-    // Only this one column needs rescanning - the BFS below still spreads sideways into
-    // neighboring columns/chunks as needed, same as it always has.
-    recompute_sky_lighting({(static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) |
-                             static_cast<uint32_t>(cz)});
+        // Изменение непрозрачности может открыть/закрыть вертикальный луч солнца или вход в пещеру.
+        // Only this one column needs rescanning - the BFS below still spreads sideways into
+        // neighboring columns/chunks as needed, same as it always has.
+        recompute_sky_lighting({(static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) |
+                                 static_cast<uint32_t>(cz)});
+    }
 
     // Раньше здесь на КАЖДЫЙ поставленный блок целиком переписывался 32-килобайтный
     // чанк — синхронно, из главного потока, прямо в кадре. Теперь правка только
     // помечает чанк изменённым: на диск он уедет при выгрузке, при выходе и при
     // явном сохранении мира (Chunk_Manager::save_all).
     chunk->mark_modified();
+
+    // Соседние жидкости должны отреагировать на правку (вода хлынет в пробитую стену).
+    m_fluids.notify_changed(*this, world_pos);
 
     return true;
 }
@@ -1228,6 +1296,7 @@ void Chunk_Manager::recompute_sky_lighting(
         for (const auto& pos : touched_chunks) {
             if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
                 chunk->mark_mesh_dirty();
+                chunk->compact_light();
             }
         }
         return;
@@ -1312,6 +1381,7 @@ void Chunk_Manager::recompute_sky_lighting(
     for (const auto& pos : touched_chunks) {
         if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
             chunk->mark_mesh_dirty();
+            chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
         }
     }
 }
@@ -1429,11 +1499,13 @@ void Chunk_Manager::recompute_lighting(std::optional<glm::ivec3> extra_clear_pos
     for (const auto& pos : affected_chunks) {
         if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
             chunk->mark_mesh_dirty();
+            chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
         }
     }
     for (const auto& pos : touched_chunks) {
         if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
             chunk->mark_mesh_dirty();
+            chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
         }
     }
 }

@@ -24,6 +24,7 @@
 #include "math/Hash_Utils.h"
 #include "world/generation/World_Generator.h"
 #include "world/storage/World_File.h"
+#include "world/fluids/Fluid_Simulator.h"
 
 class Texture_Atlas;
 class Frustum;
@@ -185,6 +186,10 @@ private:
     // единицы по сравнению с обычными. Загружается целиком в set_world_storage (см. .cpp),
     // сохраняется целиком в save_all() — см. Block_Entity_Store.
     Block_Entity_Map m_block_entities;
+
+    // Растекание жидкостей (вода и т.п.): тики назначаются при правке блоков рядом с жидкостью
+    // и при загрузке чанков с текущей водой, см. Fluid_Simulator.
+    Fluid_Simulator m_fluids;
     // Ставит/связывает/удаляет Block_Entity при постановке/поломке блока-контейнера —
     // вызывается из set_block_world, вынесено отдельно только чтобы не раздувать и без
     // того длинную функцию.
@@ -309,6 +314,9 @@ public:
     // Тик блоков с внутренним состоянием — сейчас это печи: горение топлива, прожарка,
     // выдача результата. Печь в незагруженном чанке не тикает (как в Minecraft).
     void update_block_entities(float delta_time);
+
+    // Один шаг симуляции жидкостей; звать каждый кадр рядом с update_block_entities.
+    void update_fluids(float delta_time);
 
     // --- Захват области (изометрический снимок мира) -----------------------------------------
     // Грузит и строит меши для квадрата (2R+1)x(2R+1) чанков вокруг (center_cx, center_cz) —

@@ -134,6 +134,12 @@ namespace Block_Meta {
     constexpr uint8_t active_bit = 0x08;
 
     constexpr uint8_t axis_y = 0, axis_x = 1, axis_z = 2;
+    // Жидкости (Fluid_Simulator): биты 0..2 — уровень (0 = источник, 1..7 = течение, чем больше
+    // число, тем тоньше слой), бит 3 — "падающая" вода (над ней тоже вода). meta = 0 у жидкости
+    // всегда значит "источник", поэтому море из генератора мира не хранит метаданных вообще.
+    constexpr uint8_t fluid_level_mask = 0x07;
+    constexpr uint8_t fluid_falling_bit = 0x08;
+
     constexpr uint8_t facing_north = 0, facing_east = 1, facing_south = 2, facing_west = 3; // -Z,+X,+Z,-X
 }
 
@@ -202,6 +208,21 @@ struct Block_Properties {
     // (см. Config::survival_break_seconds_per_hardness), 0 = мгновенно.
     float break_time = -1.0f;
 
+    // Взрывоустойчивость: сколько "силы" взрыва блок гасит на своём пути (шкала как в Minecraft:
+    // земля 0.5, камень 6, обсидиан 1200, вода 100). Задаётся в blocks.json полем
+    // "blast_resistance"; если поля нет — считается из hardness (hardness * 5, у жидкостей 100).
+    // Алгоритма взрыва пока нет: параметр читается через get_block_props(...).blast_resistance
+    // или быстрой таблицей Block_Registry::blast_resistance_table().
+    float blast_resistance = -1.0f;
+
+    // --- Жидкости (имеют смысл только при state == Liquid; blocks.json: fluid_*) ---
+    // Как в Minecraft: вода растекается раз в 5 тиков (0.25 с) и теряет 1 уровень на блок,
+    // из двух соседних источников над твёрдым блоком получается новый источник.
+    int fluid_tick_delay = 5;        // тиков (1 тик = Config::fluid_tick_seconds) между шагами
+    int fluid_drop_off = 1;          // на сколько падает уровень за блок растекания (вода 1, лава 2)
+    int fluid_slope_distance = 4;    // как далеко (в блоках) течение ищет ближайший обрыв
+    bool fluid_infinite = true;      // два соседних источника порождают третий
+
     // --- Инструменты (всё из blocks.json; у обычных блоков нули) ---
     int max_durability = 0;            // > 0 — это инструмент с прочностью, не стакается
     Tool_Type tool_type = Tool_Type::None; // чем является предмет
@@ -258,6 +279,7 @@ private:
     // и вызывающий код держит на них голый указатель, а не дёргает singleton в цикле.
     std::array<bool, k_max_block_types> m_transparent_flat{};
     std::array<uint8_t, k_max_block_types> m_light_emission_flat{};
+    std::array<float, k_max_block_types> m_blast_resistance_flat{};
     void build_fast_tables();
 
     Block_Registry();
@@ -280,6 +302,8 @@ public:
     // таблицу ДО цикла BFS (get_instance() вызывается один раз, не на каждый воксель).
     const bool* transparent_table() const { return m_transparent_flat.data(); }
     const uint8_t* light_emission_table() const { return m_light_emission_flat.data(); }
+    // Взрывоустойчивость по id блока (см. Block_Properties::blast_resistance).
+    const float* blast_resistance_table() const { return m_blast_resistance_flat.data(); }
 
     // Число id, реально занятых блоками (именованными или чисто data-driven из blocks.json).
     // Используется вместо Block_Types::Count там, где список блоков должен обновляться

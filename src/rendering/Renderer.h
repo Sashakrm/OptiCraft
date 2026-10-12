@@ -69,6 +69,7 @@ private:
     std::unordered_map<glm::ivec3, Chunk_GL_Resources, Chunk_Key_Hash> m_chunk_gl_cache;
 
     void upload_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, const std::vector<Vertex>& vertices);
+    void upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, const std::vector<Terrain_Vertex>& vertices);
     void draw_mesh(unsigned int vao, size_t count);
     void draw_mesh_range(unsigned int vao, size_t start, size_t count);
     void delete_chunk_resources(Chunk_GL_Resources& resources);

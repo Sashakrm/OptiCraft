@@ -1,6 +1,7 @@
 //
 // Created by noktemor on 11.02.2026.
 //
+#include <cstddef>
 #include "rendering/Renderer.h"
 #include "utils/logging/Logger.h"
 #include "utils/Config.h"
@@ -180,6 +181,44 @@ void Renderer::upload_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, 
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+    count = vertices.size();
+}
+
+// Непрозрачная геометрия чанка (жадный меш): вершина Terrain_Vertex, см. terrain_vertex.glsl.
+void Renderer::upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t& count,
+                                   const std::vector<Terrain_Vertex>& vertices) {
+    if (vertices.empty()) {
+        if (vao != 0) glDeleteVertexArrays(1, &vao);
+        if (vbo != 0) glDeleteBuffers(1, &vbo);
+        vao = 0;
+        vbo = 0;
+        count = 0;
+        return;
+    }
+
+    if (vbo == 0) {
+        glGenBuffers(1, &vbo);
+    }
+    if (vao == 0) {
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        const GLsizei stride = sizeof(Terrain_Vertex);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, x)));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, local_u)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ny)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, light)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, rect_u_min)));
+        glEnableVertexAttribArray(4);
+        glBindVertexArray(0);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Terrain_Vertex), vertices.data(), GL_STATIC_DRAW);
     count = vertices.size();
 }
 
@@ -391,7 +430,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         auto& gl_res = m_chunk_gl_cache[chunk.position];
 
         if (!gl_res.is_valid || gl_res.mesh_version != chunk.mesh_version) {
-            upload_mesh(gl_res.solid_vao, gl_res.solid_vbo, gl_res.solid_count, chunk.meshes->solid);
+            upload_terrain_mesh(gl_res.solid_vao, gl_res.solid_vbo, gl_res.solid_count, chunk.meshes->solid);
             upload_mesh(gl_res.flora_vao, gl_res.flora_vbo, gl_res.flora_count, chunk.meshes->flora);
             upload_mesh(gl_res.liquid_vao, gl_res.liquid_vbo, gl_res.liquid_count, chunk.meshes->liquid);
             gl_res.mesh_version = chunk.mesh_version;

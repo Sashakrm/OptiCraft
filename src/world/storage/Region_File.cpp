@@ -342,9 +342,16 @@ bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
 
     blocks.clear_meta();
 
+    // Внутри чанк хранится палитрой (см. Chunk_Block_Grid), а на диске формат прежний — плоские
+    // байты, RLE или оболочка с метаданными: старые миры читаются без конвертации. Сначала
+    // распаковываем в плоский буфер, затем один раз строим палитру.
+    std::vector<uint8_t>& flat = m_scratch_flat;
+    flat.resize(blocks.size_bytes());
+
     if (entry.format == k_format_raw) {
         if (entry.payload_bytes != blocks.size_bytes()) return false;
-        std::memcpy(blocks.data(), m_scratch_read.data(), blocks.size_bytes());
+        std::memcpy(flat.data(), m_scratch_read.data(), flat.size());
+        blocks.assign_flat(flat.data());
         return true;
     }
 
@@ -360,12 +367,13 @@ bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
 
         if (encoding == 0) {
             if (blocks_len != blocks.size_bytes()) return false;
-            std::memcpy(blocks.data(), p + offset, blocks.size_bytes());
+            std::memcpy(flat.data(), p + offset, flat.size());
         } else if (encoding == 1) {
-            if (!decompress_rle(p + offset, blocks_len, blocks.data(), blocks.size_bytes())) return false;
+            if (!decompress_rle(p + offset, blocks_len, flat.data(), flat.size())) return false;
         } else {
             return false;
         }
+        blocks.assign_flat(flat.data());
         offset += blocks_len;
 
         uint32_t meta_count = 0;
@@ -382,8 +390,10 @@ bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
     }
 
     if (entry.format == k_format_rle) {
-        return decompress_rle(m_scratch_read.data(), m_scratch_read.size(),
-                              blocks.data(), blocks.size_bytes());
+        if (!decompress_rle(m_scratch_read.data(), m_scratch_read.size(),
+                            flat.data(), flat.size())) return false;
+        blocks.assign_flat(flat.data());
+        return true;
     }
 
     return false;
@@ -393,7 +403,10 @@ bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!open_locked()) return false;
 
-    compress_rle(blocks.data(), blocks.size_bytes(), m_scratch_compress);
+    std::vector<uint8_t>& flat = m_scratch_flat;
+    flat.resize(blocks.size_bytes());
+    blocks.unpack(flat.data());
+    compress_rle(flat.data(), flat.size(), m_scratch_compress);
 
     const uint8_t* payload = nullptr;
     uint32_t payload_bytes = 0;
@@ -404,8 +417,8 @@ bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
         payload_bytes = static_cast<uint32_t>(m_scratch_compress.size());
         format = k_format_rle;
     } else {
-        payload = blocks.data();
-        payload_bytes = static_cast<uint32_t>(blocks.size_bytes());
+        payload = flat.data();
+        payload_bytes = static_cast<uint32_t>(flat.size());
         format = k_format_raw;
     }
 

@@ -917,8 +917,6 @@ Block_Types World_Generator::surface_block_for(int world_x, int world_z,
 
 Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int world_z,
                                                   const Column& column) const {
-    const double ore = normalize_noise(m_caves.noise3(
-        world_x * 0.11, world_y * 0.11, world_z * 0.11));
     const double below_surface = column.surface_height - static_cast<double>(world_y);
 
     constexpr double kMantleDepth = 4.0;
@@ -945,6 +943,9 @@ Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int 
         }
     }
 
+    // Шум руды считаем лениво — только ниже мантии (дорогой noise3).
+    const double ore = normalize_noise(m_caves.noise3(
+        world_x * 0.11, world_y * 0.11, world_z * 0.11));
     if (below_surface >= 250.0) {
         if (ore > 0.84) return Block_Types::Rare_Mineral;
         if (ore > 0.76) return Block_Types::Diamond_Ore;
@@ -1086,7 +1087,11 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
     const int start_y = chunk_y * Config::chunk_height;
     const int end_y = start_y + Config::chunk_height - 1;
 
-    blocks.fill(Block_Types::Air);
+    // Генерируем в плоский буфер и один раз строим палитру (assign_flat): запись в палитровую
+    // сетку воксель за вокселем (set) на порядки медленнее. thread_local — генерация идёт в
+    // воркерах, буфер переиспользуется без аллокаций.
+    thread_local std::vector<uint8_t> flat;
+    flat.assign(Chunk_Block_Grid::voxel_count, 0);   // 0 = Air
 
     // Парящие острова живут только выше Y=200 — для всех остальных чанков этот
     // дорогой путь не выполняется вовсе.
@@ -1119,11 +1124,17 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                     block = block_in_column(column, world_x, world_y, world_z);
                 }
 
-                if (block != Block_Types::Air)
-                    blocks.set(x, world_y - start_y, z, block);
+                if (block != Block_Types::Air) {
+                    const size_t index = (static_cast<size_t>(world_y - start_y) * Config::chunk_size +
+                                          static_cast<size_t>(z)) * Config::chunk_size +
+                                         static_cast<size_t>(x);
+                    flat[index] = static_cast<uint8_t>(static_cast<Block_ID>(block));
+                }
             }
         }
     }
+
+    blocks.assign_flat(flat.data());
 }
 
 bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chunk_z) const {

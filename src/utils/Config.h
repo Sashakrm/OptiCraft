@@ -53,6 +53,12 @@ namespace Config {
     constexpr int decoration_overhang = 8;
     constexpr uint16_t seed =1327;
 
+    // Жидкости: длительность одного тика симуляции (как 1/20 с в Minecraft) и потолок числа
+    // обработанных клеток за кадр — чтобы затопление большой пещеры растянулось на несколько
+    // кадров, а не подвесило игру.
+    constexpr float fluid_tick_seconds = 0.05f;
+    constexpr int fluid_max_updates_per_frame = 1500;
+
     // Игрок
     constexpr float player_width = 0.6f;
     constexpr float player_height = 1.8f;
