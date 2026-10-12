@@ -485,6 +485,7 @@ namespace {
     struct Mesh_Scratch {
         std::array<uint8_t, kVoxels> blocks;       // id блоков чанка, плоско (y, z, x)
         std::array<uint8_t, kVoxels> light;        // упакованный свет, плоско
+        std::array<uint8_t, kVoxels> meta;         // метаданные блоков, плоско (для GPU-нагрузки)
         // Соседние клетки за границей чанка запрашиваются лениво и кэшируются: за пределами
         // загруженного мира блок спрашивается у генератора (дорого), поэтому берём только те
         // клетки, которые реально понадобились.
@@ -588,12 +589,14 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                               const Chunk_Light_Lookup& light_lookup,
                               const Texture_Atlas& atlas,
                               bool only_positive_faces,
-                              const Chunk_Meta_Lookup& meta_lookup) {
+                              const Chunk_Meta_Lookup& meta_lookup,
+                              bool solid_on_gpu) {
     // UV блоков резолвятся один раз при загрузке blocks.json (см. Block_Registry::
     // load_from_file → resolve_sprite_uv) и лежат готовыми в Block_Properties, так что atlas
     // для самой геометрии не нужен; параметр оставлен как "атлас обязан быть загружен".
     (void)atlas;
     Chunk_Meshes meshes;
+    meshes.solid_on_gpu = solid_on_gpu;
 
     const int base_x = chunk_x * kN;
     const int base_y = chunk_y * kH;
@@ -693,7 +696,20 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         const int y_begin = section_index * Config::chunk_section_height;
         const int y_end = y_begin + Config::chunk_section_height;
 
-        if (!all_air) {
+        // GPU: есть ли в секции жадно-мешаемый блок. Тогда секция рисуется GPU-квадами (их
+        // число на CPU неизвестно), и её Y-диапазон — это весь диапазон секции.
+        bool section_greedy = false;
+        if (solid_on_gpu && !all_air) {
+            for (int y = y_begin; y < y_end && !section_greedy; ++y) {
+                if (layer_block_count[y] == 0) continue;
+                const uint8_t* row = S.blocks.data() + static_cast<size_t>(y) * kLayer;
+                for (size_t i = 0; i < kLayer; ++i) {
+                    if (mesh_tables().greedy[row[i]]) { section_greedy = true; break; }
+                }
+            }
+        }
+
+        if (!all_air && !solid_on_gpu) {
             // --- Непрозрачная геометрия: жадное слияние по шести направлениям ---
             for (int axis = 0; axis < 3; ++axis) {
                 for (int dir = 0; dir < 2; ++dir) {
@@ -810,7 +826,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                     }
                 }
             }
-
+        }
+        if (!all_air) {
             // --- Флора и жидкость: по одной клетке ---
             for (int y = y_begin; y < y_end; ++y) {
                 if (layer_block_count[y] == 0) continue;
@@ -868,11 +885,12 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         range.solid_count = meshes.solid.size() - range.solid_start;
         range.flora_count = meshes.flora.size() - range.flora_start;
         range.liquid_count = meshes.liquid.size() - range.liquid_start;
-        range.has_geometry = (range.solid_count + range.flora_count + range.liquid_count) > 0;
+        range.has_geometry = (range.solid_count + range.flora_count + range.liquid_count) > 0 || section_greedy;
 
         if (range.has_geometry) {
-            range.min_y = std::numeric_limits<float>::max();
-            range.max_y = std::numeric_limits<float>::lowest();
+            // GPU-секция: её квады лежат внутри Y-диапазона секции, поэтому он и есть границы.
+            range.min_y = section_greedy ? static_cast<float>(base_y + y_begin) : std::numeric_limits<float>::max();
+            range.max_y = section_greedy ? static_cast<float>(base_y + y_end) : std::numeric_limits<float>::lowest();
             const auto expand = [&range](const auto& verts, size_t start, size_t count) {
                 for (size_t i = start; i < start + count; ++i) {
                     range.min_y = std::min(range.min_y, verts[i].y);
@@ -889,6 +907,169 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
     }
 
     return meshes;
+}
+
+namespace {
+    // Упаковка одного канала GPU-нагрузки: палитра (уникальные значения в порядке появления) и
+    // номера фиксированной битности: 0 бит (одно значение) или 1..8 бит. Номер i лежит в битах
+    // [i*bits, (i+1)*bits), младший бит первым, в uint32-словах; значение может пересекать границу
+    // двух слов. Декодер в mesh_greedy.comp читает ровно так же. header: палитра, слова, битность.
+    void pack_channel(const uint8_t* values, size_t count, std::vector<uint32_t>& out,
+                      std::array<uint32_t, 3>& header) {
+        std::array<int, 256> index;
+        index.fill(-1);
+        std::array<uint8_t, 256> palette{};
+        size_t palette_size = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const uint8_t v = values[i];
+            if (index[v] < 0) {
+                index[v] = static_cast<int>(palette_size);
+                palette[palette_size++] = v;
+            }
+        }
+
+        uint32_t bits = 0;
+        if (palette_size > 1) {
+            bits = 1;
+            while ((static_cast<size_t>(1) << bits) < palette_size) ++bits;
+        }
+
+        header[0] = static_cast<uint32_t>(out.size());
+        for (size_t p = 0; p < palette_size; ++p) out.push_back(palette[p]);
+        header[1] = static_cast<uint32_t>(out.size());
+        header[2] = bits;
+        if (bits == 0) return;
+
+        const size_t base = out.size();
+        out.resize(base + (count * bits + 31) / 32, 0u);
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t idx = static_cast<uint32_t>(index[values[i]]);
+            const size_t bit = i * bits;
+            const size_t w = base + (bit >> 5);
+            const unsigned s = static_cast<unsigned>(bit & 31);
+            out[w] |= idx << s;
+            if (s + bits > 32) out[w + 1] |= idx >> (32 - s);
+        }
+    }
+}
+
+void build_gpu_solid_payload(Chunk_Meshes& meshes,
+                             const Chunk_Block_Grid& blocks,
+                             const Chunk_Light_Grid& light,
+                             const Chunk_Block_Faces& neighbor_blocks,
+                             const Chunk_Light_Faces& neighbor_light,
+                             int chunk_x, int chunk_y, int chunk_z,
+                             const Chunk_Neighbor_Lookup& neighbor_lookup,
+                             const Chunk_Light_Lookup& light_lookup) {
+    meshes.gpu_words.clear();
+    meshes.gpu_channels = {};
+    meshes.gpu_upload_pending = false;
+    meshes.gpu_candidates = false;
+
+    const bool all_air = blocks.is_uniform() && blocks.uniform_block() == Block_Types::Air;
+    if (all_air) return;
+
+    Mesh_Scratch& S = mesh_scratch();
+    const Mesh_Tables& tab = mesh_tables();
+    blocks.unpack(S.blocks.data());
+
+    bool any_greedy = false;
+    for (size_t i = 0; i < kVoxels && !any_greedy; ++i) any_greedy = tab.greedy[S.blocks[i]] != 0;
+    if (!any_greedy) return;
+    meshes.gpu_candidates = true;
+
+    // Грань соседа нужна, только если на СВОЕЙ границе с этой стороны есть жадно-мешаемый блок.
+    // Порядок граней как в Chunk_Manager: 0 -X, 1 +X, 2 -Y, 3 +Y, 4 -Z, 5 +Z.
+    std::array<bool, 6> face_needed{};
+    for (int face = 0; face < 6; ++face) {
+        const int axis = face >> 1;
+        const int coord = (face & 1) ? kN - 1 : 0;
+        bool needed = false;
+        for (int a = 0; a < kN && !needed; ++a) {
+            for (int b = 0; b < kN && !needed; ++b) {
+                int x = coord, y = b, z = a;
+                if (axis == 1) { x = a; y = coord; z = b; }
+                else if (axis == 2) { x = a; y = b; z = coord; }
+                needed = tab.greedy[S.blocks[(static_cast<size_t>(y) * kN + z) * kN + x]] != 0;
+            }
+        }
+        face_needed[face] = needed;
+    }
+
+    light.unpack(S.light.data());
+    std::fill(S.meta.begin(), S.meta.end(), static_cast<uint8_t>(0));
+    if (blocks.has_meta()) {
+        for (const auto& [linear_index, value] : blocks.meta_entries()) {
+            S.meta[linear_index] = value;
+        }
+    }
+
+    // Грани соседей: блоки в S.border_block, свет в S.border_light, ячейка (a,b) -> b*32+a.
+    const int base_x = chunk_x * kN;
+    const int base_y = chunk_y * kH;
+    const int base_z = chunk_z * kN;
+    for (int face = 0; face < 6; ++face) {
+        uint8_t* dst_blocks = S.border_block.data() + static_cast<size_t>(face) * kLayer;
+        uint8_t* dst_light = S.border_light.data() + static_cast<size_t>(face) * kLayer;
+        if (!face_needed[face]) {
+            std::fill(dst_blocks, dst_blocks + kLayer, static_cast<uint8_t>(0));
+            std::fill(dst_light, dst_light + kLayer, static_cast<uint8_t>(0));
+            continue;
+        }
+        const bool have_blocks = neighbor_blocks[face].has_value();
+        const bool have_light = neighbor_light[face].has_value();
+        if (have_blocks) std::memcpy(dst_blocks, neighbor_blocks[face]->data.data(), kLayer);
+        if (have_light) std::memcpy(dst_light, neighbor_light[face]->data.data(), kLayer);
+        if (have_blocks && have_light) continue;
+
+        // Соседнего чанка нет в снимке: значения берутся теми же лукапами, что и у CPU-мешера.
+        for (int b = 0; b < kN; ++b) {
+            for (int a = 0; a < kN; ++a) {
+                int wx = base_x, wy = base_y, wz = base_z;
+                switch (face) {
+                    case 0: wx = base_x - 1;  wy = base_y + b; wz = base_z + a; break;
+                    case 1: wx = base_x + kN; wy = base_y + b; wz = base_z + a; break;
+                    case 2: wx = base_x + a;  wy = base_y - 1; wz = base_z + b; break;
+                    case 3: wx = base_x + a;  wy = base_y + kH; wz = base_z + b; break;
+                    case 4: wx = base_x + a;  wy = base_y + b; wz = base_z - 1; break;
+                    default: wx = base_x + a; wy = base_y + b; wz = base_z + kN; break;
+                }
+                const size_t i = static_cast<size_t>(b) * kN + a;
+                if (!have_blocks) {
+                    dst_blocks[i] = neighbor_lookup
+                        ? static_cast<uint8_t>(static_cast<Block_ID>(neighbor_lookup(wx, wy, wz)))
+                        : static_cast<uint8_t>(0);
+                }
+                if (!have_light) {
+                    dst_light[i] = light_lookup ? light_lookup(wx, wy, wz) : static_cast<uint8_t>(0);
+                }
+            }
+        }
+    }
+
+    pack_channel(S.blocks.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[0]);
+    pack_channel(S.meta.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[1]);
+    pack_channel(S.light.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[2]);
+    for (int face = 0; face < 6; ++face) {
+        pack_channel(S.border_block.data() + static_cast<size_t>(face) * kLayer, kLayer,
+                     meshes.gpu_words, meshes.gpu_channels[3 + face]);
+        pack_channel(S.border_light.data() + static_cast<size_t>(face) * kLayer, kLayer,
+                     meshes.gpu_words, meshes.gpu_channels[9 + face]);
+    }
+    meshes.gpu_upload_pending = true;
+}
+
+Gpu_Mesh_Tables gpu_mesh_tables() {
+    const Mesh_Tables& tab = mesh_tables();
+    Gpu_Mesh_Tables out;
+    for (size_t i = 0; i < static_cast<size_t>(k_max_block_types); ++i) {
+        out.flags[i] = (tab.greedy[i] ? 1u : 0u) | (tab.transparent[i] ? 2u : 0u) |
+                       (tab.uses_meta[i] ? 4u : 0u) | (tab.cull_same[i] ? 8u : 0u);
+    }
+    for (size_t i = 0; i < out.light_coarse.size(); ++i) {
+        out.light_coarse[i] = tab.light_coarse[i];
+    }
+    return out;
 }
 
 void Chunk::build_mesh() {
@@ -921,7 +1102,8 @@ void Chunk::apply_mesh(Chunk_Meshes meshes) {
     m_mesh_version = ++g_mesh_version_counter;
 }
 bool Chunk::is_empty() const {
-    return m_meshes.solid.empty() && m_meshes.flora.empty() && m_meshes.liquid.empty();
+    return !m_meshes.gpu_candidates && m_meshes.solid.empty() &&
+           m_meshes.flora.empty() && m_meshes.liquid.empty();
 }
 
 Block_Types Chunk::get_block(int x, int y, int z) const {

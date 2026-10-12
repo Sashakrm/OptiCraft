@@ -46,11 +46,29 @@ struct Chunk_Section_Range {
     bool has_geometry = false;
 };
 
+// Каналов полезной нагрузки GPU-мешера: 0 блоки, 1 метаданные, 2 свет своего чанка;
+// 3..8 блоки граней соседей (-X,+X,-Y,+Y,-Z,+Z); 9..14 свет граней соседей. См. mesh_greedy.comp.
+inline constexpr int kGpuMeshChannelCount = 15;
+
 struct Chunk_Meshes {
     std::vector<Terrain_Vertex> solid;
     std::vector<Chunk_Vertex> flora;
     std::vector<Chunk_Vertex> liquid;
     std::array<Chunk_Section_Range, Config::chunk_section_count> sections;
+
+    // --- GPU-путь непрозрачной геометрии (см. Renderer::draw_solid_gpu) ---
+    // solid_on_gpu: квады строит видеокарта из упакованных блоков, поэтому `solid` пуст.
+    // gpu_candidates: в чанке есть жадно-мешаемый блок, то есть квады возможны.
+    bool solid_on_gpu = false;
+    bool gpu_candidates = false;
+    // Полезная нагрузка для видеокарты (палитры и битово упакованные значения каналов).
+    // mutable: Renderer забирает её при загрузке в GPU и очищает, поэтому после отправки
+    // она не держится в RAM.
+    mutable bool gpu_upload_pending = false;
+    mutable std::vector<uint32_t> gpu_words;
+    // На канал: смещение палитры, смещение упакованных слов, битность (0 = одно значение).
+    // Смещения относительно начала этой нагрузки; Renderer переносит их при загрузке (submit_gpu_batch).
+    mutable std::array<std::array<uint32_t, 3>, kGpuMeshChannelCount> gpu_channels{};
 };
 
 class Chunk_Manager;
@@ -324,6 +342,8 @@ using Chunk_Light_Lookup = std::function<uint8_t(int world_x, int world_y, int w
 // Метаданные блока за границей чанка (уровень жидкости соседа). nullptr/пусто = 0.
 using Chunk_Meta_Lookup = std::function<uint8_t(int world_x, int world_y, int world_z)>;
 
+// solid_on_gpu: непрозрачные квады не строятся здесь (их даст GPU-мешер по нагрузке из
+// build_gpu_solid_payload); флора и жидкость строятся как обычно, границы секций — с учётом GPU.
 Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                               const Chunk_Light_Grid& light,
                               int chunk_x, int chunk_y, int chunk_z,
@@ -331,7 +351,29 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                               const Chunk_Light_Lookup& light_lookup,
                               const Texture_Atlas& atlas,
                               bool only_positive_faces = false,
-                              const Chunk_Meta_Lookup& meta_lookup = Chunk_Meta_Lookup{});
+                              const Chunk_Meta_Lookup& meta_lookup = Chunk_Meta_Lookup{},
+                              bool solid_on_gpu = false);
+
+// Заполняет в meshes полезную нагрузку GPU-мешера (gpu_words/gpu_channels/gpu_candidates) по
+// снимку блоков, света и граней соседей. Грани соседей, которых нет в снимке, достраиваются
+// лукапами (как в CPU-мешере), и только там, где на собственной границе есть жадно-мешаемые блоки.
+void build_gpu_solid_payload(Chunk_Meshes& meshes,
+                             const Chunk_Block_Grid& blocks,
+                             const Chunk_Light_Grid& light,
+                             const Chunk_Block_Faces& neighbor_blocks,
+                             const Chunk_Light_Faces& neighbor_light,
+                             int chunk_x, int chunk_y, int chunk_z,
+                             const Chunk_Neighbor_Lookup& neighbor_lookup,
+                             const Chunk_Light_Lookup& light_lookup);
+
+// Таблицы правил жадного мешера для GPU: те же самые, что использует CPU-мешер.
+struct Gpu_Mesh_Tables {
+    // Бит 0: жадно-мешаемый блок; бит 1: прозрачный; бит 2: uses_meta; бит 3: cull_same.
+    std::array<uint32_t, static_cast<size_t>(k_max_block_types)> flags{};
+    // Упакованный свет (sky<<4 | block) -> огрублённый, для cull_same-блоков.
+    std::array<uint32_t, 256> light_coarse{};
+};
+Gpu_Mesh_Tables gpu_mesh_tables();
 
 class Chunk {
 private:

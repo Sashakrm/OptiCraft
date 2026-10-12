@@ -29,11 +29,20 @@ bool Window::initialize() {
         return false;
     }
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
-    m_window_ptr = glfwCreateWindow(m_width, m_height, m_title.c_str(), nullptr, nullptr);
+    // GL 4.3 нужен GPU-мешеру (compute-шейдеры). Если окно на 4.3 не создаётся (macOS, старые
+    // драйверы), откатываемся на 3.3: игра работает, мешинг остаётся на CPU.
+    const auto create_window = [this](int major, int minor) {
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, major);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, minor);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        return glfwCreateWindow(m_width, m_height, m_title.c_str(), nullptr, nullptr);
+    };
+    m_window_ptr = create_window(4, 3);
+    if (!m_window_ptr) {
+        LOG_INFO("OpenGL 4.3 unavailable, falling back to 3.3 (CPU meshing only)");
+        m_window_ptr = create_window(3, 3);
+    }
     if (!m_window_ptr) {
         LOG_ERROR("Failed to create GLFW window");
         glfwTerminate();

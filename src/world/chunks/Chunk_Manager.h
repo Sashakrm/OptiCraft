@@ -103,6 +103,9 @@ private:
         Chunk_Light_Faces neighbor_light;
         uint64_t generation_id;
         Capture_Clip clip;
+        // true — непрозрачные квады строит GPU (нагрузка в Chunk_Meshes, см. build_gpu_solid_payload);
+        // false — классический CPU-мешер (тогда в solid лежат готовые вершины).
+        bool solid_on_gpu = false;
     };
 
     struct Mesh_Job_Priority {
@@ -170,6 +173,10 @@ private:
     // Если чанк опять поменялся, пока его пересборка уже была в полёте — не теряем правку:
     // помечаем "досчитать ещё раз" и переставляем задачу заново, когда текущая завершится.
     Chunk_Coord_Set m_mesh_rebuild_requeue;
+    // Чанки, у которых GPU-мешер переполнил секцию: их меш дальше строится только на CPU.
+    Chunk_Coord_Set m_cpu_only_positions;
+    // Процесс-глобально: включает GPU-путь для всех менеджеров (см. set_gpu_solid_meshing).
+    static inline bool s_gpu_solid_meshing = false;
     std::mutex m_job_mutex;
     std::mutex m_completed_mutex;
     std::condition_variable m_job_available;
@@ -300,6 +307,14 @@ public:
         int flora_render_distance_chunks = -1
     ) const;
     std::vector<glm::ivec3> take_unloaded_chunk_positions();
+
+    // GPU-путь непрозрачной геометрии (см. Renderer::draw_solid_gpu). Включается рендерером, когда он
+    // подтвердил GL 4.3 и скомпилировал шейдеры; действует на все последующие пересборки.
+    static void set_gpu_solid_meshing(bool enabled) { s_gpu_solid_meshing = enabled; }
+    static bool gpu_solid_meshing() { return s_gpu_solid_meshing; }
+    // Чанки, которые GPU-мешер не уместил в секции: пересобрать их на CPU. Уже загруженные
+    // позиции; незагруженные молча пропускаются.
+    void request_cpu_remesh(const std::vector<glm::ivec3>& positions);
 
     // Block_Entity блока-контейнера в этой позиции, если он там есть (nullptr иначе).
     // Неконстантная версия — для открытого контейнера (кладём/берём предметы), константная —

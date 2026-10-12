@@ -99,6 +99,9 @@ bool Game::initialize() {
         return false;
     }
 
+    // GPU-мешинг непрозрачной геометрии включается только если рендерер поднял GL 4.3 (см. Renderer).
+    Chunk_Manager::set_gpu_solid_meshing(m_renderer_ptr->gpu_solid_meshing());
+
     m_hud_ptr = std::make_unique<Hud>();
     if (!m_hud_ptr->initialize()) {
         LOG_ERROR("Failed to initialize HUD");
@@ -1393,6 +1396,10 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     const auto projection = m_camera_ptr->get_projection_matrix(aspect_ratio);
     const Frustum frustum(projection * view);
     const glm::vec3 camera_position = m_camera_ptr->get_position();
+    // Чанки, у которых квады не влезли в пул GPU-мешера, перестраиваются на CPU.
+    const std::vector<glm::ivec3> cpu_fallback = m_renderer_ptr->take_cpu_fallback_requests();
+    if (!cpu_fallback.empty()) m_chunk_manager_ptr->request_cpu_remesh(cpu_fallback);
+
     const auto renderable = m_chunk_manager_ptr->get_renderable_chunks(
         &frustum, &camera_position, m_renderer_ptr->get_flora_render_distance());
 

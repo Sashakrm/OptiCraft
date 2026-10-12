@@ -492,7 +492,15 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             Chunk_Meshes meshes = build_chunk_mesh(mesh_job.own_blocks, mesh_job.own_light,
                                                     mesh_job.position.x, mesh_job.position.y, mesh_job.position.z,
                                                     lookup, light_lookup, *m_texture_atlas,
-                                                    mesh_job.clip.active, meta_lookup);
+                                                    mesh_job.clip.active, meta_lookup, mesh_job.solid_on_gpu);
+            if (mesh_job.solid_on_gpu) {
+                // Нагрузка для GPU-мешера строится здесь же, в воркере: на главный поток уходит
+                // только упакованный блок данных, а не вершины.
+                build_gpu_solid_payload(meshes, mesh_job.own_blocks, mesh_job.own_light,
+                                        mesh_job.neighbor_blocks, mesh_job.neighbor_light,
+                                        mesh_job.position.x, mesh_job.position.y, mesh_job.position.z,
+                                        lookup, light_lookup);
+            }
 
             std::lock_guard<std::mutex> lock(m_completed_mutex);
             m_completed_mesh_jobs.push({mesh_job.position, mesh_job.generation_id, std::move(meshes)});
@@ -521,6 +529,7 @@ void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
         m_chunks.erase(cx, cy, cz);
     }
     m_requested_chunks.erase(cx, cy, cz);
+    m_cpu_only_positions.erase(cx, cy, cz);
     // Не обязательно для корректности (collect_finished_mesh_jobs и так безопасно
     // отбрасывает результат для выгруженного чанка), но не оставляем мусор в множествах —
     // иначе если на этой же позиции скоро появится новый чанк, enqueue_mesh_rebuild
@@ -578,6 +587,9 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
     job.own_light = target->get_light_grid();
     job.generation_id = m_generation_id;
     job.clip = current_capture_clip();
+    // Во время изометрического снимка меш строится с only_positive_faces, а GPU-путь этот флаг не
+    // учитывает, поэтому такие задания остаются на CPU.
+    job.solid_on_gpu = s_gpu_solid_meshing && !job.clip.active && !m_cpu_only_positions.contains(cx, cy, cz);
 
     // Порядок ровно как в комментарии к Mesh_Job: -X, +X, -Y, +Y, -Z, +Z.
     static constexpr glm::ivec3 offsets[6] = {
@@ -947,6 +959,14 @@ void Chunk_Manager::rebuild_dirty_chunks() {
         }
         return true;
     });
+}
+
+void Chunk_Manager::request_cpu_remesh(const std::vector<glm::ivec3>& positions) {
+    for (const glm::ivec3& p : positions) {
+        if (!get_chunk(p.x, p.y, p.z)) continue;
+        m_cpu_only_positions.insert(p.x, p.y, p.z);
+        enqueue_mesh_rebuild(p.x, p.y, p.z);
+    }
 }
 
 void Chunk_Manager::clear() {

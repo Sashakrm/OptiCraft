@@ -64,6 +64,8 @@ private:
         uint64_t mesh_version = 0;
         bool is_valid = false;
         std::array<Section_Occlusion_State, Config::chunk_section_count> occlusion{};
+        int gpu_slot = -1;         // слот пула GPU-мешера, -1 = чанк не на GPU
+        uint64_t gpu_version = 0;  // mesh_version, с которой квады лежат в слоте
     };
 
     std::unordered_map<glm::ivec3, Chunk_GL_Resources, Chunk_Key_Hash> m_chunk_gl_cache;
@@ -73,6 +75,20 @@ private:
     void draw_mesh(unsigned int vao, size_t count);
     void draw_mesh_range(unsigned int vao, size_t start, size_t count);
     void delete_chunk_resources(Chunk_GL_Resources& resources);
+
+    // ---- GPU-мешер непрозрачной геометрии (нужен OpenGL 4.3, см. assets/shaders/mesh_*.comp) ----
+    bool initialize_gpu_mesher();
+    void shutdown_gpu_mesher();
+    void grow_gpu_slots(int needed);
+    int acquire_gpu_slot();
+    void release_gpu_slot(Chunk_GL_Resources& resources);
+    // Забирает готовые readback'и счётчиков квадов (FIFO). wait_for_oldest — ждать самый старый.
+    void poll_gpu_readbacks(bool wait_for_oldest);
+    // Загружает батч чанков в GPU и запускает greedy-мешер на видеокарте.
+    void submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch);
+    // Финализация команд, выбор видимых секций и indirect-отрисовка солидной геометрии GPU-чанков.
+    void draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks,
+                        const glm::mat4& view, const glm::mat4& projection, float ambient_intensity);
 
     // Reads back last frame's query (if the result is ready) and updates state.visible.
     // Never blocks: if the driver hasn't finished the query yet, last frame's answer is
@@ -105,8 +121,67 @@ private:
     // set_occlusion_enabled(true) можно только после переделки теста (см. issue_occlusion_query).
     bool m_occlusion_enabled = false;
 
+    // ---- GPU-мешер: видеокарта мешит секции из упакованных блоков чанка (greedy, как в CPU) и
+    // рисует квады через glMultiDrawArraysIndirect с vertex pulling (terrain_gpu_vertex.glsl).
+    // Пул: слот на чанк, в слоте 4 секции по kGpuQuadCap квадов по 8 байт. Если квадов в секции
+    // больше — чанк уходит обратно на CPU-мешер (take_cpu_fallback_requests).
+    // 2048: на стартовой сцене (622 непустые секции, макс. 2620 квадов) кап 512 отдавал на CPU 53 из 160
+    // чанков, 2048 — 4 из 160. Память пула: 4 * kGpuQuadCap * 8 байт на слот (64 КБ при 2048).
+    static constexpr int kGpuQuadCap = 2048;
+    static constexpr int kGpuBatchChunks = 64;
+    static constexpr int kGpuReadbackRing = 8;
+    struct Gpu_Readback {
+        unsigned int buffer = 0;
+        GLsync fence = nullptr;
+        std::vector<glm::ivec3> positions;
+        std::vector<uint64_t> versions;
+        std::vector<int> slots;
+    };
+    bool m_gpu_enabled = false;
+    unsigned int m_gpu_greedy_program = 0;
+    unsigned int m_gpu_finalize_program = 0;
+    Shader* m_gpu_terrain_shader_ptr = nullptr;
+    int m_gpu_loc_chunk_count = -1;
+    int m_gpu_loc_greedy_quad_cap = -1;
+    int m_gpu_loc_section_total = -1;
+    int m_gpu_loc_finalize_quad_cap = -1;
+    unsigned int m_gpu_section_vao = 0;     // VAO с одним атрибутом: номер секции, делитель 1
+    unsigned int m_gpu_section_ids_vbo = 0; // тождественные номера 0..4*capacity-1
+    unsigned int m_gpu_lut_ssbo = 0;      // rect_lut[(id*6 + грань)*256 + метаданные]
+    unsigned int m_gpu_tables_ssbo = 0;   // флаги блоков (256) и огрубление света (256)
+    unsigned int m_gpu_rects_ssbo = 0;    // UV-прямоугольники спрайтов (vec4)
+    unsigned int m_gpu_headers_ssbo = 0;  // батч: по 16 uvec4 на чанк
+    unsigned int m_gpu_payload_ssbo = 0;  // батч: палитры и упакованные биты
+    size_t m_gpu_payload_capacity = 0;    // в байтах
+    unsigned int m_gpu_quads_ssbo = 0;    // пул: квады [слот*4 + секция][kGpuQuadCap]
+    unsigned int m_gpu_counts_ssbo = 0;   // пул: число квадов на секцию
+    unsigned int m_gpu_origins_ssbo = 0;  // пул: мировой угол чанка на слот (vec4)
+    unsigned int m_gpu_vis_ssbo = 0;      // пул: маска видимых секций на слот
+    unsigned int m_gpu_cmd_ssbo = 0;      // команды DrawArraysIndirect на секцию
+    int m_gpu_slot_capacity = 0;
+    int m_gpu_slot_high_water = 0;        // сколько слотов выдано максимум (индекс + 1)
+    std::vector<int> m_gpu_free_slots;
+    std::vector<uint32_t> m_gpu_vis_cpu;
+    std::vector<uint32_t> m_gpu_quad_counts; // последние известные счётчики квадов (статистика)
+    std::vector<glm::uvec4> m_gpu_headers_cpu;
+    std::vector<uint32_t> m_gpu_payload_cpu;
+    std::array<Gpu_Readback, kGpuReadbackRing> m_gpu_readbacks{};
+    int m_gpu_readback_head = 0;
+    int m_gpu_readback_count = 0;
+    std::vector<glm::ivec3> m_gpu_fallback_requests;
+
 public:
     void set_occlusion_enabled(bool enabled) { m_occlusion_enabled = enabled; }
+
+    // GPU-мешер доступен (GL 4.3 и шейдеры собрались). Иначе весь мешинг остаётся на CPU.
+    bool gpu_solid_meshing() const { return m_gpu_enabled; }
+    static int gpu_quad_cap() { return kGpuQuadCap; }
+    // Чанки, у которых квады не влезли в пул GPU: их надо перестроить на CPU
+    // (Chunk_Manager::request_cpu_remesh). Список забирается и очищается.
+    std::vector<glm::ivec3> take_cpu_fallback_requests();
+    // Только для проверок (harness): квады секции из пула GPU как лежат в видеопамяти (8-байтные записи).
+    // false, если чанк сейчас не на GPU (фолбэк на CPU или ещё не загружен). Читает видеопамять, вне кадра.
+    bool debug_gpu_section_quads(const glm::ivec3& chunk_position, int section, std::vector<glm::uvec2>& out);
     bool is_occlusion_enabled() const { return m_occlusion_enabled; }
 
     Renderer();
