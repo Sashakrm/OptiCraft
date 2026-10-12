@@ -227,8 +227,8 @@ void Game::handle_gameplay_input() {
     auto move_input = m_input_ptr->get_movement_input();
 
     if (m_ridden_horse) {
-        // Верхом WASD/пробел управляют лошадью, а не игроком: руль — к направлению взгляда
-        // (S не рулит, только тормозит/сдаёт назад), ПРОБЕЛ — ручник (дрифт), SHIFT — слезть.
+        // Верхом WASD/пробел/Ctrl управляют лошадью, а не игроком: руль — к направлению взгляда
+        // (S не рулит, только тормозит/сдаёт назад), ПРОБЕЛ — прыжок, CTRL — ручник (дрифт), SHIFT — слезть.
         glm::vec3 front = m_camera_ptr->get_front();
         glm::vec3 right = m_camera_ptr->get_right();
         front.y = 0.0f;
@@ -242,7 +242,8 @@ void Game::handle_gameplay_input() {
         m_horse_ride_input.wish_dir = wish;
         m_horse_ride_input.throttle = move_input.forward;
         m_horse_ride_input.jump = m_input_ptr->is_key_pressed(GLFW_KEY_SPACE);
-        m_horse_ride_input.handbrake = move_input.jump;
+        // Ручник (дрифт) — левый Ctrl, пробел — прыжок.
+        m_horse_ride_input.handbrake = m_input_ptr->is_key_held(GLFW_KEY_LEFT_CONTROL);
         if (m_input_ptr->is_key_pressed(GLFW_KEY_LEFT_SHIFT)) m_dismount_requested = true;
 
         m_player_ptr->set_movement_input({0.0f, 0.0f, false, false}, m_camera_ptr->get_front(), m_camera_ptr->get_right());

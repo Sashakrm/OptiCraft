@@ -451,6 +451,12 @@ namespace {
         std::array<uint8_t, k_max_block_types> greedy{};      // твёрдый блок, сливается жадным мешером
         std::array<uint8_t, k_max_block_types> transparent{}; // грань к такому соседу видна
         std::array<uint8_t, k_max_block_types> uses_meta{};
+        // Полупрозрачный кубический блок (листва, стекло, лёд, слизь): грань к такому же блоку
+        // не рисуется (внутри кроны/глыбы граней нет), а свет грани огрубляется (light_coarse),
+        // чтобы соседние грани сливались в большие квады, а не дробились из-за 1 уровня света.
+        std::array<uint8_t, k_max_block_types> cull_same{};
+        // Упакованный свет (sky<<4 | block) -> огрублённый до 6 уровней на канал (0,3,6,9,12,15).
+        std::array<uint8_t, 256> light_coarse{};
     };
     const Mesh_Tables& mesh_tables() {
         static const Mesh_Tables tables = [] {
@@ -461,6 +467,13 @@ namespace {
                                p.mesh_style != Block_Mesh_Style::XStyle) ? 1 : 0;
                 m.transparent[i] = p.is_transparent ? 1 : 0;
                 m.uses_meta[i] = p.uses_meta ? 1 : 0;
+                m.cull_same[i] = (m.greedy[i] && p.is_transparent) ? 1 : 0;
+            }
+            for (int packed = 0; packed < 256; ++packed) {
+                const int sky = packed >> 4, blk = packed & 15;
+                const int sky_q = ((sky * 5 + 7) / 15) * 3;
+                const int blk_q = ((blk * 5 + 7) / 15) * 3;
+                m.light_coarse[static_cast<size_t>(packed)] = static_cast<uint8_t>((sky_q << 4) | blk_q);
             }
             return m;
         }();
@@ -724,7 +737,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                         c[axis] += sign;
                                         neighbor = block_at(c[0], c[1], c[2]);
                                     }
-                                    if (tab.transparent[neighbor]) {
+                                    if (tab.transparent[neighbor] &&
+                                        !(neighbor == cur && tab.cull_same[cur])) {
                                         c[axis] = s; c[ua] = u; c[va] = v_begin + v;
                                         uint8_t meta = 0;
                                         bool rotate = false;
@@ -732,11 +746,12 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                             meta = blocks.get_meta(c[0], c[1], c[2]);
                                             props[cur]->resolve_face_uv(face, meta, rotate);
                                         }
-                                        const uint8_t face_light = inside
+                                        uint8_t face_light = inside
                                             ? S.light[idx + sign * s_stride]
                                             : light_at(c[0] + (axis == 0 ? sign : 0),
                                                        c[1] + (axis == 1 ? sign : 0),
                                                        c[2] + (axis == 2 ? sign : 0));
+                                        if (tab.cull_same[cur]) face_light = tab.light_coarse[face_light];
                                         key = kKeyPresent | (rotate ? kKeyRotate : 0u) |
                                               static_cast<uint32_t>(cur) |
                                               (static_cast<uint32_t>(meta) << 8) |

@@ -369,7 +369,7 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
     const float energy_factor = 0.5f + 0.5f * (m_ai.get_energy() / 100.0f);
     const float fear_factor = 1.0f - 0.5f * (m_ai.get_fear() / 100.0f);
 
-    // Прыжок всадника: нажатие пробела на земле (удержание пробела при этом остаётся ручником).
+    // Прыжок всадника: нажатие пробела на земле.
     if (input.jump && m_on_ground) {
         m_vertical_velocity = Config::horse_ride_jump_speed;
         m_on_ground = false;
