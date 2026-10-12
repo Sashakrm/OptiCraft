@@ -33,7 +33,7 @@ namespace {
 }
 
 void Tree_Generator::place_tree(Tree_Type type, int x, int y, int z,
-                                Block_Setter setter, std::mt19937& rng) {
+                                Block_Setter setter, Fast_Rng& rng) {
     switch (type) {
         case Tree_Type::Oak:       place_oak_tree(x, y, z, setter, rng); break;
         case Tree_Type::Palm:      place_palm_tree(x, y, z, setter, rng); break;
@@ -46,7 +46,7 @@ void Tree_Generator::place_tree(Tree_Type type, int x, int y, int z,
 }
 
 // Wide, asymmetric crown with a short branching trunk.
-void Tree_Generator::place_oak_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_oak_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(5, 8);
     const int h = hdist(rng);
 
@@ -63,7 +63,7 @@ void Tree_Generator::place_oak_tree(int x, int y, int z, Block_Setter setter, st
 }
 
 // Birch is deliberately tall, thin and layered instead of being an oak recolor.
-void Tree_Generator::place_birch_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_birch_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(7, 11);
     const int h = hdist(rng);
 
@@ -79,7 +79,7 @@ void Tree_Generator::place_birch_tree(int x, int y, int z, Block_Setter setter, 
 }
 
 // Spruce: one strong central cone with dense tiers.
-void Tree_Generator::place_spruce_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_spruce_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(8, 12);
     const int h = hdist(rng);
 
@@ -96,7 +96,7 @@ void Tree_Generator::place_spruce_tree(int x, int y, int z, Block_Setter setter,
 }
 
 // Jungle: tall trunk, multiple large horizontal branches and a broad crown.
-void Tree_Generator::place_jungle_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_jungle_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(10, 15);
     const int h = hdist(rng);
 
@@ -115,7 +115,7 @@ void Tree_Generator::place_jungle_tree(int x, int y, int z, Block_Setter setter,
 }
 
 // Acacia: intentionally bent trunk and a flat umbrella crown.
-void Tree_Generator::place_acacia_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_acacia_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(5, 8);
     std::uniform_int_distribution<int> dir_dist(0, 3);
     const int h = hdist(rng);
@@ -140,7 +140,7 @@ void Tree_Generator::place_acacia_tree(int x, int y, int z, Block_Setter setter,
 }
 
 // Palm: curved trunk and radial fronds, clearly unlike the other trees.
-void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(8, 12);
     std::uniform_int_distribution<int> bend_dist(-1, 1);
     const int h = hdist(rng);
@@ -169,7 +169,7 @@ void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, s
 }
 
 // Slimewood: chunky, twisted trunk and a glowing-looking asymmetric crown.
-void Tree_Generator::place_slimewood_tree(int x, int y, int z, Block_Setter setter, std::mt19937& rng) {
+void Tree_Generator::place_slimewood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(6, 10);
     const int h = hdist(rng);
 

@@ -2,7 +2,7 @@
 #define OPTICRAFT_STRUCTURES_H
 
 #include <functional>
-#include <random>
+#include "math/Fast_Rng.h"
 #include "world/blocks/Block_Types.h"
 
 enum class Structure_Type : int {
@@ -16,8 +16,8 @@ class Structure_Generator {
 public:
     using Block_Setter = std::function<void(int x, int y, int z, Block_Types type)>;
 
-    static void create_from_id(Structure_Type type, int x, int y, int z, Block_Setter setter, std::mt19937& rng);
-    static void make_pyramid(int x, int y, int z, Block_Setter setter, std::mt19937& rng);
+    static void create_from_id(Structure_Type type, int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void make_pyramid(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
 };
 
 #endif //OPTICRAFT_STRUCTURES_H
