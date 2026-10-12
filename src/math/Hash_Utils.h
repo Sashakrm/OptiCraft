@@ -7,6 +7,7 @@
 
 #include <glm/glm.hpp>
 #include <cstddef>
+#include <functional>
 
 //  Хэш для glm::ivec2 (используется в Chunk_Manager и Renderer)
 struct Chunk_Key_Hash {

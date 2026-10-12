@@ -99,7 +99,11 @@ private:
     size_t m_last_occluded_section_count = 0;
     // false — рисовать все секции, попавшие во фрустум, без occlusion-запросов. Нужно для
     // изометрического снимка: результаты запросов относятся к камере игрока, а не к камере снимка.
-    bool m_occlusion_enabled = true;
+    // По умолчанию выключено: тест секции проверяется по глубине, которую рисуют сами секции,
+    // поэтому набор видимых секций менялся от кадра к кадру при неподвижной камере (мерцание
+    // треугольников у земли). Гистерезис это не закрыл полностью. Включать через
+    // set_occlusion_enabled(true) можно только после переделки теста (см. issue_occlusion_query).
+    bool m_occlusion_enabled = false;
 
 public:
     void set_occlusion_enabled(bool enabled) { m_occlusion_enabled = enabled; }
