@@ -237,6 +237,13 @@ namespace Config {
     constexpr float horse_flee_speed = 7.0f;
     constexpr float horse_invulnerable_seconds = 0.5f;
     constexpr float horse_death_seconds = 1.0f;
+    // Атака лошади (удар копытом/таран). Пока вызывается только вручную — см. Horse::attack.
+    constexpr float horse_attack_damage = 3.0f;        // базовый урон (HP)
+    constexpr float horse_attack_reach = 2.2f;         // до ближайшей точки хитбокса цели, блоков
+    constexpr float horse_attack_cooldown = 1.2f;      // секунды между ударами
+    constexpr float horse_attack_knockback = 6.0f;     // горизонтальный импульс цели
+    constexpr float horse_attack_speed_bonus = 0.35f;  // +урон за каждый блок/сек скорости (таран)
+    constexpr float horse_attack_max_damage = 10.0f;   // потолок урона
     constexpr float horse_respawn_delay = 60.0f;
     // Высота «седла» над ногами лошади, куда сажается игрок.
     constexpr float horse_seat_height = 1.15f;

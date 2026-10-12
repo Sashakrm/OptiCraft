@@ -140,8 +140,10 @@ double World_Generator::Noise_Field::noise3(double x, double y, double z) const 
     return ::noise3_XZBeforeY(environment, gradients, x, y, z);
 }
 
-World_Generator::World_Generator(const std::string& generation_folder, uint32_t seed)
+World_Generator::World_Generator(const std::string& generation_folder, uint32_t seed,
+                                 Dimension_Id dimension)
     : m_generation_folder(generation_folder)
+    , m_dimension(&get_dimension_info(dimension))
     , m_seed(seed)
     , m_water_level(kSeaLevel)
 {
@@ -1002,12 +1004,23 @@ Block_Types World_Generator::block_in_column(const Column& column,
 //  Публичный API
 // ---------------------------------------------------------------------------
 int World_Generator::get_height(int world_x, int world_z) const {
+    switch (m_dimension->terrain) {
+        case Terrain_Mode::Flat: return m_dimension->flat_top_y();
+        case Terrain_Mode::Void: return m_dimension->spawn_height - 2; // spawn = height + 2
+        case Terrain_Mode::Noise: break;
+    }
     return column_at(world_x, world_z).height;
 }
 
 Block_Types World_Generator::get_block(int world_x, int world_y, int world_z) const {
     if (world_y < Config::world_min_y || world_y > Config::world_max_y)
         return Block_Types::Air;
+
+    switch (m_dimension->terrain) {
+        case Terrain_Mode::Flat: return m_dimension->flat_block_at(world_y);
+        case Terrain_Mode::Void: return Block_Types::Air;
+        case Terrain_Mode::Noise: break;
+    }
 
     if (world_y >= 200 && sky_island_block(world_x, world_y, world_z)) {
         const bool exposed_top = !sky_island_block(world_x, world_y + 1, world_z);
@@ -1055,6 +1068,7 @@ World_Sample World_Generator::sample_with_connections(int world_x, int world_y, 
 }
 
 std::string World_Generator::get_biome_name(int world_x, int world_y, int world_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise) return m_dimension->display_name;
     const Column column = column_at(world_x, world_z);
     const double density = cave_density_at(world_x, world_y, world_z, column.surface_height);
     const Cave_Flags flags = (world_y < -10 && density > kCaveThreshold)
@@ -1063,6 +1077,7 @@ std::string World_Generator::get_biome_name(int world_x, int world_y, int world_
 }
 
 bool World_Generator::cave_at(int world_x, int world_y, int world_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise) return false;
     const Column column = column_at(world_x, world_z);
     return world_y < column.surface_height - 4.0 &&
            cave_density_at(world_x, world_y, world_z, column.surface_height) > kCaveThreshold;
@@ -1092,6 +1107,23 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
     // воркерах, буфер переиспользуется без аллокаций.
     thread_local std::vector<uint8_t> flat;
     flat.assign(Chunk_Block_Grid::voxel_count, 0);   // 0 = Air
+
+    // Не-шумовые режимы (Flat/Void): слои одинаковы по всему чанку, шумы не нужны.
+    if (m_dimension->terrain != Terrain_Mode::Noise) {
+        if (m_dimension->terrain == Terrain_Mode::Flat) {
+            for (int y = 0; y < Config::chunk_height; ++y) {
+                const int world_y = start_y + y;
+                if (world_y < Config::world_min_y || world_y > Config::world_max_y) continue;
+                const Block_Types block = m_dimension->flat_block_at(world_y);
+                if (block == Block_Types::Air) continue;
+                const size_t row = static_cast<size_t>(y) * Config::chunk_size * Config::chunk_size;
+                std::fill_n(flat.begin() + row, Config::chunk_size * Config::chunk_size,
+                            static_cast<uint8_t>(static_cast<Block_ID>(block)));
+            }
+        }
+        blocks.assign_flat(flat.data());
+        return;
+    }
 
     // Парящие острова живут только выше Y=200 — для всех остальных чанков этот
     // дорогой путь не выполняется вовсе.
@@ -1139,6 +1171,11 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
 
 bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chunk_z) const {
     const int start_y = chunk_y * Config::chunk_height;
+    switch (m_dimension->terrain) {
+        case Terrain_Mode::Void: return true;
+        case Terrain_Mode::Flat: return start_y > m_dimension->flat_top_y();
+        case Terrain_Mode::Noise: break;
+    }
     if (start_y <= kSeaLevel) return false;      // может быть вода
     if (start_y + Config::chunk_height - 1 >= 200) return false;  // парящие острова
 
@@ -1163,6 +1200,7 @@ bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chun
 //  Декорации
 // ---------------------------------------------------------------------------
 void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations) return;
     const Column column = column_at(world_x, world_z);
     const int terrain_height = column.height;
 

@@ -567,7 +567,8 @@ bool Game::load_world(const std::string& dir) {
 
 void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>(m_render_distance);
-    m_world_generator = std::make_unique<World_Generator>(m_generation_folder, m_world_settings.seed);
+    m_world_generator = std::make_unique<World_Generator>(m_generation_folder, m_world_settings.seed,
+                                                        dimension_from_name(m_world_settings.dimension));
     m_block_interaction_ptr = std::make_unique<Block_Interaction>();
     m_crops_ptr = std::make_unique<Crop_Manager>();
     m_block_interaction_ptr->set_crop_manager(m_crops_ptr.get());
@@ -616,7 +617,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
 
     m_chunk_manager_ptr->set_world_generator(*m_world_generator);
     m_chunk_manager_ptr->set_texture_atlas(m_renderer_ptr->get_texture_atlas());
-    m_chunk_manager_ptr->set_world_storage(m_world_file, m_generation_folder);
+    m_chunk_manager_ptr->set_world_storage(m_world_file, m_world_generator->get_storage_key());
     m_chunk_manager_ptr->update_player_position(start.x, start.y, start.z);
 }
 
@@ -915,7 +916,8 @@ void Game::reload_world(const std::string& generation_folder) {
         m_renderer_ptr->invalidate_chunk_cache(position);
     }
     m_chunk_manager_ptr.reset();
-    m_world_generator = std::make_unique<World_Generator>(generation_folder, m_world_settings.seed);
+    m_world_generator = std::make_unique<World_Generator>(generation_folder, m_world_settings.seed,
+                                                        dimension_from_name(m_world_settings.dimension));
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>();
     // Пересоздание менеджера не должно сбрасывать дальность прорисовки к значению
     // по умолчанию — иначе выбранная в настройках дальность терялась при смене
@@ -923,7 +925,7 @@ void Game::reload_world(const std::string& generation_folder) {
     m_chunk_manager_ptr->set_load_radius(m_render_distance);
     m_chunk_manager_ptr->set_world_generator(*m_world_generator);
     m_chunk_manager_ptr->set_texture_atlas(m_renderer_ptr->get_texture_atlas());
-    m_chunk_manager_ptr->set_world_storage(m_world_file, m_generation_folder);
+    m_chunk_manager_ptr->set_world_storage(m_world_file, m_world_generator->get_storage_key());
 
     const int spawn_y = m_world_generator->get_height(spawn_x, spawn_z) + 2;
     m_player_ptr->set_position(glm::vec3(

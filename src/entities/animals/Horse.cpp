@@ -147,6 +147,48 @@ bool Horse::take_damage(float amount, const glm::vec3& attacker_position) {
 }
 
 // ---------------------------------------------------------------------------------------
+//  Нападение
+// ---------------------------------------------------------------------------------------
+float Horse::compute_attack_damage() const {
+    if (m_breeding.is_baby()) return 0.0f;
+    const float damage = Config::horse_attack_damage + get_speed() * Config::horse_attack_speed_bonus;
+    return std::min(damage, Config::horse_attack_max_damage);
+}
+
+bool Horse::can_attack() const {
+    return !m_dying && !m_breeding.is_baby() && m_attack_cooldown <= 0.0f;
+}
+
+Horse_Attack_Result Horse::attack(const glm::vec3& target_min, const glm::vec3& target_max) {
+    Horse_Attack_Result result;
+    if (!can_attack()) return result;
+
+    const glm::vec3 p = m_mob.get_position();
+    const glm::vec3 closest = glm::clamp(p + glm::vec3(0.0f, Config::horse_height * 0.5f, 0.0f),
+                                         target_min, target_max);
+    const glm::vec3 centre = p + glm::vec3(0.0f, Config::horse_height * 0.5f, 0.0f);
+    if (glm::length(closest - centre) > Config::horse_attack_reach) return result;
+
+    glm::vec3 dir = 0.5f * (target_min + target_max) - p;
+    dir.y = 0.0f;
+    if (glm::length(dir) < 0.001f) dir = forward_of(m_yaw);
+    dir = glm::normalize(dir);
+
+    result.hit = true;
+    result.damage = compute_attack_damage();
+    result.knockback = dir * Config::horse_attack_knockback + glm::vec3(0.0f, 4.0f, 0.0f);
+
+    m_attack_cooldown = Config::horse_attack_cooldown;
+    m_yaw = std::atan2(dir.x, dir.z); // морда к цели
+    return result;
+}
+
+Horse_Attack_Result Horse::attack(const glm::vec3& target_position) {
+    const glm::vec3 half(0.3f, 0.9f, 0.3f); // примерно габариты игрока вокруг точки
+    return attack(target_position - half, target_position + half);
+}
+
+// ---------------------------------------------------------------------------------------
 //  Посадка / высадка
 // ---------------------------------------------------------------------------------------
 bool Horse::mount() {
@@ -451,6 +493,7 @@ void Horse::update(float dt, const Chunk_Manager& chunk_manager,
     }
 
     m_invulnerable_timer = std::max(0.0f, m_invulnerable_timer - dt);
+    m_attack_cooldown = std::max(0.0f, m_attack_cooldown - dt);
     m_hurt_flash_timer = std::max(0.0f, m_hurt_flash_timer - dt);
     m_mob.set_hurt_flash(m_hurt_flash_timer / 0.4f);
     m_breeding.update(dt);

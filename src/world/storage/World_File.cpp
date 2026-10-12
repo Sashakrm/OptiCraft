@@ -148,6 +148,7 @@ bool World_File::load(World_Settings& settings) const {
         parsed_any_field = true;
     }
 
+    if (const auto dim = read_string_field(contents, "dimension")) settings.dimension = *dim;
     if (const auto mode = read_string_field(contents, "game_mode")) settings.game_mode = *mode;
     if (const auto played = read_string_field(contents, "last_played")) settings.last_played = *played;
     const auto px = read_float_field(contents, "player_x");
@@ -184,6 +185,7 @@ bool World_File::save(const World_Settings& settings) const {
          << "  \"name\": \"" << escape_json(settings.name) << "\",\n"
          << "  \"generation_folder\": \"" << escape_json(settings.generation_folder) << "\",\n"
          << "  \"seed\": " << settings.seed << ",\n"
+         << "  \"dimension\": \"" << escape_json(settings.dimension) << "\",\n"
          << "  \"game_mode\": \"" << escape_json(settings.game_mode) << "\",\n"
          << "  \"last_played\": \"" << escape_json(settings.last_played) << "\",\n";
     if (settings.has_player_position) {

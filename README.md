@@ -483,6 +483,11 @@ uv_side/uv_bottom` — `Chunk.cpp` при постройке меша чанка
 - **Жидкости** (`src/world/fluids/Fluid_Simulator`): логика как в Minecraft (`FlowingFluid`) — тики, уровень в meta блока (0 — источник, 1..7 — течение, бит 0x08 — падение), поиск стока до 4 блоков, бесконечные источники, смывание растений. Параметры в `blocks.json`: `fluid_tick_delay`, `fluid_drop_off`, `fluid_slope_distance`, `fluid_infinite`. Настройки: `fluid_tick_seconds`, `fluid_max_updates_per_frame` в `Config.h`.
 - **Взрывоустойчивость**: ключ `blast_resistance` в `blocks.json` (шкала Minecraft: по умолчанию твёрдость×5, жидкости 100); доступ через `Block_Types`.
 
+## Измерения (заготовка) и атака лошади (2026-10-12)
+
+- **Измерения** (`src/world/dimensions/Dimension.h/.cpp`): `Dimension_Id` + таблица `Dimension_Info` (имя, режим рельефа `Terrain_Mode` = Noise/Flat/Void, декорации, небесный свет, слои плоского мира, ключ хранения). `World_Generator(folder, seed, dimension)` ветвится по режиму в `get_block`, `generate_chunk`, `chunk_is_definitely_air`, `decorate_column`. Overworld работает как раньше (генерация и хранилище бит-в-бит), тестовые `flat_test` и `void_test` — примеры режимов. Измерение пишется в `world.json` (`"dimension"`), чанки не-Overworld хранятся в своих region-файлах (`<dimension>_<пресет>.region`). Переходов между измерениями пока нет. Новое измерение = значение в enum + запись в `register_dimensions()`.
+- **Атака лошади**: `Horse::attack(...)` возвращает `Horse_Attack_Result` (попала ли, урон, импульс), есть кулдаун, дальность и бонус урона от скорости (`Config::horse_attack_*`). Урон к цели применяет вызывающий код; в игровом цикле пока не используется.
+
 ## Сторонние библиотеки (external/)
 
 - **stb_image** — `external/stb/stb_image.h` — https://github.com/nothings/stb

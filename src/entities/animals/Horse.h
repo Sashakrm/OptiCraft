@@ -42,6 +42,14 @@ struct Horse_Ride_Input {
     bool handbrake = false;    // пробел — ручник: сцепление падает, лошадь скользит боком (дрифт)
 };
 
+// Результат удара лошади. Horse не знает, кого бьёт (Player/моб): Game применяет результат сам,
+// например player.take_damage(static_cast<int>(std::ceil(r.damage))) и импульс r.knockback.
+struct Horse_Attack_Result {
+    bool hit = false;                // false — удар не состоялся (кулдаун, мертва, далеко, ...)
+    float damage = 0.0f;             // HP урона (0, если hit == false)
+    glm::vec3 knockback{0.0f};       // импульс для цели (горизонталь + небольшой подброс)
+};
+
 class Horse {
 public:
     Horse(std::string name, const glm::vec3& spawn_position);
@@ -111,6 +119,19 @@ public:
         m_knockback = glm::vec3(0.0f);
         return true;
     }
+    // --- Нападение -------------------------------------------------------------------
+    // Урон удара прямо сейчас: база + бонус за скорость (разгон/таран), не выше потолка.
+    // Детёныш не бьёт.
+    float compute_attack_damage() const;
+    // Может ли лошадь ударить в этот момент (жива, не детёныш, кулдаун прошёл).
+    bool can_attack() const;
+    // Удар по цели с AABB [target_min, target_max]. Бьёт, если ближайшая точка бокса цели не
+    // дальше Config::horse_attack_reach. При успехе запускает кулдаун и разворачивает лошадь к
+    // цели. Ничего не применяет к самой цели — вернёт урон и импульс (см. Horse_Attack_Result).
+    Horse_Attack_Result attack(const glm::vec3& target_min, const glm::vec3& target_max);
+    // Удобная перегрузка для цели-точки (центр игрока и т.п.).
+    Horse_Attack_Result attack(const glm::vec3& target_position);
+    float get_attack_cooldown_remaining() const { return m_attack_cooldown; }
     bool is_removable() const { return m_dying && m_death_timer >= Config::horse_death_seconds; }
 
 private:
@@ -123,6 +144,7 @@ private:
     // Характеристики/состояние.
     float m_health = Config::horse_max_health;
     float m_invulnerable_timer = 0.0f;
+    float m_attack_cooldown = 0.0f;
     float m_hurt_flash_timer = 0.0f;
     glm::vec3 m_knockback{0.0f};
     bool m_dying = false;

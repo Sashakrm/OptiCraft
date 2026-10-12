@@ -2,6 +2,7 @@
 #define OPTICRAFT_WORLD_GENERATOR_H
 
 #include "world/blocks/Block_Types.h"
+#include "world/dimensions/Dimension.h"
 #include "utils/Config.h"
 #include "OpenSimplex2S.h"
 
@@ -72,7 +73,8 @@ struct World_Sample {
 class World_Generator {
 public:
     explicit World_Generator(const std::string& generation_folder = "Classic",
-                             uint32_t seed = Config::seed);
+                             uint32_t seed = Config::seed,
+                             Dimension_Id dimension = Dimension_Id::Overworld);
     ~World_Generator();
 
     World_Generator(const World_Generator&) = delete;
@@ -81,6 +83,12 @@ public:
     void set_generation_folder(const std::string& generation_folder);
     const std::string& get_generation_folder() const { return m_generation_folder; }
     uint32_t get_seed() const { return m_seed; }
+    // Измерение (а значит и режим рельефа: Noise / Flat / Void, см. Dimension.h).
+    Dimension_Id get_dimension_id() const { return m_dimension->id; }
+    const Dimension_Info& get_dimension() const { return *m_dimension; }
+    void set_dimension(Dimension_Id dimension) { m_dimension = &get_dimension_info(dimension); }
+    // Ключ хранения чанков этого измерения (для Chunk_Manager::set_world_storage).
+    std::string get_storage_key() const { return m_dimension->storage_key(m_generation_folder); }
     static constexpr int sea_level() { return 63; }
 
     int get_height(int world_x, int world_z) const;
@@ -169,6 +177,7 @@ private:
 
     std::vector<Biome_Definition> m_biomes;
     std::string m_generation_folder;
+    const Dimension_Info* m_dimension;
     uint32_t m_seed;
     int m_water_level;
     // Эпоха кэшей: у каждого нового генератора она своя, поэтому thread_local кэши
