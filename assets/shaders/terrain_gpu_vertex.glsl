@@ -22,6 +22,7 @@ out vec2 Local;
 out float NormalY;
 out float BlockLight;
 flat out vec4 Rect;
+out float AO;
 
 // Углы квада (fu + 2*fv) по шести вершинам, в порядке emit_terrain_quad (Chunk.cpp), включая
 // переворот порядка при знаке. Вариант = axis*2 + (знак > 0 ? 0 : 1).
@@ -32,6 +33,15 @@ const int kCorner[36] = int[36](
     0, 1, 3, 0, 3, 2,
     0, 1, 3, 0, 3, 2,
     0, 3, 1, 0, 2, 3);
+
+// Та же таблица для квада, разрезанного по диагонали c1-c2 (см. flip_quad_diagonal в Chunk.cpp).
+const int kCornerFlip[36] = int[36](
+    0, 2, 1, 1, 2, 3,
+    0, 1, 2, 1, 3, 2,
+    0, 2, 1, 1, 2, 3,
+    0, 1, 2, 1, 3, 2,
+    0, 1, 2, 1, 3, 2,
+    0, 2, 1, 1, 2, 3);
 
 void main() {
     const uint vid = uint(gl_VertexID);
@@ -49,7 +59,16 @@ void main() {
     const float h = float(((w0 >> 23u) & 31u) + 1u);
     const bool rot = ((w0 >> 28u) & 1u) != 0u;
 
-    const int code = kCorner[(axis * 2u + (pos ? 0u : 1u)) * 6u + k];
+    // AO углов: два бита на угол (код fu + 2*fv), см. face_ao в Chunk.cpp. Диагональ идёт через
+    // более тёмную пару углов, поэтому порядок вершин выбирается по AO.
+    const uint ao_bits = (w1 >> 24u) & 0xFFu;
+    const uint a0 = ao_bits & 3u;
+    const uint a1 = (ao_bits >> 2u) & 3u;
+    const uint a2 = (ao_bits >> 4u) & 3u;
+    const uint a3 = (ao_bits >> 6u) & 3u;
+    const bool flip = a0 + a3 > a1 + a2;
+    const uint variant = axis * 2u + (pos ? 0u : 1u);
+    const int code = flip ? kCornerFlip[variant * 6u + k] : kCorner[variant * 6u + k];
     const float fu = float(code & 1);
     const float fv = float((code >> 1) & 1);
     const vec3 base = origins[sec >> 2u].xyz + cell;
@@ -74,5 +93,6 @@ void main() {
     NormalY = (axis == 1u) ? (pos ? 1.0 : -1.0) : 0.0;
     BlockLight = float((w1 >> 16u) & 0xFFu);
     Rect = rects[w1 & 0x7FFFu];
+    AO = float((ao_bits >> (2u * uint(code))) & 3u);
     gl_Position = projection * view * model * vec4(p, 1.0);
 }

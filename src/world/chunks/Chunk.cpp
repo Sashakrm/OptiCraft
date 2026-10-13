@@ -19,6 +19,27 @@
 
 namespace {
     std::atomic<uint64_t> g_mesh_version_counter{0};
+    // Номер объекта чанка (см. Chunk::get_instance_id). Начинается с 1: 0 значит «не привязано к объекту».
+    std::atomic<uint64_t> g_chunk_instance_counter{0};
+    // Счётчик изменений связности (см. current_connectivity_epoch).
+    std::atomic<uint64_t> g_connectivity_epoch{0};
+
+    // Меняется ли связность секций при замене мешей: сравниваем всё, что читает обход достижимости.
+    bool same_connectivity(const Chunk_Meshes& a, const Chunk_Meshes& b) {
+        for (size_t i = 0; i < a.sections.size(); ++i) {
+            const Section_Connectivity& x = a.sections[i].conn;
+            const Section_Connectivity& y = b.sections[i].conn;
+            if (x.kind != y.kind || x.comp_count != y.comp_count || x.face_begin != y.face_begin ||
+                x.face_comps != y.face_comps || x.masks != y.masks) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+uint64_t current_connectivity_epoch() {
+    return g_connectivity_epoch.load(std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +177,9 @@ Chunk::Chunk(int chunk_x, int chunk_y, int chunk_z, const World_Generator& gener
     , m_world_generator(&generator)
 {
     // Сетка блоков создаётся целиком из воздуха (палитра из одной записи) — заполнять нечем.
+    // Номер объекта нужен потому, что позиция в мире не отличает объект от его замены: выгрузили
+    // и загрузили заново — позиция та же, а результат задачи, снятой для старого объекта, применять нельзя.
+    m_instance_id = ++g_chunk_instance_counter;
 }
 
 void Chunk::recalculate_metadata() {
@@ -455,6 +479,8 @@ namespace {
         // не рисуется (внутри кроны/глыбы граней нет), а свет грани огрубляется (light_coarse),
         // чтобы соседние грани сливались в большие квады, а не дробились из-за 1 уровня света.
         std::array<uint8_t, k_max_block_types> cull_same{};
+        // Непрозрачный полный куб (жадно-мешаемый и не прозрачный): такой блок закрывает AO соседних углов.
+        std::array<uint8_t, k_max_block_types> occludes{};
         // Упакованный свет (sky<<4 | block) -> огрублённый до 6 уровней на канал (0,3,6,9,12,15).
         std::array<uint8_t, 256> light_coarse{};
     };
@@ -468,6 +494,7 @@ namespace {
                 m.transparent[i] = p.is_transparent ? 1 : 0;
                 m.uses_meta[i] = p.uses_meta ? 1 : 0;
                 m.cull_same[i] = (m.greedy[i] && p.is_transparent) ? 1 : 0;
+                m.occludes[i] = (m.greedy[i] && !p.is_transparent) ? 1 : 0;
             }
             for (int packed = 0; packed < 256; ++packed) {
                 const int sky = packed >> 4, blk = packed & 15;
@@ -491,12 +518,139 @@ namespace {
         // клетки, которые реально понадобились.
         std::array<uint8_t, 6 * kLayer> border_block, border_light;
         std::array<uint8_t, 6 * kLayer> block_known, light_known;
+        // Кольцо рёбер и углов за границей (для AO), лениво, как и грани.
+        std::array<uint8_t, Chunk_Ring::kSize> ring_block, ring_known;
         std::array<uint32_t, kLayer> mask;
+        // Обход компонент прозрачных клеток одной секции (см. compute_section_connectivity).
+        std::array<uint8_t, kLayer * Config::chunk_section_height> section_seen;
+        std::array<uint16_t, kLayer * Config::chunk_section_height> section_stack;
+        std::array<uint16_t, kLayer * Config::chunk_section_height> section_comp;   // компонента клетки
+        std::array<uint16_t, kLayer * Config::chunk_section_height> section_final;  // компонента -> номер граничной
+        std::array<uint8_t, Section_Boundary::kCount> boundary_label;             // номер граничной компоненты по позиции
+        std::array<uint64_t, Section_Boundary::kMaxComps * 16> face_bits;         // маски одной грани: компонента * слова
     };
 
     Mesh_Scratch& mesh_scratch() {
         thread_local std::unique_ptr<Mesh_Scratch> scratch = std::make_unique<Mesh_Scratch>();
         return *scratch;
+    }
+
+    // Связность граничных клеток секции (см. Section_Connectivity). Клетка проводит обзор, если она не
+    // полный непрозрачный куб (Mesh_Tables::occludes): воздух, вода, стекло, листва, флора.
+    // Проход 1: компоненты всех прозрачных клеток секции (номер — порядок обнаружения).
+    // Проход 2: граничные позиции получают номера компонент, которые касаются границы; внутренние — нет.
+    // Проход 3: для каждой грани — маски позиций её компонент (бит — локальная позиция грани, см. kBase).
+    // Блоки секции лежат в S.blocks с y_begin, порядок — как в build_chunk_mesh (y, z, x).
+    Section_Connectivity compute_section_connectivity(Mesh_Scratch& S, int y_begin) {
+        constexpr int kSecH = Config::chunk_section_height;
+        constexpr int kLayerCells = kN * kN;
+        constexpr int kCells = kSecH * kLayerCells;
+        const size_t base = static_cast<size_t>(y_begin) * kLayerCells;
+        const Mesh_Tables& tab = mesh_tables();
+        const auto passable = [&](int local) {
+            return tab.occludes[S.blocks[base + static_cast<size_t>(local)]] == 0;
+        };
+
+        std::fill(S.section_seen.begin(), S.section_seen.end(), static_cast<uint8_t>(0));
+        int raw_count = 0;
+        for (int seed = 0; seed < kCells; ++seed) {
+            if (S.section_seen[seed]) continue;
+            S.section_seen[seed] = 1;
+            if (!passable(seed)) continue;
+
+            const uint16_t id = static_cast<uint16_t>(raw_count++);
+            S.section_comp[seed] = id;
+            size_t top = 0;
+            S.section_stack[top++] = static_cast<uint16_t>(seed);
+            while (top > 0) {
+                const int li = S.section_stack[--top];
+                const int x = li % kN;
+                const int z = (li / kN) % kN;
+                const int ly = li / kLayerCells;
+                const auto visit = [&](int next) {
+                    if (S.section_seen[next]) return;
+                    S.section_seen[next] = 1;
+                    if (!passable(next)) return;
+                    S.section_comp[next] = id;
+                    S.section_stack[top++] = static_cast<uint16_t>(next);
+                };
+                if (x > 0) visit(li - 1);
+                if (x < kN - 1) visit(li + 1);
+                if (z > 0) visit(li - kN);
+                if (z < kN - 1) visit(li + kN);
+                if (ly > 0) visit(li - kLayerCells);
+                if (ly < kSecH - 1) visit(li + kLayerCells);
+            }
+        }
+
+        // Граничные позиции -> клетка секции -> компонента -> номер граничной компоненты.
+        Section_Connectivity out;
+        std::fill(S.section_final.begin(), S.section_final.begin() + raw_count, static_cast<uint16_t>(0xFFFF));
+        int comp_count = 0;
+        int passable_boundary = 0;
+        for (int p = 0; p < Section_Boundary::kCount; ++p) {
+            const int f = Section_Boundary::face_of(p);
+            const int q = p - Section_Boundary::kBase[f];
+            int lx = 0, ly = 0, lz = 0;
+            switch (f) {
+                case 0: lx = kN - 1; lz = q / kSecH; ly = q % kSecH; break;  // +X: (z, y)
+                case 1: lx = 0;      lz = q / kSecH; ly = q % kSecH; break;  // -X
+                case 2: ly = kSecH - 1; lz = q / kN; lx = q % kN; break;     // +Y: (z, x)
+                case 3: ly = 0;         lz = q / kN; lx = q % kN; break;     // -Y
+                case 4: lz = kN - 1; lx = q / kSecH; ly = q % kSecH; break;  // +Z: (x, y)
+                default: lz = 0;     lx = q / kSecH; ly = q % kSecH; break;  // -Z
+            }
+            const int li = (ly * kN + lz) * kN + lx;
+            if (!passable(li)) {
+                S.boundary_label[p] = Section_Boundary::kNoComp;
+                continue;
+            }
+            ++passable_boundary;
+            const uint16_t raw = S.section_comp[li];
+            if (S.section_final[raw] == 0xFFFF) {
+                S.section_final[raw] = static_cast<uint16_t>(comp_count++);
+            }
+            S.boundary_label[p] = static_cast<uint8_t>(S.section_final[raw]);
+        }
+
+        if (passable_boundary == 0) {
+            out.kind = Section_Connectivity::Kind::Closed;
+            return out;
+        }
+        // Одна компонента на всю границу, все её позиции проходимы: секция видна насквозь. Слишком много
+        // компонент (больше 255) тоже сводим к Open: это грубее, но безопасно (лишние секции, а не пропуски).
+        if (comp_count > Section_Boundary::kMaxComps ||
+            (comp_count == 1 && passable_boundary == Section_Boundary::kCount)) {
+            out.kind = Section_Connectivity::Kind::Open;
+            return out;
+        }
+
+        // Маски по граням: компонента грани — запись с номером и смещением маски; маски идут в порядке записей.
+        out.kind = Section_Connectivity::Kind::Mixed;
+        out.comp_count = static_cast<uint16_t>(comp_count);
+        for (int f = 0; f < 6; ++f) {
+            out.face_begin[f] = static_cast<uint16_t>(out.face_comps.size());
+            const int words = Section_Boundary::kFaceWords[f];
+            const int face_size = words * 64;
+            const int first = Section_Boundary::kBase[f];
+            std::fill(S.face_bits.begin(), S.face_bits.begin() + static_cast<size_t>(comp_count) * words, uint64_t{0});
+            std::array<bool, Section_Boundary::kMaxComps> touched{};
+            for (int i = 0; i < face_size; ++i) {
+                const uint8_t l = S.boundary_label[first + i];
+                if (l == Section_Boundary::kNoComp) continue;
+                S.face_bits[static_cast<size_t>(l) * words + static_cast<size_t>(i >> 6)] |= uint64_t{1} << (i & 63);
+                touched[l] = true;
+            }
+            for (int l = 0; l < comp_count; ++l) {
+                if (!touched[l]) continue;
+                const size_t at = static_cast<size_t>(l) * words;
+                out.face_comps.push_back({static_cast<uint8_t>(l), static_cast<uint32_t>(out.masks.size())});
+                out.masks.insert(out.masks.end(), S.face_bits.begin() + static_cast<std::ptrdiff_t>(at),
+                                 S.face_bits.begin() + static_cast<std::ptrdiff_t>(at) + words);
+            }
+        }
+        out.face_begin[6] = static_cast<uint16_t>(out.face_comps.size());
+        return out;
     }
 
     // Индекс клетки за границей чанка в кэше соседей (грань: -X,+X,-Y,+Y,-Z,+Z).
@@ -506,73 +660,69 @@ namespace {
         return (z >= kN ? 5 : 4) * kLayer + static_cast<size_t>(y) * kN + x;
     }
 
+    // Порядок вершин квада (та же раскладка, что в terrain_gpu_vertex.glsl). Код угла c = fu + 2*fv,
+    // вариант = axis*2 + (знак > 0 ? 0 : 1), по шесть вершин на вариант (два треугольника).
+    // kCornerFlip — тот же квад, разрезанный по другой диагонали, с той же ориентацией обхода.
+    constexpr int kCorner[36] = {
+        0, 2, 3, 0, 3, 1,
+        0, 3, 2, 0, 1, 3,
+        0, 3, 1, 0, 2, 3,
+        0, 1, 3, 0, 3, 2,
+        0, 1, 3, 0, 3, 2,
+        0, 3, 1, 0, 2, 3};
+    constexpr int kCornerFlip[36] = {
+        0, 2, 1, 1, 2, 3,
+        0, 1, 2, 1, 3, 2,
+        0, 2, 1, 1, 2, 3,
+        0, 1, 2, 1, 3, 2,
+        0, 1, 2, 1, 3, 2,
+        0, 2, 1, 1, 2, 3};
+
+    // Диагональ квада идёт через более тёмную пару углов (сумма AO по ней меньше). Иначе квад с одним
+    // тёмным углом получает резкую полосу по диагонали. Правило совпадает с GPU-шейдером.
+    bool flip_quad_diagonal(uint32_t ao_code) {
+        const uint32_t a0 = ao_code & 3u;
+        const uint32_t a1 = (ao_code >> 2) & 3u;
+        const uint32_t a2 = (ao_code >> 4) & 3u;
+        const uint32_t a3 = (ao_code >> 6) & 3u;
+        return a0 + a3 > a1 + a2;
+    }
+
     // Один квад непрозрачной геометрии. w — размер вдоль оси u, h — вдоль оси v (см. kAxisU/kAxisV
-    // ниже), (wx, wy, wz) — мировые координаты угла клетки с минимальными координатами.
-    // Порядок вершин и ориентация UV — те же, что были у одиночной грани (push_face_impl), только
-    // с растяжкой на w x h: чтобы текстура не растягивалась, локальные UV идут от 0 до w / h.
+    // ниже), (wx, wy, wz) — мировые координаты угла клетки с минимальными координатами. ao_code —
+    // AO четырёх углов (два бита на угол). Вершины и UV строятся по тем же правилам, что в GPU-пути.
     void emit_terrain_quad(std::vector<Terrain_Vertex>& out,
                            float wx, float wy, float wz,
                            int axis, int sign, int w, int h,
-                           const glm::vec4& uv, float light, bool rotate) {
+                           const glm::vec4& uv, float light, bool rotate, uint32_t ao_code) {
         const float ny = axis == 1 ? static_cast<float>(sign) : 0.0f;
-        const float U = static_cast<float>(w);
-        const float V = static_cast<float>(h);
-        const size_t first = out.size();
-
-        const auto push = [&](float x, float y, float z, float a, float b) {
-            out.push_back({x, y, z, a, b, ny, light, uv.x, uv.y, uv.z, uv.w});
-        };
-
-        if (axis == 0) {            // грань ±X: u вдоль Z, v вдоль Y
-            const float fx = wx + (sign > 0 ? 1.0f : 0.0f);
-            const float sy = V, sz = U;
-            push(fx, wy,      wz,      0, 0);
-            push(fx, wy + sy, wz,      0, V);
-            push(fx, wy + sy, wz + sz, U, V);
-            push(fx, wy,      wz,      0, 0);
-            push(fx, wy + sy, wz + sz, U, V);
-            push(fx, wy,      wz + sz, U, 0);
-            if (sign < 0) {
-                std::swap(out[first + 1], out[first + 2]);
-                std::swap(out[first + 4], out[first + 5]);
+        const float fw = static_cast<float>(w);
+        const float fh = static_cast<float>(h);
+        const float plane = sign > 0 ? 1.0f : 0.0f;
+        const int variant = axis * 2 + (sign > 0 ? 0 : 1);
+        const int* order = flip_quad_diagonal(ao_code) ? kCornerFlip : kCorner;
+        for (int k = 0; k < 6; ++k) {
+            const int code = order[variant * 6 + k];
+            const float fu = static_cast<float>(code & 1);
+            const float fv = static_cast<float>((code >> 1) & 1);
+            float x, y, z, lu, lv;
+            if (axis == 0) {            // грань ±X: u вдоль Z, v вдоль Y
+                x = wx + plane; y = wy + fv * fh; z = wz + fu * fw;
+                lu = fu * fw;       lv = fv * fh;
+            } else if (axis == 1) {     // грань ±Y: u вдоль X, v вдоль Z
+                x = wx + fu * fw; y = wy + plane; z = wz + fv * fh;
+                lu = fu * fw;       lv = (1.0f - fv) * fh;
+            } else {                    // грань ±Z: u вдоль X, v вдоль Y
+                x = wx + fu * fw; y = wy + fv * fh; z = wz + plane;
+                lu = fu * fw;       lv = fv * fh;
             }
-        } else if (axis == 1) {     // грань ±Y: u вдоль X, v вдоль Z
-            const float fy = wy + (sign > 0 ? 1.0f : 0.0f);
-            const float sx = U, sz = V;
-            push(wx,      fy, wz,      0, V);
-            push(wx + sx, fy, wz,      U, V);
-            push(wx + sx, fy, wz + sz, U, 0);
-            push(wx,      fy, wz,      0, V);
-            push(wx + sx, fy, wz + sz, U, 0);
-            push(wx,      fy, wz + sz, 0, 0);
-            if (sign > 0) {
-                std::swap(out[first + 1], out[first + 2]);
-                std::swap(out[first + 4], out[first + 5]);
+            if (rotate) {               // поворот текстуры на 90°: (a, b) -> (b, 1 - a)
+                const float a = lu;
+                lu = lv;
+                lv = 1.0f - a;
             }
-        } else {                    // грань ±Z: u вдоль X, v вдоль Y
-            const float fz = wz + (sign > 0 ? 1.0f : 0.0f);
-            const float sx = U, sy = V;
-            push(wx,      wy,      fz, 0, 0);
-            push(wx + sx, wy,      fz, U, 0);
-            push(wx + sx, wy + sy, fz, U, V);
-            push(wx,      wy,      fz, 0, 0);
-            push(wx + sx, wy + sy, fz, U, V);
-            push(wx,      wy + sy, fz, 0, V);
-            if (sign < 0) {
-                std::swap(out[first + 1], out[first + 2]);
-                std::swap(out[first + 4], out[first + 5]);
-            }
-        }
-
-        if (rotate) {
-            // Поворот текстуры на 90° (бревно на боку) — только для квадов 1x1:
-            // (a, b) -> (b, 1 - a), как раньше делал rotate_last_quad_uv.
-            for (size_t i = first; i < out.size(); ++i) {
-                const float a = out[i].local_u;
-                const float b = out[i].local_v;
-                out[i].local_u = b;
-                out[i].local_v = 1.0f - a;
-            }
+            const float ao = static_cast<float>((ao_code >> (2 * code)) & 3u);
+            out.push_back({x, y, z, lu, lv, ny, light, uv.x, uv.y, uv.z, uv.w, ao});
         }
     }
 
@@ -614,6 +764,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         light.unpack(S.light.data());
         std::fill(S.block_known.begin(), S.block_known.end(), static_cast<uint8_t>(0));
         std::fill(S.light_known.begin(), S.light_known.end(), static_cast<uint8_t>(0));
+        std::fill(S.ring_known.begin(), S.ring_known.end(), static_cast<uint8_t>(0));
 
         // Layer culling: слои без единого блока пропускаются (дёшево — 32x32 на слой).
         for (int y = 0; y < kH; ++y) {
@@ -658,6 +809,61 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         return S.border_light[slot];
     };
 
+    // Рёбра и углы за границей (две или три координаты вне чанка): лениво, через лукап соседей.
+    const auto ring_block_at = [&](int x, int y, int z) -> uint8_t {
+        const int idx = chunk_ring_index(x, y, z);
+        if (!S.ring_known[idx]) {
+            S.ring_known[idx] = 1;
+            S.ring_block[idx] = neighbor_lookup
+                ? static_cast<uint8_t>(static_cast<Block_ID>(
+                      neighbor_lookup(base_x + x, base_y + y, base_z + z)))
+                : static_cast<uint8_t>(0);
+        }
+        return S.ring_block[idx];
+    };
+
+    // Закрывает ли клетка свет AO: только полный непрозрачный куб (см. Mesh_Tables::occludes).
+    const auto occludes_at = [&](int x, int y, int z) -> bool {
+        if (static_cast<unsigned>(x) < static_cast<unsigned>(kN) &&
+            static_cast<unsigned>(y) < static_cast<unsigned>(kH) &&
+            static_cast<unsigned>(z) < static_cast<unsigned>(kN)) {
+            return mesh_tables().occludes[S.blocks[(static_cast<size_t>(y) * kN + z) * kN + x]] != 0;
+        }
+        const int out_axes = int(x < 0 || x >= kN) + int(y < 0 || y >= kH) + int(z < 0 || z >= kN);
+        const uint8_t id = out_axes >= 2 ? ring_block_at(x, y, z) : block_at(x, y, z);
+        return mesh_tables().occludes[id] != 0;
+    };
+
+    // Вершинный AO четырёх углов грани клетки c с нормалью по оси axis (знак sign). Угол fu + 2*fv
+    // получает уровень 0..3 по двум боковым клеткам слоя перед гранью и по диагональной клетке:
+    // 3 — открыт, 0 — закрыт двумя стенками. Два бита на угол, всего 8 бит на клетку.
+    const auto face_ao = [&](const int c[3], int axis, int sign, int ua, int va) -> uint32_t {
+        int base[3] = {c[0], c[1], c[2]};
+        base[axis] += sign;
+        uint32_t code = 0;
+        for (int fv = 0; fv < 2; ++fv) {
+            for (int fu = 0; fu < 2; ++fu) {
+                const int du = fu ? 1 : -1;
+                const int dv = fv ? 1 : -1;
+                int p1[3] = {base[0], base[1], base[2]};
+                int p2[3] = {base[0], base[1], base[2]};
+                int p3[3] = {base[0], base[1], base[2]};
+                p1[ua] += du;
+                p2[va] += dv;
+                p3[ua] += du;
+                p3[va] += dv;
+                const bool s1 = occludes_at(p1[0], p1[1], p1[2]);
+                const bool s2 = occludes_at(p2[0], p2[1], p2[2]);
+                const bool s3 = occludes_at(p3[0], p3[1], p3[2]);
+                const uint32_t level = (s1 && s2)
+                    ? 0u
+                    : 3u - (static_cast<uint32_t>(s1) + static_cast<uint32_t>(s2) + static_cast<uint32_t>(s3));
+                code |= level << (2 * (fu + 2 * fv));
+            }
+        }
+        return code;
+    };
+
     // Метаданные клетки в чанке или за его границей (для уровня жидкости).
     const auto meta_at = [&](int x, int y, int z) -> uint8_t {
         if (static_cast<unsigned>(x) < static_cast<unsigned>(kN) &&
@@ -695,6 +901,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
         const int y_begin = section_index * Config::chunk_section_height;
         const int y_end = y_begin + Config::chunk_section_height;
+        // Связность для отсечения укрытий. Воздух целиком проводит обзор: секция остаётся Open (по умолчанию).
+        if (!all_air) range.conn = compute_section_connectivity(S, y_begin);
 
         // GPU: есть ли в секции жадно-мешаемый блок. Тогда секция рисуется GPU-квадами (их
         // число на CPU неизвестно), и её Y-диапазон — это весь диапазон секции.
@@ -757,10 +965,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                         !(neighbor == cur && tab.cull_same[cur])) {
                                         c[axis] = s; c[ua] = u; c[va] = v_begin + v;
                                         uint8_t meta = 0;
-                                        bool rotate = false;
                                         if (tab.uses_meta[cur]) {
                                             meta = blocks.get_meta(c[0], c[1], c[2]);
-                                            props[cur]->resolve_face_uv(face, meta, rotate);
                                         }
                                         uint8_t face_light = inside
                                             ? S.light[idx + sign * s_stride]
@@ -768,10 +974,11 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                                        c[1] + (axis == 1 ? sign : 0),
                                                        c[2] + (axis == 2 ? sign : 0));
                                         if (tab.cull_same[cur]) face_light = tab.light_coarse[face_light];
-                                        key = kKeyPresent | (rotate ? kKeyRotate : 0u) |
-                                              static_cast<uint32_t>(cur) |
+                                        const uint32_t ao = face_ao(c, axis, sign, ua, va);
+                                        key = static_cast<uint32_t>(cur) |
                                               (static_cast<uint32_t>(meta) << 8) |
-                                              (static_cast<uint32_t>(face_light) << 16);
+                                              (static_cast<uint32_t>(face_light) << 16) |
+                                              (ao << 24);
                                         any = true;
                                     }
                                 }
@@ -785,8 +992,16 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                 const uint32_t key = S.mask[static_cast<size_t>(v) * kN + u];
                                 if (key == 0) { ++u; continue; }
 
+                                const Block_Properties& bp = *props[key & 0xFFu];
+                                const uint8_t meta = static_cast<uint8_t>((key >> 8) & 0xFFu);
+                                bool rotate = false;
+                                const glm::vec4& uv = bp.uses_meta
+                                    ? bp.resolve_face_uv(face, meta, rotate)
+                                    : bp.get_uv(axis == 1 ? sign : 0);
+
+                                // Повёрнутая текстура (бревно на боку) не сливается: квад 1x1.
                                 int w = 1, h = 1;
-                                if (!(key & kKeyRotate)) {
+                                if (!rotate) {
                                     while (u + w < kN &&
                                            S.mask[static_cast<size_t>(v) * kN + u + w] == key) ++w;
                                     bool grow = true;
@@ -808,18 +1023,13 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
                                 int c[3];
                                 c[axis] = s; c[ua] = u; c[va] = v_begin + v;
-                                const Block_Properties& bp = *props[key & 0xFFu];
-                                const uint8_t meta = static_cast<uint8_t>((key >> 8) & 0xFFu);
-                                bool rotate = false;
-                                const glm::vec4& uv = bp.uses_meta
-                                    ? bp.resolve_face_uv(face, meta, rotate)
-                                    : bp.get_uv(axis == 1 ? sign : 0);
                                 emit_terrain_quad(meshes.solid,
                                                   static_cast<float>(base_x + c[0]),
                                                   static_cast<float>(base_y + c[1]),
                                                   static_cast<float>(base_z + c[2]),
                                                   axis, sign, w, h, uv,
-                                                  static_cast<float>((key >> 16) & 0xFFu), rotate);
+                                                  static_cast<float>((key >> 16) & 0xFFu), rotate,
+                                                  (key >> 24) & 0xFFu);
                                 u += w;
                             }
                         }
@@ -1056,6 +1266,16 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
         pack_channel(S.border_light.data() + static_cast<size_t>(face) * kLayer, kLayer,
                      meshes.gpu_words, meshes.gpu_channels[9 + face]);
     }
+    // Кольцо рёбер и углов (канал 15): для AO у границы. Значения берёт тот же лукап соседей,
+    // что и CPU-мешер, поэтому пустые соседи и область захвата обрабатываются одинаково.
+    for (int idx = 0; idx < Chunk_Ring::kSize; ++idx) {
+        int x = 0, y = 0, z = 0;
+        chunk_ring_coords(idx, x, y, z);
+        S.ring_block[idx] = neighbor_lookup
+            ? static_cast<uint8_t>(static_cast<Block_ID>(neighbor_lookup(base_x + x, base_y + y, base_z + z)))
+            : static_cast<uint8_t>(0);
+    }
+    pack_channel(S.ring_block.data(), Chunk_Ring::kSize, meshes.gpu_words, meshes.gpu_channels[15]);
     meshes.gpu_upload_pending = true;
 }
 
@@ -1064,12 +1284,18 @@ Gpu_Mesh_Tables gpu_mesh_tables() {
     Gpu_Mesh_Tables out;
     for (size_t i = 0; i < static_cast<size_t>(k_max_block_types); ++i) {
         out.flags[i] = (tab.greedy[i] ? 1u : 0u) | (tab.transparent[i] ? 2u : 0u) |
-                       (tab.uses_meta[i] ? 4u : 0u) | (tab.cull_same[i] ? 8u : 0u);
+                       (tab.uses_meta[i] ? 4u : 0u) | (tab.cull_same[i] ? 8u : 0u) |
+                       (tab.occludes[i] ? 16u : 0u);
     }
     for (size_t i = 0; i < out.light_coarse.size(); ++i) {
         out.light_coarse[i] = tab.light_coarse[i];
     }
     return out;
+}
+
+bool block_occludes_view(Block_Types type) {
+    const size_t id = static_cast<size_t>(static_cast<Block_ID>(type));
+    return id < static_cast<size_t>(k_max_block_types) && mesh_tables().occludes[id] != 0;
 }
 
 void Chunk::build_mesh() {
@@ -1090,13 +1316,16 @@ void Chunk::build_mesh() {
         meta_lookup = [manager](int wx, int wy, int wz) { return manager->get_block_meta_world(wx, wy, wz); };
     }
 
-    m_meshes = build_chunk_mesh(m_blocks, m_block_light, m_chunk_x, m_chunk_y, m_chunk_z,
-                                lookup, light_lookup, *m_texture_atlas, false, meta_lookup);
+    Chunk_Meshes meshes = build_chunk_mesh(m_blocks, m_block_light, m_chunk_x, m_chunk_y, m_chunk_z,
+                                           lookup, light_lookup, *m_texture_atlas, false, meta_lookup);
+    if (!same_connectivity(m_meshes, meshes)) g_connectivity_epoch.fetch_add(1, std::memory_order_relaxed);
+    m_meshes = std::move(meshes);
     m_is_mesh_dirty = false;
     m_mesh_version = ++g_mesh_version_counter;
 }
 
 void Chunk::apply_mesh(Chunk_Meshes meshes) {
+    if (!same_connectivity(m_meshes, meshes)) g_connectivity_epoch.fetch_add(1, std::memory_order_relaxed);
     m_meshes = std::move(meshes);
     m_is_mesh_dirty = false;
     m_mesh_version = ++g_mesh_version_counter;
@@ -1131,7 +1360,7 @@ void Chunk::set_meta(int x, int y, int z, uint8_t value) {
         return;
     }
     m_blocks.set_meta(x, y, z, value);
-    m_is_mesh_dirty = true;
+    mark_mesh_dirty();
     m_is_modified = true;
 }
 
@@ -1149,7 +1378,7 @@ void Chunk::set_block(int x, int y, int z, Block_Types type) {
     else if (!was_air && now_air) --m_layer_block_count[y];
 
     m_blocks.set(x, y, z, type);
-    m_is_mesh_dirty = true;
+    mark_mesh_dirty();
     m_is_modified = true;
 }
 

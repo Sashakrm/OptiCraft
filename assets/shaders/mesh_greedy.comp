@@ -6,9 +6,13 @@
 //
 // Вход — упакованные каналы чанка (палитры + биты, см. pack_channel в Chunk.cpp). Выход — 8-байтные
 // записи квадов в пул (раскладка записи — в декодере terrain_gpu_vertex.glsl), по CAP записей на секцию.
+//
+// Ключ среза (как в CPU): id | meta<<8 | свет<<16 | AO<<24. AO — по два бита на угол грани (см. face_ao).
+// Квады с разным AO не сливаются: при слиянии AO постоянен вдоль направления слияния.
 layout(local_size_x = 64) in;
 
-// Заголовок чанка: 16 uvec4. [0].x = слот пула; [1 + ch] = (палитра, слова, биты, 0) канала ch.
+// Заголовок чанка: kGpuHeaderStride = 17 uvec4 (см. Chunk.h). [0].x = слот пула; [1 + ch] = (палитра,
+// слова, биты, 0) канала ch.
 layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
 layout(std430, binding = 1) readonly buffer Payload { uint payload[]; };
 layout(std430, binding = 2) writeonly buffer Quads { uvec2 quads[]; };
@@ -24,9 +28,10 @@ const uint FLAG_GREEDY = 1u;
 const uint FLAG_TRANSPARENT = 2u;
 const uint FLAG_USES_META = 4u;
 const uint FLAG_CULL_SAME = 8u;
-const uint KEY_PRESENT = 1u << 24;
-const uint KEY_ROTATE = 1u << 25;
+const uint FLAG_OCCLUDES = 16u;
 const uint ITEMS_PER_CHUNK = 576u;
+// Шаг заголовка на чанк: слот + 16 каналов. Должен совпадать с kGpuHeaderStride в Chunk.h.
+const uint HEADER_STRIDE = 17u;
 
 // Значение i канала ch чанка hb. Битность 0 — одно значение палитры; иначе номер бит [i*b, i*b+b),
 // возможно через границу двух слов.
@@ -42,9 +47,26 @@ uint read_channel(uint hb, uint ch, uint i) {
     return payload[c.x + (v & ((1u << bits) - 1u))];
 }
 
-// Блок в клетке (x,y,z) чанка или за его границей (ровно одна координата вне 0..31).
+// Индекс клетки кольца рёбер и углов (две или три координаты вне 0..31). Совпадает с chunk_ring_index
+// в Chunk.h: рёбра вдоль Y — 0..127, вдоль X — 128..255, вдоль Z — 256..383, углы — 384..391.
+int ring_index(int x, int y, int z) {
+    const bool ox = x < 0 || x >= 32;
+    const bool oy = y < 0 || y >= 32;
+    const bool oz = z < 0 || z >= 32;
+    const int px = x >= 32 ? 1 : 0;
+    const int py = y >= 32 ? 1 : 0;
+    const int pz = z >= 32 ? 1 : 0;
+    if (int(ox) + int(oy) + int(oz) == 3) return 384 + px + 2 * py + 4 * pz;
+    if (!oy) return (px + 2 * pz) * 32 + y;
+    if (!ox) return 128 + (py + 2 * pz) * 32 + x;
+    return 256 + (px + 2 * py) * 32 + z;
+}
+
+// Блок в клетке (x,y,z) чанка, за одной его границей (грани соседей) или в кольце рёбер и углов.
 // Грани соседей: ячейка (a,b) лежит в индексе b*32+a; -X/+X: a=z,b=y; -Y/+Y: a=x,b=z; -Z/+Z: a=x,b=y.
 uint block_at(uint hb, int x, int y, int z) {
+    const int out_axes = int(x < 0 || x >= 32) + int(y < 0 || y >= 32) + int(z < 0 || z >= 32);
+    if (out_axes >= 2) return read_channel(hb, 15u, uint(ring_index(x, y, z)));
     if (x < 0) return read_channel(hb, 3u, uint(y * 32 + z));
     if (x >= 32) return read_channel(hb, 4u, uint(y * 32 + z));
     if (y < 0) return read_channel(hb, 5u, uint(z * 32 + x));
@@ -64,6 +86,38 @@ uint light_at(uint hb, int x, int y, int z) {
     return read_channel(hb, 2u, uint((y * 32 + z) * 32 + x));
 }
 
+// Закрывает ли клетка свет AO: полный непрозрачный куб (см. Mesh_Tables::occludes в Chunk.cpp).
+bool occludes(uint hb, int x, int y, int z) {
+    return (block_flags[block_at(hb, x, y, z)] & FLAG_OCCLUDES) != 0u;
+}
+
+// Вершинный AO четырёх углов грани клетки cell (ось axis, знак sign), как face_ao в Chunk.cpp: угол
+// fu + 2*fv получает уровень 0..3 по двум боковым клеткам слоя перед гранью и по диагональной клетке.
+uint face_ao(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
+    ivec3 base = cell;
+    base[axis] += sign;
+    uint code = 0u;
+    for (int fv = 0; fv < 2; ++fv) {
+        for (int fu = 0; fu < 2; ++fu) {
+            const int du = fu != 0 ? 1 : -1;
+            const int dv = fv != 0 ? 1 : -1;
+            ivec3 p1 = base;
+            ivec3 p2 = base;
+            ivec3 p3 = base;
+            p1[ua] += du;
+            p2[va] += dv;
+            p3[ua] += du;
+            p3[va] += dv;
+            const bool s1 = occludes(hb, p1.x, p1.y, p1.z);
+            const bool s2 = occludes(hb, p2.x, p2.y, p2.z);
+            const bool s3 = occludes(hb, p3.x, p3.y, p3.z);
+            const uint level = (s1 && s2) ? 0u : 3u - (uint(s1) + uint(s2) + uint(s3));
+            code |= level << uint(2 * (fu + 2 * fv));
+        }
+    }
+    return code;
+}
+
 uint mask[1024];
 
 void main() {
@@ -71,7 +125,7 @@ void main() {
     const uint chunk = g / ITEMS_PER_CHUNK;
     if (chunk >= uint(u_chunk_count)) return;
     const uint item = g - chunk * ITEMS_PER_CHUNK;
-    const uint hb = chunk * 16u;
+    const uint hb = chunk * HEADER_STRIDE;
     const uint slot = headers[hb].x;
 
     const uint sec = item / 144u;
@@ -98,7 +152,8 @@ void main() {
     const int v_count = (va == 1) ? 8 : 32;
     const uint face = uint(axis) * 2u + (pos ? 0u : 1u);
 
-    // Маска ключей среза (как в CPU): id | meta<<8 | свет<<16 | PRESENT | ROTATE.
+    // Маска ключей среза (как в CPU): id | meta<<8 | свет<<16 | AO<<24. Ключ 0 — граней нет
+    // (у любого жадно-мешаемого блока id не равен нулю).
     bool any_key = false;
     for (int v = 0; v < v_count; ++v) {
         for (int u = 0; u < 32; ++u) {
@@ -119,11 +174,10 @@ void main() {
                     if ((fc & FLAG_USES_META) != 0u) {
                         meta = read_channel(hb, 1u, uint((c.y * 32 + c.z) * 32 + c.x));
                     }
-                    const uint lut = rect_lut[(cur * 6u + face) * 256u + meta];
                     uint fl = light_at(hb, nc.x, nc.y, nc.z);
                     if (cull_same) fl = light_coarse[fl];
-                    key = KEY_PRESENT | ((lut & 0x8000u) != 0u ? KEY_ROTATE : 0u) |
-                          cur | (meta << 8u) | (fl << 16u);
+                    const uint ao = face_ao(hb, c, axis, dir, ua, va);
+                    key = cur | (meta << 8u) | (fl << 16u) | (ao << 24u);
                     any_key = true;
                 }
             }
@@ -141,9 +195,14 @@ void main() {
                 ++u;
                 continue;
             }
+            const uint cur = key & 0xFFu;
+            const uint meta = (key >> 8u) & 0xFFu;
+            const uint lut = rect_lut[(cur * 6u + face) * 256u + meta];
+            // Повёрнутая текстура (бревно на боку) не сливается: квад 1x1.
+            const bool rotate = (lut & 0x8000u) != 0u;
             int w = 1;
             int h = 1;
-            if ((key & KEY_ROTATE) == 0u) {
+            if (!rotate) {
                 while (u + w < 32 && mask[v * 32 + u + w] == key) ++w;
                 bool grow = true;
                 while (v + h < v_count && grow) {
@@ -166,15 +225,15 @@ void main() {
             o[axis] = s;
             o[ua] = u;
             o[va] = v_base + v;
-            const uint cur = key & 0xFFu;
-            const uint meta = (key >> 8u) & 0xFFu;
-            const uint rect = rect_lut[(cur * 6u + face) * 256u + meta] & 0x7FFFu;
+            const uint rect = lut & 0x7FFFu;
             const uint light = (key >> 16u) & 0xFFu;
+            const uint ao = (key >> 24u) & 0xFFu;
             const uint w0 = uint(o.x) | (uint(o.y) << 5u) | (uint(o.z) << 10u) |
                             (uint(axis) << 15u) | ((pos ? 1u : 0u) << 17u) |
                             (uint(w - 1) << 18u) | (uint(h - 1) << 23u) |
-                            ((key & KEY_ROTATE) != 0u ? (1u << 28u) : 0u);
-            const uint w1 = rect | (light << 16u);
+                            (rotate ? (1u << 28u) : 0u);
+            // w1: индекс прямоугольника (15 бит), свет (8 бит), AO (8 бит).
+            const uint w1 = rect | (light << 16u) | (ao << 24u);
 
             const uint gsec = slot * 4u + sec;
             const uint idx = atomicAdd(counts[gsec], 1u);

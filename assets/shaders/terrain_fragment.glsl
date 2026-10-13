@@ -5,6 +5,7 @@ in vec2 Local;
 in float NormalY;
 in float BlockLight;
 flat in vec4 Rect;
+in float AO;
 
 uniform sampler2D textureAtlas;
 // Множитель дня/ночи (см. Day_Night_Cycle::get_ambient_intensity) — 1.0 днём, тусклее ночью.
@@ -34,5 +35,7 @@ void main() {
     // Не допускаем абсолютно чёрных поверхностей во время потокового обновления света.
     float scene_light = max(max(sky_scene_light, block_scene_light), 0.32);
 
-    FragColor = vec4(tex_color.rgb * light_intensity * scene_light, tex_color.a);
+    // Вершинный AO (интерполирован по квадру): закрытые углы темнее, 0 -> 45 %, 3 -> полная яркость.
+    float ao_shade = mix(0.45, 1.0, AO / 3.0);
+    FragColor = vec4(tex_color.rgb * light_intensity * scene_light * ao_shade, tex_color.a);
 }

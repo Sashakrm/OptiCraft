@@ -150,7 +150,7 @@ private:
     unsigned int m_gpu_lut_ssbo = 0;      // rect_lut[(id*6 + грань)*256 + метаданные]
     unsigned int m_gpu_tables_ssbo = 0;   // флаги блоков (256) и огрубление света (256)
     unsigned int m_gpu_rects_ssbo = 0;    // UV-прямоугольники спрайтов (vec4)
-    unsigned int m_gpu_headers_ssbo = 0;  // батч: по 16 uvec4 на чанк
+    unsigned int m_gpu_headers_ssbo = 0;  // батч: по kGpuHeaderStride uvec4 на чанк
     unsigned int m_gpu_payload_ssbo = 0;  // батч: палитры и упакованные биты
     size_t m_gpu_payload_capacity = 0;    // в байтах
     unsigned int m_gpu_quads_ssbo = 0;    // пул: квады [слот*4 + секция][kGpuQuadCap]

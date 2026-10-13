@@ -380,10 +380,9 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                 continue;
             }
 
-            // Резолвит блок за пределами чанка из снимков соседей, сделанных на главном
-            // потоке (см. enqueue_mesh_rebuild). Ровно один из local_x/y/z всегда выходит
-            // за диапазон за раз — build_chunk_mesh никогда не спрашивает про диагональных
-            // соседей, только про 6 граней, так что достаточно ровно этих 6 снимков.
+            // Блок за пределами чанка берётся из снимков, сделанных на главном потоке (см. enqueue_mesh_rebuild):
+            // клетку, вышедшую за одну ось, отдаёт грань соседа, а клетку у ребра или угла — кольцо. AO читает
+            // диагональных соседей, поэтому шести граней для меша уже недостаточно.
             const Mesh_Job& snapshot = mesh_job;
             Chunk_Neighbor_Lookup lookup = [&snapshot, generator](int wx, int wy, int wz) -> Block_Types {
                 const int local_x = wx - snapshot.position.x * Config::chunk_size;
@@ -398,7 +397,19 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                 else if (local_z < 0) neighbor_index = 4;
                 else if (local_z >= Config::chunk_size) neighbor_index = 5;
 
-                if (neighbor_index >= 0 && snapshot.neighbor_blocks[neighbor_index]) {
+                // Рёбра и углы (две или три координаты вне чанка) берутся только из кольца снимка. Грань
+                // соседа для них не подходит: клетка лежит в диагональном чанке, а грань отдала бы
+                // чужую клетку (вторая координата обёрнута по модулю чанка). Если кольца нет (диагональный
+                // чанк не был загружен при постановке), идём сразу к фолбэку генератора.
+                const int out_axes = int(local_x < 0 || local_x >= Config::chunk_size) +
+                                     int(local_y < 0 || local_y >= Config::chunk_height) +
+                                     int(local_z < 0 || local_z >= Config::chunk_size);
+                if (out_axes >= 2) {
+                    const int ring = chunk_ring_index(local_x, local_y, local_z);
+                    if (ring >= 0 && snapshot.ring_valid[ring]) {
+                        return static_cast<Block_Types>(snapshot.ring_blocks[ring]);
+                    }
+                } else if (neighbor_index >= 0 && snapshot.neighbor_blocks[neighbor_index]) {
                     const int nlx = ((local_x % Config::chunk_size) + Config::chunk_size) % Config::chunk_size;
                     const int nly = ((local_y % Config::chunk_height) + Config::chunk_height) % Config::chunk_height;
                     const int nlz = ((local_z % Config::chunk_size) + Config::chunk_size) % Config::chunk_size;
@@ -503,7 +514,8 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             }
 
             std::lock_guard<std::mutex> lock(m_completed_mutex);
-            m_completed_mesh_jobs.push({mesh_job.position, mesh_job.generation_id, std::move(meshes)});
+            m_completed_mesh_jobs.push({mesh_job.position, mesh_job.generation_id, std::move(meshes),
+                                        mesh_job.dirty_epoch, mesh_job.instance_id});
         }
     }
 }
@@ -527,13 +539,13 @@ void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
         save_chunk_to_disk(*existing);
         m_unloaded_since_last_query.push_back({cx, cy, cz});
         m_chunks.erase(cx, cy, cz);
+        ++m_chunk_set_epoch;
     }
     m_requested_chunks.erase(cx, cy, cz);
     m_cpu_only_positions.erase(cx, cy, cz);
-    // Не обязательно для корректности (collect_finished_mesh_jobs и так безопасно
-    // отбрасывает результат для выгруженного чанка), но не оставляем мусор в множествах —
-    // иначе если на этой же позиции скоро появится новый чанк, enqueue_mesh_rebuild
-    // ошибочно решит, что для него уже что-то летит, и молча пропустит постановку задачи.
+    // Результат задачи, снятой для этого объекта, collect_finished_mesh_jobs отбросит по instance_id.
+    // Чистка здесь нужна для состояния позиции: иначе, если на ней скоро появится новый чанк,
+    // enqueue_mesh_rebuild решит, что для него уже что-то летит, и молча пропустит постановку задачи.
     m_pending_mesh_rebuilds.erase(cx, cy, cz);
     m_mesh_rebuild_requeue.erase(cx, cy, cz);
 }
@@ -586,6 +598,9 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
     job.own_blocks = target->get_blocks();
     job.own_light = target->get_light_grid();
     job.generation_id = m_generation_id;
+    // Счётчик пометок снимаем вместе со снимком данных: правка после этого момента его изменит.
+    job.dirty_epoch = target->get_dirty_epoch();
+    job.instance_id = target->get_instance_id();
     job.clip = current_capture_clip();
     // Во время изометрического снимка меш строится с only_positive_faces, а GPU-путь этот флаг не
     // учитывает, поэтому такие задания остаются на CPU.
@@ -642,6 +657,28 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
             }
             job.neighbor_blocks[i] = std::move(block_face);
             job.neighbor_light[i] = std::move(light_face);
+        }
+    }
+
+    // Рёбра и углы (соседи по диагонали) — для AO. Клетка берётся из загруженного соседа; если его нет,
+    // она помечается неизвестной и достаётся генератору в воркере.
+    for (int idx = 0; idx < Chunk_Ring::kSize; ++idx) {
+        int x = 0, y = 0, z = 0;
+        chunk_ring_coords(idx, x, y, z);
+        const int ox = x < 0 ? -1 : (x >= Config::chunk_size ? 1 : 0);
+        const int oy = y < 0 ? -1 : (y >= Config::chunk_height ? 1 : 0);
+        const int oz = z < 0 ? -1 : (z >= Config::chunk_size ? 1 : 0);
+        const glm::ivec3 npos = position + glm::ivec3(ox, oy, oz);
+        if (clip.active && (npos.x < clip.min_cx || npos.x > clip.max_cx ||
+                            npos.z < clip.min_cz || npos.z > clip.max_cz)) {
+            job.ring_blocks[idx] = 0;   // за границей захвата — воздух, как и в грани
+            job.ring_valid[idx] = true;
+            continue;
+        }
+        if (const Chunk* neighbor = get_chunk(npos.x, npos.y, npos.z)) {
+            job.ring_blocks[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(
+                x - ox * Config::chunk_size, y - oy * Config::chunk_height, z - oz * Config::chunk_size)));
+            job.ring_valid[idx] = true;
         }
     }
 
@@ -789,6 +826,7 @@ void Chunk_Manager::collect_finished_chunks() {
         Chunk* new_chunk = m_chunks.insert_or_assign(result.position.x, result.position.y,
                                                        result.position.z, std::move(result.chunk));
         any_chunk_inserted = true;
+        ++m_chunk_set_epoch;
         m_columns_pending_sky_recompute.insert(
             (static_cast<uint64_t>(static_cast<uint32_t>(result.position.x)) << 32) |
             static_cast<uint32_t>(result.position.z));
@@ -817,20 +855,17 @@ void Chunk_Manager::collect_finished_chunks() {
         // the async job snapshot include currently loaded neighbors.
         new_chunk->mark_mesh_dirty();
 
-        const glm::ivec3 neighbors[] = {
-            {result.position.x - 1, result.position.y, result.position.z},
-            {result.position.x + 1, result.position.y, result.position.z},
-            {result.position.x, result.position.y, result.position.z - 1},
-            {result.position.x, result.position.y, result.position.z + 1},
-            // Вертикальные соседи по стеку чанков — без этого швы между чанками по Y
-            // (например, потолок пещеры на границе секции) не пересчитаются у обеих сторон.
-            {result.position.x, result.position.y - 1, result.position.z},
-            {result.position.x, result.position.y + 1, result.position.z},
-        };
-
-        for (const auto& neighbor_pos : neighbors) {
-            if (Chunk* neighbor = get_chunk(neighbor_pos.x, neighbor_pos.y, neighbor_pos.z)) {
-                neighbor->mark_mesh_dirty();
+        // Все 26 соседей: AO читает клетки по рёбрам и углам, а также вертикальные швы по Y
+        // (потолок пещеры на границе секции), поэтому помечаем весь куб окрестности.
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if ((dx | dy | dz) == 0) continue;
+                    if (Chunk* neighbor = get_chunk(result.position.x + dx, result.position.y + dy,
+                                                    result.position.z + dz)) {
+                        neighbor->mark_mesh_dirty();
+                    }
+                }
             }
         }
     }
@@ -904,30 +939,36 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
         completed.pop();
         ++processed_meshes;
 
-        m_pending_mesh_rebuilds.erase(result.position.x, result.position.y, result.position.z);
-
-        const bool should_requeue =
-            m_mesh_rebuild_requeue.erase(result.position.x, result.position.y, result.position.z);
-
         // Мир пересоздан (F6/новый seed) уже после того, как эта задача была поставлена —
-        // результат относится к чанкам, которых больше нет. Тихо отбрасываем.
+        // результат относится к чанкам, которых больше нет. Тихо отбрасываем. Состояние позиции
+        // (pending/requeue) при этом не трогаем: оно уже может принадлежать новой задаче.
         if (result.generation_id != m_generation_id) {
             continue;
         }
 
-        // Чанк успели выгрузить (игрок ушёл далеко), пока задача летала в воркере —
-        // применять результат некуда и не к чему, безопасно отбрасываем.
+        // Чанк успели выгрузить (игрок ушёл далеко), пока задача летала в воркере — применять
+        // результат некуда. Хуже того: на той же позиции мог уже появиться ДРУГОЙ объект (выгрузили
+        // и загрузили заново). Тогда результат устарел, а pending/requeue позиции относятся к новой
+        // задаче. Поэтому сверяем объект и только при совпадении трогаем состояние позиции.
         Chunk* chunk = get_chunk(result.position.x, result.position.y, result.position.z);
-        if (!chunk) {
+        if (!chunk || chunk->get_instance_id() != result.instance_id) {
             continue;
         }
 
+        m_pending_mesh_rebuilds.erase(result.position.x, result.position.y, result.position.z);
+        const bool should_requeue =
+            m_mesh_rebuild_requeue.erase(result.position.x, result.position.y, result.position.z);
+
+        // Пометка грязности пришла после снимка этой задачи (например, свет соседа пересчитали уже
+        // после постановки): снимок её не учитывает. apply_mesh снимает флаг, поэтому без сравнения
+        // счётчика такая правка терялась бы, и меш оставался устаревшим.
+        const bool dirtied_after_snapshot = chunk->get_dirty_epoch() != result.dirty_epoch;
         chunk->apply_mesh(std::move(result.meshes));
 
         // Блок поменялся ещё раз, пока эта пересборка считалась в фоне — снимок, с которым
         // она стартовала, уже устарел. Ставим ещё одну задачу со свежими данными, чтобы
         // не потерять последнюю правку молча.
-        if (should_requeue) {
+        if (should_requeue || dirtied_after_snapshot) {
             enqueue_mesh_rebuild(result.position.x, result.position.y, result.position.z);
         }
     }
@@ -978,6 +1019,7 @@ void Chunk_Manager::clear() {
     // Индекс region-файла живёт в памяти между записями — здесь он уезжает на диск.
     m_world_file.flush_chunks(m_generation_folder);
     m_chunks.clear();
+    ++m_chunk_set_epoch;
     m_requested_chunks.clear();
     m_pending_mesh_rebuilds.clear();
     m_mesh_rebuild_requeue.clear();
@@ -1087,26 +1129,19 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
     sync_block_entity(wx, wy, wz, old_type, type);
     enqueue_mesh_rebuild(cx, cy, cz);
 
-    const bool on_x_edge = lx == 0 || lx == Config::chunk_size - 1;
-    const bool on_y_edge = ly == 0 || ly == Config::chunk_height - 1;
-    const bool on_z_edge = lz == 0 || lz == Config::chunk_size - 1;
-
-    if (on_x_edge) {
-        const int nx = cx + (lx == 0 ? -1 : 1);
-        if (get_chunk(nx, cy, cz)) {
-            enqueue_mesh_rebuild(nx, cy, cz);
-        }
-    }
-    if (on_y_edge) {
-        const int ny = cy + (ly == 0 ? -1 : 1);
-        if (get_chunk(cx, ny, cz)) {
-            enqueue_mesh_rebuild(cx, ny, cz);
-        }
-    }
-    if (on_z_edge) {
-        const int nz = cz + (lz == 0 ? -1 : 1);
-        if (get_chunk(cx, cy, nz)) {
-            enqueue_mesh_rebuild(cx, cy, nz);
+    // Правленая клетка видна мешам тех соседей, в чьей 3x3x3 окрестности она лежит: для граней —
+    // шесть соседей, для AO — ещё рёбра и углы. Пересобираем каждого загруженного из них.
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if ((dx | dy | dz) == 0) continue;
+                if ((dx < 0 && lx != 0) || (dx > 0 && lx != Config::chunk_size - 1)) continue;
+                if ((dy < 0 && ly != 0) || (dy > 0 && ly != Config::chunk_height - 1)) continue;
+                if ((dz < 0 && lz != 0) || (dz > 0 && lz != Config::chunk_size - 1)) continue;
+                if (get_chunk(cx + dx, cy + dy, cz + dz)) {
+                    enqueue_mesh_rebuild(cx + dx, cy + dy, cz + dz);
+                }
+            }
         }
     }
 
@@ -1238,6 +1273,9 @@ void Chunk_Manager::recompute_sky_lighting(
         return;
     }
 
+    // Чанки, у которых свет неба обнулили (их соседи тоже должны перестроить грани на стыке).
+    std::unordered_set<glm::ivec3, Chunk_Key_Hash> cleared_chunks;
+
     for (const uint64_t packed_cc : changed_chunk_columns) {
         const int cx = static_cast<int>(static_cast<int32_t>(packed_cc >> 32));
         const int cz = static_cast<int>(static_cast<int32_t>(packed_cc & 0xFFFFFFFFu));
@@ -1249,6 +1287,7 @@ void Chunk_Manager::recompute_sky_lighting(
                     continue;
                 }
                 chunk->clear_sky_light();
+                cleared_chunks.insert({cx, cy, cz});
                 // Очистка света тоже меняет данные, даже если последующий
                 // вертикальный проход не установит ни одного нового значения.
                 // Иначе старый меш продолжает содержать прежнюю яркость.
@@ -1319,6 +1358,8 @@ void Chunk_Manager::recompute_sky_lighting(
                 chunk->compact_light();
             }
         }
+        mark_light_neighbors_dirty(cleared_chunks);
+        mark_light_neighbors_dirty(touched_chunks);
         return;
     }
 
@@ -1404,6 +1445,8 @@ void Chunk_Manager::recompute_sky_lighting(
             chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
         }
     }
+    mark_light_neighbors_dirty(cleared_chunks);
+    mark_light_neighbors_dirty(touched_chunks);
 }
 
 void Chunk_Manager::recompute_lighting(std::optional<glm::ivec3> extra_clear_position) {
@@ -1528,7 +1571,310 @@ void Chunk_Manager::recompute_lighting(std::optional<glm::ivec3> extra_clear_pos
             chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
         }
     }
+    mark_light_neighbors_dirty(affected_chunks);
+    mark_light_neighbors_dirty(touched_chunks);
 }
+
+void Chunk_Manager::mark_light_neighbors_dirty(
+    const std::unordered_set<glm::ivec3, Chunk_Key_Hash>& changed_chunks) {
+    // Грань соседа смотрит в клетку этого чанка и берёт её свет. Если свет здесь сменился, у соседа
+    // граница держала бы старое значение (устаревший свет на стыке), поэтому шесть соседей — грязные.
+    static constexpr glm::ivec3 kFaceOffsets[6] = {
+        {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+    for (const auto& pos : changed_chunks) {
+        for (const auto& offset : kFaceOffsets) {
+            if (Chunk* neighbor = get_chunk(pos.x + offset.x, pos.y + offset.y, pos.z + offset.z)) {
+                neighbor->mark_mesh_dirty();
+            }
+        }
+    }
+}
+
+namespace {
+// Отсечение укрытий по связности граничных позиций секций (см. Section_Connectivity). Узел обхода — компонента
+// прозрачных клеток секции, касающаяся её границы (у Open-секции одна на всю границу). Переход в соседнюю секцию
+// идёт только через совпадающие позиции общей грани, поэтому полости, закрытые камнем, не склеиваются с воздухом
+// камеры. Секция видна, если в неё вошли или к ней примыкает достижимый воздух: её грань, обращённая к воздуху,
+// рисуется, даже если сама секция непроходима. Выход из секции ограничен монотонным правилом (см. leave_ok): путь
+// от камеры не возвращается к её плоскости по оси, как и прямой луч.
+// Грани: 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z; противоположная — f ^ 1.
+// Обход идёт по сетке чанков загруженной области с рамкой в один чанк: соседи находятся сдвигом индекса, без
+// делений и проверок границ. Рамка и чанки вне области не разворачиваются, но касание к ним учитывается.
+constexpr int kReachSections = Config::chunk_section_count;
+// Потолок размера сетки в чанках (с рамкой): при большей загруженной области отсечение выключается.
+constexpr int64_t kReachMaxChunks = int64_t{1} << 16;
+
+// Связность секции вне загруженной области: через неё не проходят (Closed), но её грань видна от воздуха.
+const Chunk_Meshes& outside_meshes() {
+    static const Chunk_Meshes meshes = [] {
+        Chunk_Meshes m;
+        for (Chunk_Section_Range& range : m.sections) range.conn.kind = Section_Connectivity::Kind::Closed;
+        return m;
+    }();
+    return meshes;
+}
+
+// Состояние обхода. Живёт между кадрами: поколения (gen) вместо очистки массивов на каждый кадр. Вместе с ним
+// хранится ключ кэша: результат зависит только от секции камеры и состояния мира (набор чанков, версии мешей).
+struct Reach_Scratch {
+    struct Node {
+        int sec;
+        int comp;
+    };
+    uint32_t gen = 0;
+    glm::ivec3 origin{0};                 // минимальный чанк области
+    int dim_x = 0, dim_y = 0, dim_z = 0;  // размер сетки с рамкой, в чанках
+    // По чанкам сетки: nullptr — чанка нет внутри области (открыто), outside_meshes() — рамка.
+    std::vector<const Chunk_Meshes*> chunks;
+    std::vector<uint32_t> reached_gen;  // == gen: секция касается достижимого воздуха или посещена
+    std::vector<uint32_t> visit_gen;    // == gen: маска visit_bits секции актуальна
+    std::vector<uint64_t> visit_bits;   // 256 бит на секцию: посещённые компоненты
+    std::vector<Node> queue;
+    // Ключ кэша и его результат (enabled: отсечение применяется).
+    bool key_valid = false;
+    bool key_enabled = false;
+    const void* key_owner = nullptr;
+    uint64_t key_set_epoch = 0;
+    uint64_t key_conn_epoch = 0;
+    glm::ivec3 key_camera_chunk{0};
+    int key_camera_section = 0;
+
+    int chunk_index(int x, int y, int z) const {
+        return ((y - origin.y + 1) * dim_z + (z - origin.z + 1)) * dim_x + (x - origin.x + 1);
+    }
+};
+
+// Начало кадра: размеры массивов и новое поколение; очередь пуста.
+void begin_frame(Reach_Scratch& s, size_t sections) {
+    if (s.reached_gen.size() < sections) {
+        s.reached_gen.assign(sections, 0);
+        s.visit_gen.assign(sections, 0);
+        s.visit_bits.assign(sections * 4, 0);
+    }
+    if (++s.gen == 0) {  // переполнение поколения (через 2^32 кадров): сбрасываем метки
+        std::fill(s.reached_gen.begin(), s.reached_gen.end(), uint32_t{0});
+        std::fill(s.visit_gen.begin(), s.visit_gen.end(), uint32_t{0});
+        s.gen = 1;
+    }
+    s.queue.clear();
+}
+
+// Отмечает компоненту comp секции посещённой; false — она уже посещена в этом кадре.
+bool visit(Reach_Scratch& s, int sec, int comp) {
+    const size_t i = static_cast<size_t>(sec);
+    if (s.visit_gen[i] != s.gen) {
+        s.visit_gen[i] = s.gen;
+        std::fill_n(s.visit_bits.begin() + static_cast<std::ptrdiff_t>(i * 4), 4, uint64_t{0});
+    }
+    uint64_t& word = s.visit_bits[i * 4 + (static_cast<size_t>(comp) >> 6)];
+    const uint64_t bit = uint64_t{1} << (comp & 63);
+    if (word & bit) return false;
+    word |= bit;
+    return true;
+}
+
+// Связность секции: нет чанка внутри области — открыта; рамка — закрыта (см. outside_meshes).
+const Section_Connectivity& connectivity_of(const Chunk_Meshes* chunk, int section) {
+    static const Section_Connectivity open{};
+    return chunk ? chunk->sections[section].conn : open;
+}
+
+// Есть ли общий бит у двух масок граней (одинаковая локальная индексация позиций соседних граней).
+bool masks_overlap(const uint64_t* a, const uint64_t* b, int words) {
+    for (int w = 0; w < words; ++w) {
+        if (a[w] & b[w]) return true;
+    }
+    return false;
+}
+
+// Маска позиций компоненты comp на грани f; nullptr — компонента грани не касается.
+const uint64_t* face_mask(const Section_Connectivity& k, int f, int comp) {
+    for (uint16_t i = k.face_begin[f]; i < k.face_begin[f + 1]; ++i) {
+        if (k.face_comps[i].comp == comp) return &k.masks[k.face_comps[i].mask];
+    }
+    return nullptr;
+}
+
+// Полный пересчёт достижимости от секции камеры (camera_chunk, camera_section) в s. false — отсечение не
+// применяется (камера вне области, в запертой секции или область слишком большая): рисуется всё, как раньше.
+bool compute_section_reach(const std::vector<std::pair<glm::ivec3, Chunk*>>& loaded,
+                           const glm::ivec3& camera_chunk, int camera_section, Reach_Scratch& s) {
+    if (loaded.empty()) return false;
+    glm::ivec3 lo = loaded.front().first;
+    glm::ivec3 hi = lo;
+    for (const auto& entry : loaded) {
+        lo = glm::min(lo, entry.first);
+        hi = glm::max(hi, entry.first);
+    }
+    const glm::ivec3 box = hi - lo + 1;
+    const int64_t chunk_count = int64_t{box.x + 2} * (box.y + 2) * (box.z + 2);
+    if (chunk_count > kReachMaxChunks) return false;
+
+    // Камера вне загруженной области: отсечение не работает.
+    const glm::ivec3 rel = camera_chunk - lo;
+    if (rel.x < 0 || rel.y < 0 || rel.z < 0 || rel.x >= box.x || rel.y >= box.y || rel.z >= box.z) return false;
+
+    s.origin = lo;
+    s.dim_x = box.x + 2;
+    s.dim_y = box.y + 2;
+    s.dim_z = box.z + 2;
+    begin_frame(s, static_cast<size_t>(chunk_count) * kReachSections);
+
+    // Рамка закрыта; внутри области чанк по умолчанию отсутствует (открыто), затем — загруженные чанки.
+    s.chunks.assign(static_cast<size_t>(chunk_count), &outside_meshes());
+    for (int y = lo.y; y <= hi.y; ++y)
+        for (int z = lo.z; z <= hi.z; ++z)
+            for (int x = lo.x; x <= hi.x; ++x)
+                s.chunks[s.chunk_index(x, y, z)] = nullptr;
+    for (const auto& entry : loaded) {
+        const glm::ivec3& k = entry.first;
+        s.chunks[s.chunk_index(k.x, k.y, k.z)] = &entry.second->get_meshes();
+    }
+    const int camera_index = s.chunk_index(camera_chunk.x, camera_chunk.y, camera_chunk.z);
+    // Камера в секции без проходимых граничных клеток: с неё не видно, что за секцией, отсечение выключено.
+    if (connectivity_of(s.chunks[camera_index], camera_section).kind == Section_Connectivity::Kind::Closed) {
+        return false;
+    }
+
+    // Сдвиги индекса секции к соседям: чанк ±X — на 4, ±Z — на строку сетки, ±Y — на слой; секции внутри чанка
+    // соседствуют по Y на 1, а переход на соседний чанк по Y — на начало его секции 0 (или 3).
+    const int stride_x = kReachSections;
+    const int stride_z = kReachSections * s.dim_x;
+    const int stride_y = kReachSections * s.dim_x * s.dim_z;
+    const int top = kReachSections - 1;
+    const auto neighbor = [&](int sec, int f) -> int {
+        const int sub = sec % kReachSections;
+        switch (f) {
+            case 0: return sec + stride_x;
+            case 1: return sec - stride_x;
+            case 2: return sub < top ? sec + 1 : sec + stride_y - top;
+            case 3: return sub > 0 ? sec - 1 : sec - stride_y + top;
+            case 4: return sec + stride_z;
+            default: return sec - stride_z;  // 5
+        }
+    };
+    const auto connectivity = [&](int sec) -> const Section_Connectivity& {
+        return connectivity_of(s.chunks[sec / kReachSections], sec % kReachSections);
+    };
+    const auto touch = [&](int sec) { s.reached_gen[sec] = s.gen; };
+    // Узел (секция, компонента) обрабатывается один раз; вход в секцию делает её видимой.
+    const auto push = [&](int sec, int comp) {
+        if (!visit(s, sec, comp)) return;
+        s.reached_gen[sec] = s.gen;
+        s.queue.push_back({sec, comp});
+    };
+    // Вход через всю грань g: у нас все позиции этой грани проходимы, поэтому входим в каждую компоненту соседа,
+    // которая касается грани g; воздух соседа (Open) — одним входом.
+    const auto enter_all = [&](int sec, const Section_Connectivity& k, int g) {
+        if (k.kind == Section_Connectivity::Kind::Open) {
+            push(sec, 0);
+        } else if (k.kind == Section_Connectivity::Kind::Mixed) {
+            for (uint16_t i = k.face_begin[g]; i < k.face_begin[g + 1]; ++i) push(sec, k.face_comps[i].comp);
+        }
+    };
+
+    // Монотонность: прямой луч из глаза движется по каждой оси в одну сторону, поэтому путь, по которому видно,
+    // не возвращается к плоскости камеры. Выход из секции через грань f разрешён, если по её оси секция не лежит
+    // с той стороны от камеры, куда ведёт грань (смещение 0 — по обе стороны). Смещения — по индексам секций.
+    const int dims_xz = s.dim_x * s.dim_z;
+    const int cam_px = camera_index % s.dim_x;
+    const int cam_pz = (camera_index / s.dim_x) % s.dim_z;
+    const int cam_ys = (camera_index / dims_xz) * kReachSections + camera_section;
+    const auto leave_ok = [&](int sec, int f) -> bool {
+        const int ci = sec / kReachSections;
+        const int sub = sec % kReachSections;
+        int off = 0;
+        switch (f >> 1) {  // 0: ось X (грани 0, 1), 1: Y (грани 2, 3), 2: Z (грани 4, 5)
+            case 0: off = ci % s.dim_x - cam_px; break;
+            case 1: off = (ci / dims_xz) * kReachSections + sub - cam_ys; break;
+            default: off = (ci / s.dim_x) % s.dim_z - cam_pz; break;
+        }
+        const int dir = (f & 1) ? -1 : +1;  // чётные грани ведут в +, нечётные — в -
+        const int side = (off > 0) - (off < 0);
+        return side == 0 || side == dir;
+    };
+
+    // Старт: камера внутри своей секции. Open — вся секция; Mixed — все её компоненты, касающиеся границы
+    // (клетки камеры по компонентам не различаем: это верхняя граница видимости).
+    const int start = camera_index * kReachSections + camera_section;
+    touch(start);
+    const Section_Connectivity& cam = connectivity(start);
+    if (cam.kind == Section_Connectivity::Kind::Open) {
+        push(start, 0);
+    } else {
+        for (int comp = 0; comp < cam.comp_count; ++comp) push(start, comp);
+    }
+
+    for (size_t head = 0; head < s.queue.size(); ++head) {
+        const Reach_Scratch::Node node = s.queue[head];
+        const Section_Connectivity& c = connectivity(node.sec);
+        if (c.kind == Section_Connectivity::Kind::Open) {
+            for (int f = 0; f < 6; ++f) {
+                if (!leave_ok(node.sec, f)) continue;
+                const int n = neighbor(node.sec, f);
+                touch(n);
+                enter_all(n, connectivity(n), f ^ 1);
+            }
+        } else {
+            // Компонента касается граней, на которых есть её позиции. За каждой такой гранью — сосед: касание
+            // к нему есть всегда, а вход — в компоненты соседа, у которых есть позиция на той же локальной
+            // позиции грани (пересечение масок).
+            for (int f = 0; f < 6; ++f) {
+                const uint64_t* mine = face_mask(c, f, node.comp);
+                if (!mine || !leave_ok(node.sec, f)) continue;
+                const int n = neighbor(node.sec, f);
+                touch(n);
+                const Section_Connectivity& nc = connectivity(n);
+                if (nc.kind == Section_Connectivity::Kind::Open) {
+                    push(n, 0);
+                } else if (nc.kind == Section_Connectivity::Kind::Mixed) {
+                    for (uint16_t i = nc.face_begin[f ^ 1]; i < nc.face_begin[(f ^ 1) + 1]; ++i) {
+                        const Section_Connectivity::Face_Comp& e = nc.face_comps[i];
+                        if (masks_overlap(mine, &nc.masks[e.mask], Section_Boundary::kFaceWords[f])) {
+                            push(n, e.comp);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// Достижимость от камеры. Результат кэшируется: пока секция камеры, набор чанков и связность не менялись, обход
+// не пересчитывается (в том числе при движении внутри секции и при взгляде по сторонам).
+bool build_section_reach(const std::vector<std::pair<glm::ivec3, Chunk*>>& loaded,
+                         const glm::vec3& camera_position, uint64_t set_epoch, const void* owner,
+                         Reach_Scratch& s) {
+    const glm::ivec3 camera_chunk(
+        static_cast<int>(std::floor(camera_position.x / Config::chunk_size)),
+        static_cast<int>(std::floor(camera_position.y / Config::chunk_height)),
+        static_cast<int>(std::floor(camera_position.z / Config::chunk_size)));
+    const int local_y = static_cast<int>(std::floor(camera_position.y)) - camera_chunk.y * Config::chunk_height;
+    const int camera_section = std::clamp(local_y / Config::chunk_section_height, 0, kReachSections - 1);
+
+    // Эпоха связности читается до пересчёта: если связность поменяется во время него, ключ устареет.
+    const uint64_t conn_epoch = current_connectivity_epoch();
+    if (s.key_valid && s.key_owner == owner && s.key_set_epoch == set_epoch && s.key_conn_epoch == conn_epoch &&
+        s.key_camera_chunk == camera_chunk && s.key_camera_section == camera_section) {
+        return s.key_enabled;
+    }
+    s.key_valid = true;
+    s.key_owner = owner;
+    s.key_set_epoch = set_epoch;
+    s.key_conn_epoch = conn_epoch;
+    s.key_camera_chunk = camera_chunk;
+    s.key_camera_section = camera_section;
+    s.key_enabled = compute_section_reach(loaded, camera_chunk, camera_section, s);
+    return s.key_enabled;
+}
+
+// Секция видна от камеры: касается достижимого воздуха или посещена в этом кадре.
+bool is_reached(const Reach_Scratch& s, const glm::ivec3& key, int section) {
+    const size_t sec = static_cast<size_t>(s.chunk_index(key.x, key.y, key.z)) * kReachSections + section;
+    return s.reached_gen[sec] == s.gen;
+}
+} // namespace
 
 std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     const Frustum* frustum,
@@ -1537,11 +1883,39 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
 ) const {
     std::vector<Renderable_Chunk> result;
 
+    // Все загруженные чанки, в том числе пустые: через пустой воздух обзор идёт дальше, и без них
+    // обход секций оборвался бы.
+    std::vector<std::pair<glm::ivec3, Chunk*>> loaded;
+    loaded.reserve(m_chunks.size());
     m_chunks.for_each([&](const glm::ivec3& key, const std::unique_ptr<Chunk>& chunk) {
-        if (chunk->is_empty()) return;
+        loaded.emplace_back(key, chunk.get());
+    });
+    // Глаз в непроходимой клетке (камень: /tp в стену, застревание): обзора из воздуха нет, отсечение здесь не
+    // применяется, и кадр рисуется как без него. Иначе кадр менялся бы: дальние поверхности, видные сквозь камень,
+    // пропадали бы, а это уже видимое на экране.
+    bool eye_in_solid = false;
+    if (camera_position) {
+        const int wx = static_cast<int>(std::floor(camera_position->x));
+        const int wy = static_cast<int>(std::floor(camera_position->y));
+        const int wz = static_cast<int>(std::floor(camera_position->z));
+        const int cx = Math_Helpers::floor_div(wx, Config::chunk_size);
+        const int cy = Math_Helpers::floor_div(wy, Config::chunk_height);
+        const int cz = Math_Helpers::floor_div(wz, Config::chunk_size);
+        if (const Chunk* eye_chunk = get_chunk(cx, cy, cz)) {
+            eye_in_solid = block_occludes_view(eye_chunk->get_block(
+                wx - cx * Config::chunk_size, wy - cy * Config::chunk_height, wz - cz * Config::chunk_size));
+        }
+    }
+    // Достижимость от камеры; состояние обхода переиспользуется между кадрами (см. Reach_Scratch).
+    static thread_local Reach_Scratch reach;
+    const bool reach_enabled = camera_position && !eye_in_solid &&
+        build_section_reach(loaded, *camera_position, m_chunk_set_epoch, this, reach);
+
+    for (const auto& [key, chunk] : loaded) {
+        if (chunk->is_empty()) continue;
         // Захват области рисует только чанки плана (обычные чанки вокруг игрока, лежащие
         // вне плана, — глубокое подземелье/небо — в кадр не попадают).
-        if (capture_active() && !capture_plan_contains(key)) return;
+        if (capture_active() && !capture_plan_contains(key)) continue;
 
         const Chunk_Meshes& meshes = chunk->get_meshes();
         Renderable_Chunk renderable{key, &meshes, chunk->get_mesh_version()};
@@ -1564,10 +1938,12 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
             const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
             const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
             const bool in_frustum = !frustum || frustum->intersects_aabb(section_min, section_max);
-            renderable.section_in_frustum[section_index] = in_frustum;
-            has_visible_section = has_visible_section || in_frustum;
+            const bool reached = !reach_enabled || is_reached(reach, key, static_cast<int>(section_index));
+            const bool visible = in_frustum && reached;
+            renderable.section_visible[section_index] = visible;
+            has_visible_section = has_visible_section || visible;
         }
-        if (!has_visible_section) return;
+        if (!has_visible_section) continue;
 
         if (camera_position && flora_render_distance_chunks >= 0) {
             const int camera_chunk_x = static_cast<int>(
@@ -1581,7 +1957,7 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
         }
 
         result.push_back(renderable);
-    });
+    }
 
     return result;
 }

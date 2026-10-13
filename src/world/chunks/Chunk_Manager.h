@@ -33,7 +33,8 @@ struct Renderable_Chunk {
     glm::ivec3 position; // (chunk_x, chunk_y, chunk_z)
     const Chunk_Meshes* meshes = nullptr;
     uint64_t mesh_version;
-    std::array<bool, Config::chunk_section_count> section_in_frustum{};
+    // Секция рисуется: попадает во фрустум и достижима от камеры через прозрачные клетки (см. get_renderable_chunks).
+    std::array<bool, Config::chunk_section_count> section_visible{};
     bool flora_skip_render = false;
 };
 
@@ -101,7 +102,16 @@ private:
         // World_Generator, что и раньше в живом Chunk_Manager::get_block_world).
         Chunk_Block_Faces neighbor_blocks;
         Chunk_Light_Faces neighbor_light;
+        // Рёбра и углы за границей (кольцо для AO). ring_valid = false: соседа не было при постановке,
+        // клетку отдаст генератор в воркере, как и грани без снимка.
+        std::array<uint8_t, Chunk_Ring::kSize> ring_blocks{};
+        std::array<bool, Chunk_Ring::kSize> ring_valid{};
         uint64_t generation_id;
+        // Счётчик пометок чанка на момент снимка (см. Chunk::get_dirty_epoch): при применении сравнивается.
+        uint64_t dirty_epoch = 0;
+        // Объект чанка, для которого снят снимок (см. Chunk::get_instance_id). Результат применяется
+        // только к нему: на позиции мог появиться другой чанк, пока задача летала в воркере.
+        uint64_t instance_id = 0;
         Capture_Clip clip;
         // true — непрозрачные квады строит GPU (нагрузка в Chunk_Meshes, см. build_gpu_solid_payload);
         // false — классический CPU-мешер (тогда в solid лежат готовые вершины).
@@ -116,6 +126,8 @@ private:
         glm::ivec3 position;
         uint64_t generation_id;
         Chunk_Meshes meshes;
+        uint64_t dirty_epoch = 0;
+        uint64_t instance_id = 0;
     };
 
     // Хранилище загруженных чанков: open-addressing (Robin Hood) вместо chaining hash map —
@@ -123,6 +135,8 @@ private:
     // блока/света и на каждый видимый чанк при рендере каждый кадр, так что устройство ЭТОЙ
     // структуры — самое горячее место во всём Chunk_Manager.
     Chunk_Table m_chunks;
+    // Меняется при загрузке, выгрузке и замене чанков: по нему кэш обхода достижимости знает, что набор изменился.
+    uint64_t m_chunk_set_epoch = 0;
     // Тот же open-addressing, что и у m_chunks, но без нагрузки-значения — только координаты
     // "в полёте": запрошенные к генерации, ожидающие пересборки меша, требующие повторной
     // пересборки. См. Chunk_Coord_Set в Chunk_Table.h.
@@ -242,6 +256,9 @@ private:
     // источник только что убрали, он к этому моменту уже вычеркнут из списка, и без этого
     // параметра его старый свет-"призрак" никогда бы не очистился (см. подробности в .cpp).
     void recompute_lighting(std::optional<glm::ivec3> extra_clear_position = std::nullopt);
+    // Грани соседа читают свет через границу: после смены света в чанках из changed_chunks
+    // шесть соседей помечаются грязными, иначе их граница держала бы старый свет.
+    void mark_light_neighbors_dirty(const std::unordered_set<glm::ivec3, Chunk_Key_Hash>& changed_chunks);
     // Scoped to the given (chunk_x, chunk_z) columns (packed (x<<32)|z) rather than the whole
     // loaded world - see the comment at the implementation and at m_columns_pending_sky_recompute.
     void recompute_sky_lighting(const std::unordered_set<uint64_t>& changed_chunk_columns,

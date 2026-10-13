@@ -273,6 +273,8 @@ void Renderer::upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t&
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, rect_u_min)));
         glEnableVertexAttribArray(4);
+        glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ao)));
+        glEnableVertexAttribArray(5);
         glBindVertexArray(0);
     }
 
@@ -504,7 +506,7 @@ bool Renderer::initialize_gpu_mesher() {
     m_gpu_lut_ssbo = create_ssbo(lut.size() * sizeof(uint32_t), lut.data(), GL_STATIC_DRAW);
     m_gpu_tables_ssbo = create_ssbo(table_words.size() * sizeof(uint32_t), table_words.data(), GL_STATIC_DRAW);
     m_gpu_rects_ssbo = create_ssbo(rects.size() * sizeof(glm::vec4), rects.data(), GL_STATIC_DRAW);
-    m_gpu_headers_ssbo = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * 16 * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
+    m_gpu_headers_ssbo = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * kGpuHeaderStride * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
     m_gpu_payload_capacity = size_t{1} << 20;
     m_gpu_payload_ssbo = create_ssbo(m_gpu_payload_capacity, nullptr, GL_STREAM_DRAW);
     for (Gpu_Readback& rb : m_gpu_readbacks) {
@@ -683,7 +685,7 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
 
 void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch) {
     const size_t n = batch.size();
-    m_gpu_headers_cpu.assign(n * 16, glm::uvec4(0u));
+    m_gpu_headers_cpu.assign(n * kGpuHeaderStride, glm::uvec4(0u));
     m_gpu_payload_cpu.clear();
     Gpu_Readback& rb = m_gpu_readbacks[(m_gpu_readback_head + m_gpu_readback_count) % kGpuReadbackRing];
 
@@ -699,7 +701,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         m_gpu_payload_cpu.insert(m_gpu_payload_cpu.end(), meshes.gpu_words.begin(), meshes.gpu_words.end());
 
         // Заголовок чанка: [0].x — слот, [1 + канал] — палитра, слова, битность.
-        glm::uvec4* header = &m_gpu_headers_cpu[i * 16];
+        glm::uvec4* header = &m_gpu_headers_cpu[i * kGpuHeaderStride];
         header[0] = glm::uvec4(static_cast<uint32_t>(res.gpu_slot), 0u, 0u, 0u);
         for (int ch = 0; ch < kGpuMeshChannelCount; ++ch) {
             const std::array<uint32_t, 3>& c = meshes.gpu_channels[ch];
@@ -724,7 +726,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     }
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_headers_ssbo);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(n * 16 * sizeof(glm::uvec4)),
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(n * kGpuHeaderStride * sizeof(glm::uvec4)),
                     m_gpu_headers_cpu.data());
     const size_t payload_bytes = m_gpu_payload_cpu.size() * sizeof(uint32_t);
     if (payload_bytes > m_gpu_payload_capacity) {
@@ -829,7 +831,7 @@ void Renderer::draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks
 
         uint32_t bits = 0;
         for (size_t s = 0; s < meshes.sections.size(); ++s) {
-            if (!meshes.sections[s].has_geometry || !chunk.section_in_frustum[s]) continue;
+            if (!meshes.sections[s].has_geometry || !chunk.section_visible[s]) continue;
             bits |= 1u << s;
             // Статистика: число квадов берём из последнего полученного readback'а (с задержкой).
             const uint32_t quads = std::min(m_gpu_quad_counts[static_cast<size_t>(res.gpu_slot) * 4 + s],
@@ -962,9 +964,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
             if (!section.has_geometry || section.solid_count == 0 ||
-                !chunk.section_in_frustum[section_index]) {
+                !chunk.section_visible[section_index]) {
                 if (section.has_geometry && section.solid_count > 0 &&
-                    !chunk.section_in_frustum[section_index]) {
+                    !chunk.section_visible[section_index]) {
                     ++m_last_culled_section_count;
                 }
                 continue;
@@ -1069,7 +1071,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
             if (!section.has_geometry || section.solid_count == 0 ||
-                !chunk.section_in_frustum[section_index]) continue;
+                !chunk.section_visible[section_index]) continue;
 
             const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
             const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
@@ -1148,7 +1150,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk->meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk->meshes->sections[section_index];
             if (!section.has_geometry || section.flora_count == 0 ||
-                !chunk->section_in_frustum[section_index]) continue;
+                !chunk->section_visible[section_index]) continue;
             draw_mesh_range(gl_res.flora_vao, section.flora_start, section.flora_count);
         }
     }
@@ -1187,7 +1189,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk->meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk->meshes->sections[section_index];
             if (!section.has_geometry || section.liquid_count == 0 ||
-                !chunk->section_in_frustum[section_index]) continue;
+                !chunk->section_visible[section_index]) continue;
             draw_mesh_range(gl_res.liquid_vao, section.liquid_start, section.liquid_count);
         }
     }

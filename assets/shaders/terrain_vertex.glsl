@@ -7,11 +7,13 @@ layout (location = 1) in vec2 aLocal;
 layout (location = 2) in float aNormalY;
 layout (location = 3) in float aLight;
 layout (location = 4) in vec4 aRect;   // u_min, v_min, u_max, v_max спрайта в атласе
+layout (location = 5) in float aAO;    // вершинный AO, 0..3
 
 out vec2 Local;
 out float NormalY;
 out float BlockLight;
 flat out vec4 Rect;
+out float AO;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -22,5 +24,6 @@ void main() {
     NormalY = aNormalY;
     BlockLight = aLight;
     Rect = aRect;
+    AO = aAO;
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }

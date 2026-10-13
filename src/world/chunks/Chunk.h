@@ -35,6 +35,54 @@ struct Terrain_Vertex {
     float ny;
     float light;
     float rect_u_min, rect_v_min, rect_u_max, rect_v_max;
+    // Вершинный AO: 0 — угол закрыт со всех сторон, 3 — открыт. Интерполируется по квадру.
+    float ao;
+};
+
+// Граничные позиции секции: клетки на шести её гранях. Порядок: +X и -X — (z, y) по 32x8; +Y и -Y —
+// (z, x) по 32x32; +Z и -Z — (x, y) по 32x8. Всего 3072. Переход между секциями идёт только через
+// совпадающие позиции общей грани (одна и та же (u, v) у обеих секций), см. Section_Connectivity.
+namespace Section_Boundary {
+    inline constexpr int kCount = 2 * 256 + 2 * 1024 + 2 * 256;
+    // Первая позиция каждой грани (порядок граней: 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z).
+    inline constexpr int kBase[6] = {0, 256, 512, 1536, 2560, 2816};
+    // Слов в маске позиций грани (бит — локальная позиция p - kBase[грань]): 256 или 1024 бита.
+    inline constexpr int kFaceWords[6] = {4, 4, 16, 16, 4, 4};
+    inline constexpr uint8_t kNoComp = 0xFF;  // позиция непрозрачна
+    inline constexpr int kMaxComps = 255;     // номера компонент 0..254, 0xFF занят под kNoComp
+    inline int face_of(int p) {
+        if (p < 256) return 0;
+        if (p < 512) return 1;
+        if (p < 1536) return 2;
+        if (p < 2560) return 3;
+        if (p < 2816) return 4;
+        return 5;
+    }
+}
+
+// Связность граничных клеток секции (см. get_renderable_chunks). Видимость через секцию — это переход
+// от одной граничной клетки к совпадающей клетке соседней секции, поэтому грань целиком не годится:
+// в пористых пещерах к одной грани прилегает много несвязанных полостей, и грубая модель склеивает их.
+//   Open   — все граничные позиции проходимы и связаны между собой; значение по умолчанию (секция, для
+//            которой связность ещё не посчитана, не отсекает то, что за ней), и для воздуха целиком.
+//   Closed — проходимых граничных позиций нет: через секцию не пройти, видны только её собственные грани.
+//   Mixed  — компоненты, касающиеся граничных позиций. Для каждой грани — записи Face_Comp (номер компоненты и
+//            смещение её маски в masks): бит маски — локальная позиция грани. Позиции двух соседних граней
+//            совпадают по локальному индексу (см. kBase), поэтому переход между секциями — пересечение масок.
+//            Внутренние полости без выхода на границу сюда не попадают: через них обзор наружу не идёт.
+struct Section_Connectivity {
+    enum class Kind : uint8_t { Open, Closed, Mixed };
+    struct Face_Comp {
+        uint8_t comp;
+        uint32_t mask;
+        bool operator==(const Face_Comp&) const = default;
+    };
+    Kind kind = Kind::Open;
+    uint16_t comp_count = 0;
+    // Записи граней: face_comps[face_begin[f] .. face_begin[f + 1]), по возрастанию номера компоненты.
+    std::array<uint16_t, 7> face_begin{};
+    std::vector<Face_Comp> face_comps;
+    std::vector<uint64_t> masks;
 };
 
 struct Chunk_Section_Range {
@@ -44,11 +92,79 @@ struct Chunk_Section_Range {
     float min_y = 0.0f;
     float max_y = 0.0f;
     bool has_geometry = false;
+    // Связность для отсечения укрытий. Считается и для секций без геометрии: воздух тоже проводит обзор.
+    Section_Connectivity conn;
 };
 
+// Счётчик изменений связности секций: растёт, когда у какого-либо чанка меняется Section_Connectivity. Смена
+// мешей без изменения связности его не трогает. По нему кэш обхода достижимости (get_renderable_chunks)
+// решает, нужен ли пересчёт.
+uint64_t current_connectivity_epoch();
+
 // Каналов полезной нагрузки GPU-мешера: 0 блоки, 1 метаданные, 2 свет своего чанка;
-// 3..8 блоки граней соседей (-X,+X,-Y,+Y,-Z,+Z); 9..14 свет граней соседей. См. mesh_greedy.comp.
-inline constexpr int kGpuMeshChannelCount = 15;
+// 3..8 блоки граней соседей (-X,+X,-Y,+Y,-Z,+Z); 9..14 свет граней соседей; 15 — кольцо блоков
+// рёбер и углов (нужно AO у границ чанка). См. mesh_greedy.comp.
+inline constexpr int kGpuMeshChannelCount = 16;
+// Заголовок чанка в батче GPU: слот + по одному uvec4 на канал.
+inline constexpr int kGpuHeaderStride = 1 + kGpuMeshChannelCount;
+
+// Кольцо для AO: клетки за границей чанка, у которых две или три координаты вне 0..size-1.
+// Грани за одной границей берутся из шести снимков граней, а рёбра и углы (соседние по диагонали
+// чанки) — отсюда. Порядок: 4 ребра вдоль Y (x и z вне), 4 вдоль X (y и z), 4 вдоль Z (x и y), 8 углов.
+namespace Chunk_Ring {
+    inline constexpr int kEdgeXBase = 4 * Config::chunk_height;
+    inline constexpr int kEdgeZBase = kEdgeXBase + 4 * Config::chunk_size;
+    inline constexpr int kCornerBase = kEdgeZBase + 4 * Config::chunk_size;
+    inline constexpr int kSize = kCornerBase + 8;
+}
+
+// Индекс клетки кольца по координатам -1..size (ровно две или три координаты вне диапазона);
+// -1 для всех остальных клеток. Должен совпадать с ring_index в mesh_greedy.comp.
+inline int chunk_ring_index(int x, int y, int z) {
+    constexpr int N = Config::chunk_size;
+    constexpr int H = Config::chunk_height;
+    const bool ox = x < 0 || x >= N;
+    const bool oy = y < 0 || y >= H;
+    const bool oz = z < 0 || z >= N;
+    const int out = int(ox) + int(oy) + int(oz);
+    if (out < 2) return -1;
+    const int px = x >= N ? 1 : 0;  // 0 — сторона отрицательная, 1 — положительная
+    const int py = y >= H ? 1 : 0;
+    const int pz = z >= N ? 1 : 0;
+    if (out == 3) return Chunk_Ring::kCornerBase + px + 2 * py + 4 * pz;
+    if (!oy) return (px + 2 * pz) * H + y;
+    if (!ox) return Chunk_Ring::kEdgeXBase + (py + 2 * pz) * N + x;
+    return Chunk_Ring::kEdgeZBase + (px + 2 * py) * N + z;
+}
+
+// Обратное к chunk_ring_index: координаты клетки кольца относительно угла чанка.
+inline void chunk_ring_coords(int index, int& x, int& y, int& z) {
+    constexpr int N = Config::chunk_size;
+    constexpr int H = Config::chunk_height;
+    if (index < Chunk_Ring::kEdgeXBase) {
+        const int e = index / H;
+        x = (e & 1) ? N : -1;
+        z = (e & 2) ? N : -1;
+        y = index - e * H;
+    } else if (index < Chunk_Ring::kEdgeZBase) {
+        const int j = index - Chunk_Ring::kEdgeXBase;
+        const int e = j / N;
+        y = (e & 1) ? H : -1;
+        z = (e & 2) ? N : -1;
+        x = j - e * N;
+    } else if (index < Chunk_Ring::kCornerBase) {
+        const int j = index - Chunk_Ring::kEdgeZBase;
+        const int e = j / N;
+        x = (e & 1) ? N : -1;
+        y = (e & 2) ? H : -1;
+        z = j - e * N;
+    } else {
+        const int c = index - Chunk_Ring::kCornerBase;
+        x = (c & 1) ? N : -1;
+        y = (c & 2) ? H : -1;
+        z = (c & 4) ? N : -1;
+    }
+}
 
 struct Chunk_Meshes {
     std::vector<Terrain_Vertex> solid;
@@ -368,12 +484,17 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
 
 // Таблицы правил жадного мешера для GPU: те же самые, что использует CPU-мешер.
 struct Gpu_Mesh_Tables {
-    // Бит 0: жадно-мешаемый блок; бит 1: прозрачный; бит 2: uses_meta; бит 3: cull_same.
+    // Бит 0: жадно-мешаемый блок; бит 1: прозрачный; бит 2: uses_meta; бит 3: cull_same;
+    // бит 4: непрозрачный кубический блок (закрывает AO соседних углов).
     std::array<uint32_t, static_cast<size_t>(k_max_block_types)> flags{};
     // Упакованный свет (sky<<4 | block) -> огрублённый, для cull_same-блоков.
     std::array<uint32_t, 256> light_coarse{};
 };
 Gpu_Mesh_Tables gpu_mesh_tables();
+
+// Полный непрозрачный куб (Mesh_Tables::occludes): клетка с таким блоком закрывает обзор. Тем же правилом строится
+// связность секций (Section_Connectivity) и проверяется, не стоит ли глаз камеры внутри такого блока.
+bool block_occludes_view(Block_Types type);
 
 class Chunk {
 private:
@@ -391,6 +512,12 @@ private:
 
     Chunk_Meshes m_meshes;
     bool m_is_mesh_dirty = true;
+    // Растёт при каждой пометке грязности (см. mark_mesh_dirty): задача пересборки запоминает его
+    // на моменте снимка, и если к её применению он вырос, правка легла уже после снимка.
+    uint64_t m_dirty_epoch = 0;
+    // Уникальный номер ОБЪЕКТА (выдаётся в конструкторе из глобального счётчика, с 1). Позиция
+    // для этого не годится: выгрузили и загрузили заново — позиция та же, объект уже другой.
+    uint64_t m_instance_id = 0;
     // Отличает чанк, который игрок действительно правил, от нетронутого.
     // Нетронутый чанк полностью восстанавливается генератором по сиду, поэтому
     // писать его на диск бессмысленно: раньше выгрузка сохраняла ВСЕ чанки
@@ -438,7 +565,12 @@ public:
     bool is_modified() const { return m_is_modified; }
     void mark_modified() { m_is_modified = true; }
     void clear_modified() { m_is_modified = false; }
-    void mark_mesh_dirty() { m_is_mesh_dirty = true; }
+    void mark_mesh_dirty() {
+        m_is_mesh_dirty = true;
+        ++m_dirty_epoch;
+    }
+    uint64_t get_dirty_epoch() const { return m_dirty_epoch; }
+    uint64_t get_instance_id() const { return m_instance_id; }
     bool is_empty() const;
     bool has_blocks() const {
         for (const int count : m_layer_block_count) {
