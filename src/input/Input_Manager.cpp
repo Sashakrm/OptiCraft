@@ -2,7 +2,7 @@
 // Created by noktemor on 28.03.2026.
 //
 
-#include "Input_Manager.h"
+#include "input/Input_Manager.h"
 #include "utils/Config.h"
 
 Input_Manager::Input_Manager(GLFWwindow* window_ptr)

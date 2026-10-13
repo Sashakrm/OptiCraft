@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 #include "rendering/Shader.h"
-#include "rendering/Texture_Atlas.h"
+#include "rendering/atlas/Texture_Atlas.h"
 
 // ============================================================================
 //  Интерфейс OptiCraft

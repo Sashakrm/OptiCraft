@@ -2,8 +2,8 @@
 // Created by noktemor on 28.03.2026.
 //
 
-#include "Shader.h"
-#include "utils/Logger.h"
+#include "rendering/Shader.h"
+#include "utils/logging/Logger.h"
 #include <fstream>
 #include <sstream>
 #include <glad/gl.h>

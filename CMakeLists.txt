@@ -35,52 +35,50 @@ set(SOURCES
         ${SRC_DIR}/commands/Command_System.cpp
 
         # core
-        ${SRC_DIR}/core/Application.cpp
-        ${SRC_DIR}/core/Game.cpp
-        ${SRC_DIR}/core/Day_Night_Cycle.cpp
+        ${SRC_DIR}/core/app/Application.cpp
+        ${SRC_DIR}/core/game/Game.cpp
+        ${SRC_DIR}/core/game/Day_Night_Cycle.cpp
 
         # entities
-        ${SRC_DIR}/entities/Camera.cpp
-        ${SRC_DIR}/entities/Player.cpp
-        ${SRC_DIR}/entities/Inventory.cpp
-        ${SRC_DIR}/entities/Dropped_Item.cpp
+        ${SRC_DIR}/entities/player/Camera.cpp
+        ${SRC_DIR}/entities/player/Player.cpp
+        ${SRC_DIR}/entities/player/Inventory.cpp
+        ${SRC_DIR}/entities/items/Dropped_Item.cpp
 
         # input
         ${SRC_DIR}/input/Input_Manager.cpp
 
         # rendering
-        ${SRC_DIR}/rendering/Mesh.cpp
-        ${SRC_DIR}/rendering/Isometric_Capture.cpp
+        ${SRC_DIR}/rendering/capture/Isometric_Capture.cpp
         ${SRC_DIR}/rendering/Renderer.cpp
         ${SRC_DIR}/rendering/Shader.cpp
-        ${SRC_DIR}/rendering/Texture_Atlas.cpp
-        ${SRC_DIR}/rendering/Atlas_Registry.cpp
+        ${SRC_DIR}/rendering/atlas/Texture_Atlas.cpp
+        ${SRC_DIR}/rendering/atlas/Atlas_Registry.cpp
 
         # utils
-        ${SRC_DIR}/utils/Logger.cpp
-        ${SRC_DIR}/utils/Json.cpp
-        ${SRC_DIR}/utils/Localization.cpp
+        ${SRC_DIR}/utils/logging/Logger.cpp
+        ${SRC_DIR}/utils/text/Json.cpp
+        ${SRC_DIR}/utils/text/Localization.cpp
 
         # world
-        ${SRC_DIR}/world/Block.cpp
-        ${SRC_DIR}/world/Block_Entity.cpp
-        ${SRC_DIR}/world/Block_Entity_Store.cpp
-        ${SRC_DIR}/world/Recipe.cpp
-        ${SRC_DIR}/world/Crop_Manager.cpp
-        ${SRC_DIR}/world/Smelting.cpp
-        ${SRC_DIR}/world/Region_File.cpp
-        ${SRC_DIR}/world/Biome.cpp
-        ${SRC_DIR}/world/Block_Interaction.cpp
-        ${SRC_DIR}/world/Chunk.cpp
-        ${SRC_DIR}/world/Chunk_Manager.cpp
-        ${SRC_DIR}/world/Generation_Type.cpp
-        ${SRC_DIR}/world/Structures.cpp
-        ${SRC_DIR}/world/Tree_Generator.cpp
-        ${SRC_DIR}/world/World_Generator.cpp
-        ${SRC_DIR}/world/World_File.cpp
-
-        # world generation noise
-        ${SRC_DIR}/world/OpenSimplex2S.c
+        ${SRC_DIR}/world/blocks/Block.cpp
+        ${SRC_DIR}/world/blocks/Block_Entity.cpp
+        ${SRC_DIR}/world/blocks/Block_Entity_Store.cpp
+        ${SRC_DIR}/world/crafting/Recipe.cpp
+        ${SRC_DIR}/world/crafting/Crop_Manager.cpp
+        ${SRC_DIR}/world/crafting/Smelting.cpp
+        ${SRC_DIR}/world/storage/Region_File.cpp
+        ${SRC_DIR}/world/generation/Biome.cpp
+        ${SRC_DIR}/world/blocks/Block_Interaction.cpp
+        ${SRC_DIR}/world/chunks/Chunk.cpp
+        ${SRC_DIR}/world/chunks/Chunk_Manager.cpp
+        ${SRC_DIR}/world/generation/Generation_Type.cpp
+        ${SRC_DIR}/world/generation/Structures.cpp
+        ${SRC_DIR}/world/generation/Tree_Generator.cpp
+        ${SRC_DIR}/world/generation/World_Generator.cpp
+        ${SRC_DIR}/world/storage/World_File.cpp
+        ${SRC_DIR}/world/fluids/Fluid_Simulator.cpp
+        ${SRC_DIR}/world/dimensions/Dimension.cpp
 
         # physics
         ${SRC_DIR}/physics/Raycast.cpp
@@ -88,29 +86,31 @@ set(SOURCES
         # hud
         ${SRC_DIR}/hud/Hud.cpp
         ${SRC_DIR}/hud/Hud_Screens.cpp
-        ${SRC_DIR}/hud/Panel_Layouts.cpp
+        ${SRC_DIR}/hud/layouts/Panel_Layouts.cpp
 
         # mobs
         ${SRC_DIR}/mobs/Mob_Model.cpp
         ${SRC_DIR}/mobs/Mob.cpp
 
         # entities/AI
-        ${SRC_DIR}/entities/AI/Pig_AI.cpp
-        ${SRC_DIR}/entities/Pig.cpp
-        ${SRC_DIR}/entities/Cow.cpp
-        ${SRC_DIR}/entities/AI/Horse_AI.cpp
-        ${SRC_DIR}/entities/Horse.cpp
+        ${SRC_DIR}/entities/animals/ai/Pig_AI.cpp
+        ${SRC_DIR}/entities/animals/Pig.cpp
+        ${SRC_DIR}/entities/animals/Cow.cpp
+        ${SRC_DIR}/entities/animals/ai/Horse_AI.cpp
+        ${SRC_DIR}/entities/animals/Horse.cpp
 )
 
 set(PLATFORM_SOURCES
-        ${SRC_DIR}/core/Events.cpp
-        ${SRC_DIR}/core/Window.cpp
-        ${SRC_DIR}/world/Block_Types.cpp
-        ${SRC_DIR}/utils/Texture.cpp
+        ${SRC_DIR}/core/app/Events.cpp
+        ${SRC_DIR}/core/app/Window.cpp
+        ${SRC_DIR}/world/blocks/Block_Types.cpp
+        ${SRC_DIR}/rendering/atlas/Texture.cpp
 )
 
 set(THIRD_PARTY_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/src/gl.c
+        # шум для генерации мира (OpenSimplex2S, C)
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/opensimplex/OpenSimplex2S.c
 )
 
 # =============== Создаём исполняемый файл ===============
@@ -123,66 +123,64 @@ add_executable(${PROJECT_NAME}
 # Добавляем заголовочные файлы (чтобы они отображались в IDE)
 target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/commands/Command_System.h
-        ${SRC_DIR}/core/Application.h
-        ${SRC_DIR}/core/Events.h
-        ${SRC_DIR}/core/Game.h
-        ${SRC_DIR}/core/Window.h
+        ${SRC_DIR}/core/app/Application.h
+        ${SRC_DIR}/core/app/Events.h
+        ${SRC_DIR}/core/game/Game.h
+        ${SRC_DIR}/core/app/Window.h
 
-        ${SRC_DIR}/entities/Camera.h
-        ${SRC_DIR}/entities/Player.h
-        ${SRC_DIR}/entities/Dropped_Item.h
+        ${SRC_DIR}/entities/player/Camera.h
+        ${SRC_DIR}/entities/player/Player.h
+        ${SRC_DIR}/entities/items/Dropped_Item.h
 
         ${SRC_DIR}/input/Input_Call_Backs.h
         ${SRC_DIR}/input/Input_Manager.h
 
-        ${SRC_DIR}/rendering/Mesh.h
         ${SRC_DIR}/rendering/Frustum.h
-        ${SRC_DIR}/rendering/Isometric_Capture.h
+        ${SRC_DIR}/rendering/capture/Isometric_Capture.h
         ${SRC_DIR}/rendering/Renderer.h
         ${SRC_DIR}/rendering/Shader.h
-        ${SRC_DIR}/rendering/Texture_Atlas.h
-        ${SRC_DIR}/rendering/Atlas_Registry.h
+        ${SRC_DIR}/rendering/atlas/Texture_Atlas.h
+        ${SRC_DIR}/rendering/atlas/Atlas_Registry.h
 
         ${SRC_DIR}/utils/Config.h
-        ${SRC_DIR}/utils/Hash_Utils.h
-        ${SRC_DIR}/utils/Logger.h
-        ${SRC_DIR}/utils/Math_Helpers.h
-        ${SRC_DIR}/utils/PerlinNoise.h
-        ${SRC_DIR}/utils/Texture.h
-        ${SRC_DIR}/utils/Json.h
-        ${SRC_DIR}/utils/Localization.h
+        ${SRC_DIR}/math/Hash_Utils.h
+        ${SRC_DIR}/utils/logging/Logger.h
+        ${SRC_DIR}/math/Math_Helpers.h
+        ${SRC_DIR}/math/PerlinNoise.h
+        ${SRC_DIR}/rendering/atlas/Texture.h
+        ${SRC_DIR}/utils/text/Json.h
+        ${SRC_DIR}/utils/text/Localization.h
 
-        ${SRC_DIR}/world/Block.h
-        ${SRC_DIR}/world/Block_Entity.h
-        ${SRC_DIR}/world/Block_Entity_Store.h
-        ${SRC_DIR}/world/Recipe.h
-        ${SRC_DIR}/world/Smelting.h
-        ${SRC_DIR}/world/Container_Session.h
-        ${SRC_DIR}/world/Block_Types.h
-        ${SRC_DIR}/world/Biome.h
-        ${SRC_DIR}/world/Block_Interaction.h
-        ${SRC_DIR}/world/Chunk.h
-        ${SRC_DIR}/world/Chunk_Manager.h
-        ${SRC_DIR}/world/Generation_Type.h
-        ${SRC_DIR}/world/Structures.h
-        ${SRC_DIR}/world/Tree_Generator.h
-        ${SRC_DIR}/world/World_Generator.h
-        ${SRC_DIR}/world/World_File.h
-        ${SRC_DIR}/world/Region_File.h
-        ${SRC_DIR}/world/OpenSimplex2S.h
+        ${SRC_DIR}/world/blocks/Block.h
+        ${SRC_DIR}/world/blocks/Block_Entity.h
+        ${SRC_DIR}/world/blocks/Block_Entity_Store.h
+        ${SRC_DIR}/world/crafting/Recipe.h
+        ${SRC_DIR}/world/crafting/Smelting.h
+        ${SRC_DIR}/world/blocks/Container_Session.h
+        ${SRC_DIR}/world/blocks/Block_Types.h
+        ${SRC_DIR}/world/generation/Biome.h
+        ${SRC_DIR}/world/blocks/Block_Interaction.h
+        ${SRC_DIR}/world/chunks/Chunk.h
+        ${SRC_DIR}/world/chunks/Chunk_Manager.h
+        ${SRC_DIR}/world/generation/Generation_Type.h
+        ${SRC_DIR}/world/generation/Structures.h
+        ${SRC_DIR}/world/generation/Tree_Generator.h
+        ${SRC_DIR}/world/generation/World_Generator.h
+        ${SRC_DIR}/world/storage/World_File.h
+        ${SRC_DIR}/world/storage/Region_File.h
 
         ${SRC_DIR}/physics/Raycast.h
 
         ${SRC_DIR}/hud/Hud.h
-        ${SRC_DIR}/hud/Panel_Layouts.h
+        ${SRC_DIR}/hud/layouts/Panel_Layouts.h
 
         ${SRC_DIR}/mobs/Mob_Model.h
         ${SRC_DIR}/mobs/Mob.h
 
-        ${SRC_DIR}/entities/AI/Pig_AI.h
-        ${SRC_DIR}/entities/Pig.h
-        ${SRC_DIR}/entities/AI/Horse_AI.h
-        ${SRC_DIR}/entities/Horse.h
+        ${SRC_DIR}/entities/animals/ai/Pig_AI.h
+        ${SRC_DIR}/entities/animals/Pig.h
+        ${SRC_DIR}/entities/animals/ai/Horse_AI.h
+        ${SRC_DIR}/entities/animals/Horse.h
 )
 
 # =============== Флаги оптимизации ===============
@@ -201,6 +199,7 @@ endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}                          # для #include "core/..."
         ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/opensimplex
         ${CMAKE_CURRENT_SOURCE_DIR}/external/stb
         ${CMAKE_CURRENT_SOURCE_DIR}/external/cgltf
 )

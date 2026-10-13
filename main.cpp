@@ -1,5 +1,5 @@
-#include "core/Game.h"
-#include "utils/Logger.h"
+#include "core/game/Game.h"
+#include "utils/logging/Logger.h"
 #include "utils/Config.h"
 
 

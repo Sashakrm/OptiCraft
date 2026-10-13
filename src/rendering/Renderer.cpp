@@ -1,13 +1,69 @@
 //
 // Created by noktemor on 11.02.2026.
 //
-#include "Renderer.h"
-#include "utils/Logger.h"
+#include <cstddef>
+#include "rendering/Renderer.h"
+#include "utils/logging/Logger.h"
 #include "utils/Config.h"
 
 #include <algorithm>
+#include <fstream>
+#include <map>
+#include <numeric>
+#include <sstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <GLFW/glfw3.h>
+
+namespace {
+    // Компиляция и линковка compute-шейдера (GL 4.3). 0 при ошибке, причина — в логе.
+    unsigned int compile_compute_program(const std::string& path) {
+        std::ifstream file(path);
+        if (!file) {
+            LOG_ERROR("Cannot open compute shader: " + path);
+            return 0;
+        }
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        const std::string source = buffer.str();
+        const char* source_ptr = source.c_str();
+
+        const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+        glShaderSource(shader, 1, &source_ptr, nullptr);
+        glCompileShader(shader);
+        GLint ok = GL_FALSE;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char log[4096];
+            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+            LOG_ERROR("Compute shader compile error (" + path + "): " + log);
+            glDeleteShader(shader);
+            return 0;
+        }
+
+        const GLuint program = glCreateProgram();
+        glAttachShader(program, shader);
+        glLinkProgram(program);
+        glDeleteShader(shader);
+        glGetProgramiv(program, GL_LINK_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char log[4096];
+            glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+            LOG_ERROR("Compute program link error (" + path + "): " + log);
+            glDeleteProgram(program);
+            return 0;
+        }
+        return program;
+    }
+
+    // Новый SSBO заданного размера (байты); data может быть nullptr.
+    unsigned int create_ssbo(size_t bytes, const void* data, GLenum usage) {
+        unsigned int id = 0;
+        glGenBuffers(1, &id);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, id);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(bytes), data, usage);
+        return id;
+    }
+}
 
 Renderer::Renderer()
     : m_shader_ptr(nullptr)
@@ -17,6 +73,7 @@ Renderer::~Renderer() {
     for (auto& [key, res] : m_chunk_gl_cache) {
         delete_chunk_resources(res);
     }
+    shutdown_gpu_mesher();
 
     delete m_shader_ptr;
     delete m_liquid_shader_ptr;
@@ -139,6 +196,9 @@ bool Renderer::initialize(const std::string& vertex_shader_path,
         return false;
     }
 
+    // GPU-мешер необязателен: без GL 4.3 или при ошибке шейдеров мешинг остаётся на CPU.
+    initialize_gpu_mesher();
+
     LOG_INFO("Renderer initialized");
     return true;
 }
@@ -180,6 +240,46 @@ void Renderer::upload_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, 
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+    count = vertices.size();
+}
+
+// Непрозрачная геометрия чанка (жадный меш): вершина Terrain_Vertex, см. terrain_vertex.glsl.
+void Renderer::upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t& count,
+                                   const std::vector<Terrain_Vertex>& vertices) {
+    if (vertices.empty()) {
+        if (vao != 0) glDeleteVertexArrays(1, &vao);
+        if (vbo != 0) glDeleteBuffers(1, &vbo);
+        vao = 0;
+        vbo = 0;
+        count = 0;
+        return;
+    }
+
+    if (vbo == 0) {
+        glGenBuffers(1, &vbo);
+    }
+    if (vao == 0) {
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        const GLsizei stride = sizeof(Terrain_Vertex);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, x)));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, local_u)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ny)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, light)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, rect_u_min)));
+        glEnableVertexAttribArray(4);
+        glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ao)));
+        glEnableVertexAttribArray(5);
+        glBindVertexArray(0);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Terrain_Vertex), vertices.data(), GL_STATIC_DRAW);
     count = vertices.size();
 }
 
@@ -247,6 +347,7 @@ void Renderer::draw_mesh_range(unsigned int vao, size_t start, size_t count) {
 }
 
 void Renderer::delete_chunk_resources(Chunk_GL_Resources& resources) {
+    release_gpu_slot(resources);
     if (resources.solid_vao != 0) glDeleteVertexArrays(1, &resources.solid_vao);
     if (resources.flora_vao != 0) glDeleteVertexArrays(1, &resources.flora_vao);
     if (resources.liquid_vao != 0) glDeleteVertexArrays(1, &resources.liquid_vao);
@@ -334,6 +435,453 @@ void Renderer::issue_occlusion_query(Section_Occlusion_State& state, const glm::
     state.query_in_flight = true;
 }
 
+bool Renderer::initialize_gpu_mesher() {
+    if (!GLAD_GL_VERSION_4_3) {
+        LOG_INFO("GPU meshing disabled: OpenGL 4.3 is not available");
+        return false;
+    }
+
+    m_gpu_greedy_program = compile_compute_program("assets/shaders/mesh_greedy.comp");
+    m_gpu_finalize_program = compile_compute_program("assets/shaders/mesh_finalize.comp");
+    m_gpu_terrain_shader_ptr = new Shader("assets/shaders/terrain_gpu_vertex.glsl",
+                                          "assets/shaders/terrain_gpu_fragment.glsl");
+    // Shader не бросает исключений при ошибке линковки, поэтому статус проверяем явно.
+    GLint terrain_linked = GL_FALSE;
+    if (m_gpu_terrain_shader_ptr->get_id() != 0) {
+        glGetProgramiv(m_gpu_terrain_shader_ptr->get_id(), GL_LINK_STATUS, &terrain_linked);
+    }
+    if (m_gpu_greedy_program == 0 || m_gpu_finalize_program == 0 || terrain_linked != GL_TRUE) {
+        LOG_ERROR("GPU meshing disabled: shader setup failed, meshing stays on CPU");
+        shutdown_gpu_mesher();
+        return false;
+    }
+    m_gpu_loc_chunk_count = glGetUniformLocation(m_gpu_greedy_program, "u_chunk_count");
+    m_gpu_loc_greedy_quad_cap = glGetUniformLocation(m_gpu_greedy_program, "u_quad_cap");
+    m_gpu_loc_section_total = glGetUniformLocation(m_gpu_finalize_program, "u_section_total");
+    m_gpu_loc_finalize_quad_cap = glGetUniformLocation(m_gpu_finalize_program, "u_quad_cap");
+
+    // Таблица правил и UV строится теми же resolve_face_uv/get_uv, что и CPU-мешер, поэтому
+    // совпадение с CPU не зависит от того, что видеокарта "знает" о блоках сама.
+    std::vector<uint32_t> lut(static_cast<size_t>(k_max_block_types) * 6 * 256, 0u);
+    std::vector<glm::vec4> rects;
+    std::map<std::array<float, 4>, uint32_t> rect_index;
+    const auto intern_rect = [&rects, &rect_index](const glm::vec4& uv) -> uint32_t {
+        const std::array<float, 4> key{uv.x, uv.y, uv.z, uv.w};
+        const auto it = rect_index.find(key);
+        if (it != rect_index.end()) return it->second;
+        const uint32_t index = static_cast<uint32_t>(rects.size());
+        rects.push_back(uv);
+        rect_index.emplace(key, index);
+        return index;
+    };
+    for (int id = 0; id < k_max_block_types; ++id) {
+        const Block_Properties& props = get_block_props(static_cast<Block_ID>(id));
+        for (int face = 0; face < 6; ++face) {
+            for (int meta = 0; meta < 256; ++meta) {
+                uint32_t entry = 0;
+                if (props.uses_meta) {
+                    bool rotate = false;
+                    const glm::vec4& uv = props.resolve_face_uv(face, static_cast<uint8_t>(meta), rotate);
+                    entry = intern_rect(uv) | (rotate ? 0x8000u : 0u);
+                } else {
+                    const int direction = face == 2 ? 1 : (face == 3 ? -1 : 0);
+                    entry = intern_rect(props.get_uv(direction));
+                }
+                lut[(static_cast<size_t>(id) * 6 + face) * 256 + meta] = entry;
+            }
+        }
+    }
+    if (rects.size() > 0x7FFFu) {
+        LOG_ERROR("GPU meshing disabled: too many UV rectangles for the 15-bit index");
+        shutdown_gpu_mesher();
+        return false;
+    }
+
+    const Gpu_Mesh_Tables tables = gpu_mesh_tables();
+    std::vector<uint32_t> table_words;
+    table_words.reserve(tables.flags.size() + tables.light_coarse.size());
+    table_words.insert(table_words.end(), tables.flags.begin(), tables.flags.end());
+    table_words.insert(table_words.end(), tables.light_coarse.begin(), tables.light_coarse.end());
+
+    m_gpu_lut_ssbo = create_ssbo(lut.size() * sizeof(uint32_t), lut.data(), GL_STATIC_DRAW);
+    m_gpu_tables_ssbo = create_ssbo(table_words.size() * sizeof(uint32_t), table_words.data(), GL_STATIC_DRAW);
+    m_gpu_rects_ssbo = create_ssbo(rects.size() * sizeof(glm::vec4), rects.data(), GL_STATIC_DRAW);
+    m_gpu_headers_ssbo = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * kGpuHeaderStride * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
+    m_gpu_payload_capacity = size_t{1} << 20;
+    m_gpu_payload_ssbo = create_ssbo(m_gpu_payload_capacity, nullptr, GL_STREAM_DRAW);
+    for (Gpu_Readback& rb : m_gpu_readbacks) {
+        rb.buffer = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * 4 * sizeof(uint32_t), nullptr, GL_STREAM_READ);
+    }
+    glGenVertexArrays(1, &m_gpu_section_vao);
+    grow_gpu_slots(256);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    m_gpu_enabled = true;
+    LOG_INFO("GPU meshing enabled (OpenGL 4.3 compute, quad cap per section: " + std::to_string(kGpuQuadCap) + ")");
+    return true;
+}
+
+void Renderer::shutdown_gpu_mesher() {
+    for (Gpu_Readback& rb : m_gpu_readbacks) {
+        if (rb.fence) glDeleteSync(rb.fence);
+        if (rb.buffer) glDeleteBuffers(1, &rb.buffer);
+        rb = Gpu_Readback{};
+    }
+    unsigned int buffers[] = {
+        m_gpu_lut_ssbo, m_gpu_tables_ssbo, m_gpu_rects_ssbo, m_gpu_headers_ssbo, m_gpu_payload_ssbo,
+        m_gpu_quads_ssbo, m_gpu_counts_ssbo, m_gpu_origins_ssbo, m_gpu_vis_ssbo, m_gpu_cmd_ssbo,
+        m_gpu_section_ids_vbo
+    };
+    for (unsigned int id : buffers) {
+        if (id != 0) glDeleteBuffers(1, &id);
+    }
+    if (m_gpu_section_vao != 0) glDeleteVertexArrays(1, &m_gpu_section_vao);
+    if (m_gpu_greedy_program != 0) glDeleteProgram(m_gpu_greedy_program);
+    if (m_gpu_finalize_program != 0) glDeleteProgram(m_gpu_finalize_program);
+    delete m_gpu_terrain_shader_ptr;
+
+    m_gpu_terrain_shader_ptr = nullptr;
+    m_gpu_greedy_program = 0;
+    m_gpu_finalize_program = 0;
+    m_gpu_section_vao = 0;
+    m_gpu_section_ids_vbo = 0;
+    m_gpu_lut_ssbo = m_gpu_tables_ssbo = m_gpu_rects_ssbo = 0;
+    m_gpu_headers_ssbo = m_gpu_payload_ssbo = 0;
+    m_gpu_quads_ssbo = m_gpu_counts_ssbo = m_gpu_origins_ssbo = m_gpu_vis_ssbo = m_gpu_cmd_ssbo = 0;
+    m_gpu_payload_capacity = 0;
+    m_gpu_slot_capacity = 0;
+    m_gpu_slot_high_water = 0;
+    m_gpu_free_slots.clear();
+    m_gpu_vis_cpu.clear();
+    m_gpu_quad_counts.clear();
+    m_gpu_headers_cpu.clear();
+    m_gpu_payload_cpu.clear();
+    m_gpu_readback_head = 0;
+    m_gpu_readback_count = 0;
+    m_gpu_fallback_requests.clear();
+    m_gpu_enabled = false;
+}
+
+void Renderer::grow_gpu_slots(int needed) {
+    if (needed <= m_gpu_slot_capacity) return;
+    const int new_capacity = std::max(needed, std::max(256, m_gpu_slot_capacity * 2));
+    const size_t capacity = static_cast<size_t>(new_capacity);
+    const size_t old_capacity = static_cast<size_t>(m_gpu_slot_capacity);
+    const size_t quad_bytes_per_slot = static_cast<size_t>(4) * kGpuQuadCap * sizeof(glm::uvec2);
+
+    const std::vector<uint32_t> zero_counts(4 * capacity, 0u);
+    const std::vector<glm::vec4> zero_origins(capacity, glm::vec4(0.0f));
+    const unsigned int quads = create_ssbo(quad_bytes_per_slot * capacity, nullptr, GL_DYNAMIC_DRAW);
+    const unsigned int counts = create_ssbo(zero_counts.size() * sizeof(uint32_t), zero_counts.data(), GL_DYNAMIC_DRAW);
+    const unsigned int origins = create_ssbo(zero_origins.size() * sizeof(glm::vec4), zero_origins.data(), GL_DYNAMIC_DRAW);
+    const unsigned int vis = create_ssbo(capacity * sizeof(uint32_t), nullptr, GL_DYNAMIC_DRAW);
+    const unsigned int cmd = create_ssbo(4 * capacity * sizeof(glm::uvec4), nullptr, GL_DYNAMIC_DRAW);
+    // Тождественные номера секций для атрибута aSection (см. terrain_gpu_vertex.glsl).
+    std::vector<uint32_t> section_ids(4 * capacity);
+    std::iota(section_ids.begin(), section_ids.end(), 0u);
+    unsigned int ids = 0;
+    glGenBuffers(1, &ids);
+    glBindBuffer(GL_ARRAY_BUFFER, ids);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(section_ids.size() * sizeof(uint32_t)),
+                 section_ids.data(), GL_STATIC_DRAW);
+
+    if (old_capacity > 0) {
+        // Между кадрами живут квады, счётчики и origins: переносим их в новые буферы.
+        const auto copy_bytes = [](unsigned int src, unsigned int dst, size_t bytes) {
+            glBindBuffer(GL_COPY_READ_BUFFER, src);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, dst);
+            glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, static_cast<GLsizeiptr>(bytes));
+        };
+        copy_bytes(m_gpu_quads_ssbo, quads, quad_bytes_per_slot * old_capacity);
+        copy_bytes(m_gpu_counts_ssbo, counts, static_cast<size_t>(4) * old_capacity * sizeof(uint32_t));
+        copy_bytes(m_gpu_origins_ssbo, origins, old_capacity * sizeof(glm::vec4));
+    }
+
+    unsigned int old_buffers[] = {m_gpu_quads_ssbo, m_gpu_counts_ssbo, m_gpu_origins_ssbo, m_gpu_vis_ssbo, m_gpu_cmd_ssbo};
+    for (unsigned int old_id : old_buffers) {
+        if (old_id != 0) glDeleteBuffers(1, &old_id);
+    }
+    m_gpu_quads_ssbo = quads;
+    m_gpu_counts_ssbo = counts;
+    m_gpu_origins_ssbo = origins;
+    m_gpu_vis_ssbo = vis;
+    m_gpu_cmd_ssbo = cmd;
+    if (m_gpu_section_ids_vbo != 0) glDeleteBuffers(1, &m_gpu_section_ids_vbo);
+    m_gpu_section_ids_vbo = ids;
+    glBindVertexArray(m_gpu_section_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_gpu_section_ids_vbo);
+    glVertexAttribIPointer(0, 1, GL_UNSIGNED_INT, sizeof(uint32_t), nullptr);
+    glEnableVertexAttribArray(0);
+    glVertexAttribDivisor(0, 1);
+    glBindVertexArray(0);
+    m_gpu_slot_capacity = new_capacity;
+    m_gpu_vis_cpu.resize(capacity, 0u);
+    m_gpu_quad_counts.resize(4 * capacity, 0u);
+}
+
+int Renderer::acquire_gpu_slot() {
+    if (!m_gpu_free_slots.empty()) {
+        const int slot = m_gpu_free_slots.back();
+        m_gpu_free_slots.pop_back();
+        return slot;
+    }
+    const int slot = m_gpu_slot_high_water;
+    grow_gpu_slots(slot + 1);
+    ++m_gpu_slot_high_water;
+    return slot;
+}
+
+void Renderer::release_gpu_slot(Chunk_GL_Resources& resources) {
+    if (resources.gpu_slot < 0) return;
+    m_gpu_free_slots.push_back(resources.gpu_slot);
+    resources.gpu_slot = -1;
+    resources.gpu_version = 0;
+}
+
+void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
+    while (m_gpu_readback_count > 0) {
+        Gpu_Readback& rb = m_gpu_readbacks[m_gpu_readback_head];
+        // Ждём только самый старый и только по запросу; остальные проверяем без блокировки.
+        const GLenum status = glClientWaitSync(rb.fence, GL_SYNC_FLUSH_COMMANDS_BIT,
+                                               wait_for_oldest ? 1000000000ull : 0ull);
+        wait_for_oldest = false;
+        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) break;
+
+        const size_t count = rb.positions.size();
+        glBindBuffer(GL_COPY_READ_BUFFER, rb.buffer);
+        const auto* words = static_cast<const uint32_t*>(glMapBufferRange(
+            GL_COPY_READ_BUFFER, 0, static_cast<GLsizeiptr>(count * 4 * sizeof(uint32_t)), GL_MAP_READ_BIT));
+        if (words) {
+            for (size_t i = 0; i < count; ++i) {
+                const int slot = rb.slots[i];
+                bool overflow = false;
+                for (size_t s = 0; s < 4; ++s) {
+                    const uint32_t quads = words[i * 4 + s];
+                    m_gpu_quad_counts[static_cast<size_t>(slot) * 4 + s] = quads;
+                    overflow = overflow || quads > static_cast<uint32_t>(kGpuQuadCap);
+                }
+                if (!overflow) continue;
+                const auto it = m_chunk_gl_cache.find(rb.positions[i]);
+                if (it == m_chunk_gl_cache.end()) continue;
+                // Отчёт относится к квадам именно этой версии в этом слоте; иначе он устарел.
+                if (it->second.gpu_slot != slot || it->second.gpu_version != rb.versions[i]) continue;
+                if (std::find(m_gpu_fallback_requests.begin(), m_gpu_fallback_requests.end(),
+                              rb.positions[i]) == m_gpu_fallback_requests.end()) {
+                    m_gpu_fallback_requests.push_back(rb.positions[i]);
+                }
+            }
+            glUnmapBuffer(GL_COPY_READ_BUFFER);
+        }
+
+        glDeleteSync(rb.fence);
+        rb.fence = nullptr;
+        rb.positions.clear();
+        rb.versions.clear();
+        rb.slots.clear();
+        m_gpu_readback_head = (m_gpu_readback_head + 1) % kGpuReadbackRing;
+        --m_gpu_readback_count;
+    }
+}
+
+void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch) {
+    const size_t n = batch.size();
+    m_gpu_headers_cpu.assign(n * kGpuHeaderStride, glm::uvec4(0u));
+    m_gpu_payload_cpu.clear();
+    Gpu_Readback& rb = m_gpu_readbacks[(m_gpu_readback_head + m_gpu_readback_count) % kGpuReadbackRing];
+
+    for (size_t i = 0; i < n; ++i) {
+        const Renderable_Chunk& chunk = *batch[i];
+        const Chunk_Meshes& meshes = *chunk.meshes;
+        Chunk_GL_Resources& res = m_chunk_gl_cache[chunk.position];
+        if (res.gpu_slot < 0) res.gpu_slot = acquire_gpu_slot();
+        res.gpu_version = chunk.mesh_version;
+
+        // Палитры и слова чанка кладём в общий батч; смещения переносим на его начало.
+        const uint32_t base = static_cast<uint32_t>(m_gpu_payload_cpu.size());
+        m_gpu_payload_cpu.insert(m_gpu_payload_cpu.end(), meshes.gpu_words.begin(), meshes.gpu_words.end());
+
+        // Заголовок чанка: [0].x — слот, [1 + канал] — палитра, слова, битность.
+        glm::uvec4* header = &m_gpu_headers_cpu[i * kGpuHeaderStride];
+        header[0] = glm::uvec4(static_cast<uint32_t>(res.gpu_slot), 0u, 0u, 0u);
+        for (int ch = 0; ch < kGpuMeshChannelCount; ++ch) {
+            const std::array<uint32_t, 3>& c = meshes.gpu_channels[ch];
+            header[1 + ch] = glm::uvec4(base + c[0], base + c[1], c[2], 0u);
+        }
+
+        // Мировой угол чанка для вершинного шейдера и обнуление счётчиков секций слота.
+        const glm::vec4 origin(static_cast<float>(chunk.position.x * Config::chunk_size),
+                               static_cast<float>(chunk.position.y * Config::chunk_height),
+                               static_cast<float>(chunk.position.z * Config::chunk_size), 0.0f);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_origins_ssbo);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(res.gpu_slot) * sizeof(glm::vec4),
+                        sizeof(glm::vec4), &origin);
+        const uint32_t zero_counts[4] = {0u, 0u, 0u, 0u};
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_counts_ssbo);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(res.gpu_slot) * 4 * sizeof(uint32_t),
+                        sizeof(zero_counts), zero_counts);
+
+        rb.positions.push_back(chunk.position);
+        rb.versions.push_back(chunk.mesh_version);
+        rb.slots.push_back(res.gpu_slot);
+    }
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_headers_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(n * kGpuHeaderStride * sizeof(glm::uvec4)),
+                    m_gpu_headers_cpu.data());
+    const size_t payload_bytes = m_gpu_payload_cpu.size() * sizeof(uint32_t);
+    if (payload_bytes > m_gpu_payload_capacity) {
+        m_gpu_payload_capacity = payload_bytes * 2;
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_payload_ssbo);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(m_gpu_payload_capacity), nullptr, GL_STREAM_DRAW);
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_payload_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(payload_bytes), m_gpu_payload_cpu.data());
+
+    // Greedy: 576 работ на чанк (72 среза x 2 знака x 4 секции), по 64 в группе = 9 групп на чанк.
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+    glUseProgram(m_gpu_greedy_program);
+    glUniform1i(m_gpu_loc_chunk_count, static_cast<GLint>(n));
+    glUniform1i(m_gpu_loc_greedy_quad_cap, kGpuQuadCap);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpu_headers_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_gpu_payload_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_quads_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_gpu_counts_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_gpu_lut_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_gpu_tables_ssbo);
+    glDispatchCompute(static_cast<GLuint>(n) * 9u, 1, 1);
+
+    // Счётчики квадов уходят в readback: по ним узнаём переполнение, не останавливая конвейер.
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    glBindBuffer(GL_COPY_READ_BUFFER, m_gpu_counts_ssbo);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, rb.buffer);
+    for (size_t i = 0; i < n; ++i) {
+        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
+                            static_cast<GLintptr>(rb.slots[i]) * 4 * sizeof(uint32_t),
+                            static_cast<GLintptr>(i) * 4 * sizeof(uint32_t),
+                            4 * sizeof(uint32_t));
+    }
+    rb.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    ++m_gpu_readback_count;
+}
+
+std::vector<glm::ivec3> Renderer::take_cpu_fallback_requests() {
+    std::vector<glm::ivec3> requests;
+    requests.swap(m_gpu_fallback_requests);
+    return requests;
+}
+
+bool Renderer::debug_gpu_section_quads(const glm::ivec3& chunk_position, int section,
+                                       std::vector<glm::uvec2>& out) {
+    out.clear();
+    const auto it = m_chunk_gl_cache.find(chunk_position);
+    if (!m_gpu_enabled || it == m_chunk_gl_cache.end() || it->second.gpu_slot < 0) return false;
+    const size_t index = static_cast<size_t>(it->second.gpu_slot) * 4 + static_cast<size_t>(section);
+    const size_t count = std::min(static_cast<size_t>(m_gpu_quad_counts[index]),
+                                  static_cast<size_t>(kGpuQuadCap));
+    out.resize(count);
+    if (count > 0) {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_quads_ssbo);
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER,
+                           static_cast<GLintptr>(index * kGpuQuadCap * sizeof(glm::uvec2)),
+                           static_cast<GLsizeiptr>(count * sizeof(glm::uvec2)), out.data());
+    }
+    return true;
+}
+
+void Renderer::draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks,
+                              const glm::mat4& view,
+                              const glm::mat4& projection,
+                              float ambient_intensity) {
+    if (!m_gpu_enabled || chunks.empty()) return;
+    poll_gpu_readbacks(false);
+
+    // Чанки без GPU-нагрузки или уже ушедшие на CPU освобождают слот; остальным, у кого нет
+    // актуальных квадов, нужна загрузка. chunks уже отсортированы от ближних к дальним.
+    std::vector<const Renderable_Chunk*> to_submit;
+    for (const Renderable_Chunk* chunk_ptr : chunks) {
+        const Renderable_Chunk& chunk = *chunk_ptr;
+        Chunk_GL_Resources& res = m_chunk_gl_cache[chunk.position];
+        const Chunk_Meshes& meshes = *chunk.meshes;
+        if (!meshes.solid_on_gpu || !meshes.gpu_upload_pending) {
+            release_gpu_slot(res);
+            continue;
+        }
+        if (res.gpu_slot < 0 || res.gpu_version != chunk.mesh_version) {
+            to_submit.push_back(chunk_ptr);
+        }
+    }
+
+    if (!to_submit.empty()) {
+        if (m_gpu_readback_count == kGpuReadbackRing) poll_gpu_readbacks(true);
+        if (m_gpu_readback_count < kGpuReadbackRing) {
+            const size_t batch_size = std::min(to_submit.size(), static_cast<size_t>(kGpuBatchChunks));
+            submit_gpu_batch(std::vector<const Renderable_Chunk*>(to_submit.begin(), to_submit.begin() + batch_size));
+        }
+    }
+
+    // Видимость: бит s слота — секция s попала во фрустум и в ней есть геометрия. Пустые по квадам
+    // секции финализатор отбрасывает сам (count = 0), поэтому здесь счётчики не нужны.
+    std::fill(m_gpu_vis_cpu.begin(), m_gpu_vis_cpu.begin() + m_gpu_slot_high_water, 0u);
+    bool any_visible = false;
+    for (const Renderable_Chunk* chunk_ptr : chunks) {
+        const Renderable_Chunk& chunk = *chunk_ptr;
+        const Chunk_GL_Resources& res = m_chunk_gl_cache.at(chunk.position);
+        const Chunk_Meshes& meshes = *chunk.meshes;
+        if (res.gpu_slot < 0 || !meshes.solid_on_gpu || !meshes.gpu_upload_pending) continue;
+
+        uint32_t bits = 0;
+        for (size_t s = 0; s < meshes.sections.size(); ++s) {
+            if (!meshes.sections[s].has_geometry || !chunk.section_visible[s]) continue;
+            bits |= 1u << s;
+            // Статистика: число квадов берём из последнего полученного readback'а (с задержкой).
+            const uint32_t quads = std::min(m_gpu_quad_counts[static_cast<size_t>(res.gpu_slot) * 4 + s],
+                                            static_cast<uint32_t>(kGpuQuadCap));
+            ++m_last_rendered_section_count;
+            m_last_rendered_triangle_count += static_cast<size_t>(quads) * 2;
+        }
+        m_gpu_vis_cpu[res.gpu_slot] = bits;
+        if (bits != 0) {
+            any_visible = true;
+            ++m_last_rendered_chunk_count;
+        }
+    }
+    if (!any_visible) return;
+
+    // Финализация: команда DrawArraysIndirect на каждую секцию пула (count = квады * 6, если видна).
+    const int total_sections = m_gpu_slot_high_water * 4;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_vis_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(m_gpu_slot_high_water * sizeof(uint32_t)),
+                    m_gpu_vis_cpu.data());
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    glUseProgram(m_gpu_finalize_program);
+    glUniform1i(m_gpu_loc_section_total, total_sections);
+    glUniform1i(m_gpu_loc_finalize_quad_cap, kGpuQuadCap);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_gpu_counts_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_vis_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_gpu_cmd_ssbo);
+    glDispatchCompute(static_cast<GLuint>((total_sections + 63) / 64), 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+
+    // Отрисовка: вершины разворачиваются из квадов в вершинном шейдере, атрибутов нет.
+    m_gpu_terrain_shader_ptr->use();
+    m_gpu_terrain_shader_ptr->set_mat4("model", glm::mat4(1.0f));
+    m_gpu_terrain_shader_ptr->set_mat4("view", view);
+    m_gpu_terrain_shader_ptr->set_mat4("projection", projection);
+    m_gpu_terrain_shader_ptr->set_int("u_quad_cap", kGpuQuadCap);
+    m_gpu_terrain_shader_ptr->set_int("textureAtlas", 0);
+    m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
+    m_gpu_terrain_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
+    m_blocks_atlas_ptr->bind(0);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_quads_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_gpu_rects_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, m_gpu_origins_ssbo);
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpu_cmd_ssbo);
+    glBindVertexArray(m_gpu_section_vao);
+    glMultiDrawArraysIndirect(GL_TRIANGLES, nullptr, total_sections, 0);
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
 void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
                             const glm::mat4& view,
                             const glm::mat4& projection,
@@ -391,7 +939,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         auto& gl_res = m_chunk_gl_cache[chunk.position];
 
         if (!gl_res.is_valid || gl_res.mesh_version != chunk.mesh_version) {
-            upload_mesh(gl_res.solid_vao, gl_res.solid_vbo, gl_res.solid_count, chunk.meshes->solid);
+            upload_terrain_mesh(gl_res.solid_vao, gl_res.solid_vbo, gl_res.solid_count, chunk.meshes->solid);
             upload_mesh(gl_res.flora_vao, gl_res.flora_vbo, gl_res.flora_count, chunk.meshes->flora);
             upload_mesh(gl_res.liquid_vao, gl_res.liquid_vbo, gl_res.liquid_count, chunk.meshes->liquid);
             gl_res.mesh_version = chunk.mesh_version;
@@ -416,9 +964,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
             if (!section.has_geometry || section.solid_count == 0 ||
-                !chunk.section_in_frustum[section_index]) {
+                !chunk.section_visible[section_index]) {
                 if (section.has_geometry && section.solid_count > 0 &&
-                    !chunk.section_in_frustum[section_index]) {
+                    !chunk.section_visible[section_index]) {
                     ++m_last_culled_section_count;
                 }
                 continue;
@@ -463,6 +1011,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         }
         transparent_chunks.push_back(chunk_ptr);
     }
+
+    // GPU-путь непрозрачной геометрии: тот же проход, что и CPU-солид, но квады строит видеокарта.
+    draw_solid_gpu(opaque_order, view, projection, ambient_intensity);
 
     // Second pass: now that this frame's opaque draw has written real occluder depth,
     // test every section selected by Chunk_Manager against it. This is what
@@ -520,7 +1071,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
             if (!section.has_geometry || section.solid_count == 0 ||
-                !chunk.section_in_frustum[section_index]) continue;
+                !chunk.section_visible[section_index]) continue;
 
             const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
             const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
@@ -599,7 +1150,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk->meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk->meshes->sections[section_index];
             if (!section.has_geometry || section.flora_count == 0 ||
-                !chunk->section_in_frustum[section_index]) continue;
+                !chunk->section_visible[section_index]) continue;
             draw_mesh_range(gl_res.flora_vao, section.flora_start, section.flora_count);
         }
     }
@@ -638,7 +1189,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         for (size_t section_index = 0; section_index < chunk->meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk->meshes->sections[section_index];
             if (!section.has_geometry || section.liquid_count == 0 ||
-                !chunk->section_in_frustum[section_index]) continue;
+                !chunk->section_visible[section_index]) continue;
             draw_mesh_range(gl_res.liquid_vao, section.liquid_start, section.liquid_count);
         }
     }

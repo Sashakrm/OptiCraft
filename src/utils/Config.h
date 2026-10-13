@@ -53,6 +53,12 @@ namespace Config {
     constexpr int decoration_overhang = 8;
     constexpr uint16_t seed =1327;
 
+    // Жидкости: длительность одного тика симуляции (как 1/20 с в Minecraft) и потолок числа
+    // обработанных клеток за кадр — чтобы затопление большой пещеры растянулось на несколько
+    // кадров, а не подвесило игру.
+    constexpr float fluid_tick_seconds = 0.05f;
+    constexpr int fluid_max_updates_per_frame = 1500;
+
     // Игрок
     constexpr float player_width = 0.6f;
     constexpr float player_height = 1.8f;
@@ -62,6 +68,8 @@ namespace Config {
     constexpr float player_gravity = -20.0f;
     constexpr int player_max_health = 20;
     constexpr float player_crouch_height = 1.5f;
+    constexpr float player_sneak_speed_multiplier = 0.3f;  // Shift: скорость ходьбы × это значение
+    constexpr float player_sneak_edge_drop = 0.6f;         // Shift: не шагать туда, где под ногами пусто глубже этого
     constexpr float player_fly_speed = 8.0f;
     // Падение (Survival): первые fall_damage_safe_height блоков падения — без урона (как в
     // Minecraft), дальше — fall_damage_per_block HP за каждый блок сверху.
@@ -231,6 +239,13 @@ namespace Config {
     constexpr float horse_flee_speed = 7.0f;
     constexpr float horse_invulnerable_seconds = 0.5f;
     constexpr float horse_death_seconds = 1.0f;
+    // Атака лошади (удар копытом/таран). Пока вызывается только вручную — см. Horse::attack.
+    constexpr float horse_attack_damage = 3.0f;        // базовый урон (HP)
+    constexpr float horse_attack_reach = 2.2f;         // до ближайшей точки хитбокса цели, блоков
+    constexpr float horse_attack_cooldown = 1.2f;      // секунды между ударами
+    constexpr float horse_attack_knockback = 6.0f;     // горизонтальный импульс цели
+    constexpr float horse_attack_speed_bonus = 0.35f;  // +урон за каждый блок/сек скорости (таран)
+    constexpr float horse_attack_max_damage = 10.0f;   // потолок урона
     constexpr float horse_respawn_delay = 60.0f;
     // Высота «седла» над ногами лошади, куда сажается игрок.
     constexpr float horse_seat_height = 1.15f;
@@ -238,6 +253,7 @@ namespace Config {
     constexpr float horse_taming_seconds = 5.0f;
     // Езда и дрифт. Скорости — блоки/сек, повороты — рад/сек, grip — скорость гашения
     // бокового скольжения (чем больше, тем «цепче»; при ручнике grip падает почти до нуля).
+    constexpr float horse_ride_jump_speed = 8.5f;    // начальная вертикальная скорость прыжка по пробелу (~1.8 блока)
     constexpr float horse_ride_max_speed = 13.0f;
     constexpr float horse_ride_reverse_speed = 3.0f;
     constexpr float horse_ride_accel = 12.0f;

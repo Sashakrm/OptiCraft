@@ -1,6 +1,6 @@
-#include "Raycast.h"
-#include "world/Chunk_Manager.h"
-#include "world/Block_Types.h"
+#include "physics/Raycast.h"
+#include "world/chunks/Chunk_Manager.h"
+#include "world/blocks/Block_Types.h"
 #include "utils/Config.h"
 
 #include <cmath>
@@ -57,7 +57,10 @@ Raycast_Hit Raycast::cast(const glm::vec3& origin,
         Block_Types block = chunk_manager.get_block_world(x, y, z);
         const auto& props = get_block_props(block);
 
-        if (block != Block_Types::Air && block != Block_Types::Water && props.is_solid) {
+        // Луч останавливается на твёрдых блоках И на флоре (трава, цветы, посевы): она не
+        // твёрдая для коллизий, но игрок должен мочь навести на неё и сломать.
+        const bool targetable = props.is_solid || props.mesh_style == Block_Mesh_Style::XStyle;
+        if (block != Block_Types::Air && block != Block_Types::Water && targetable) {
             result.hit = true;
             result.block_x = x;
             result.block_y = y;

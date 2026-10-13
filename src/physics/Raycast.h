@@ -2,7 +2,7 @@
 #define OPTICRAFT_RAYCAST_H
 
 #include <glm/glm.hpp>
-#include "world/Block_Types.h"
+#include "world/blocks/Block_Types.h"
 
 class Chunk_Manager;
 

@@ -1,5 +1,5 @@
-#include "Mob.h"
-#include "utils/Logger.h"
+#include "mobs/Mob.h"
+#include "utils/logging/Logger.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_map>
 #include <cmath>

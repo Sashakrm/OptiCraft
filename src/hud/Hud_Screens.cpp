@@ -1,5 +1,5 @@
-#include "Hud.h"
-#include "utils/Localization.h"
+#include "hud/Hud.h"
+#include "utils/text/Localization.h"
 #include <glad/gl.h>
 #include <algorithm>
 #include <cmath>
