@@ -125,8 +125,8 @@ const Command_Info k_commands[] = {
     {"fly",         "/fly",                                         "Toggle flying"},
     {"give",        "/give <block> [count]",                        "Give item (Survival)"},
     {"setblock",    "/setblock <x> <y> <z> <block>",                "Place a block (~ ok)"},
-    {"summon",      "/summon <pig|horse|cow> [count]",                  "Spawn mobs near you"},
-    {"breed",       "/breed <pig|cow|horse>",                       "Make all adult animals of a kind ready to breed"},
+    {"summon",      "/summon <pig|horse|cow|sheep|zombie|skeleton> [count]", "Spawn mobs near you"},
+    {"breed",       "/breed <pig|cow|sheep|horse>",                 "Make all adult animals of a kind ready to breed"},
     {"clear",       "/clear",                                       "Remove dropped items"},
 };
 
@@ -346,20 +346,27 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
         return true;
     }
 
-    // --- /summon pig [count] --------------------------------------------------------
+    // --- /summon <вид> [count] --------------------------------------------------------
     if (cmd == "summon") {
         std::string what = args.size() >= 2 ? to_lower(args[1]) : "pig";
-        const bool is_pig = what == "pig" || what == "pigs";
-        const bool is_horse = what == "horse" || what == "horses";
-        const bool is_cow = what == "cow" || what == "cows";
-        if (!is_pig && !is_horse && !is_cow) { reply = "Usage: /summon <pig|horse|cow> [count]"; return false; }
+        if (what.size() > 1 && what.back() == 's') what.pop_back(); // pigs -> pig, skeletons -> skeleton
+        const char* usage = "Usage: /summon <pig|horse|cow|sheep|zombie|skeleton> [count]";
+        if (what != "pig" && what != "horse" && what != "cow" && what != "sheep" && what != "zombie" && what != "skeleton") {
+            reply = usage;
+            return false;
+        }
         int count = 1;
         if (args.size() >= 3 && !parse_int(args[2], count)) { reply = "Invalid count: " + args[2]; return false; }
         count = std::clamp(count, 1, 50);
-        const int spawned = is_horse ? game.summon_horses(count) : is_cow ? game.summon_cows(count) : game.summon_pigs(count);
-        const char* noun = is_horse ? "horse" : is_cow ? "cow" : "pig";
-        if (spawned <= 0) { reply = std::string("Failed to summon (") + noun + " model missing?)"; return false; }
-        reply = "Summoned " + std::to_string(spawned) + " " + noun + (spawned == 1 ? "" : "s");
+        int spawned = 0;
+        if (what == "pig") spawned = game.summon_pigs(count);
+        else if (what == "horse") spawned = game.summon_horses(count);
+        else if (what == "cow") spawned = game.summon_cows(count);
+        else if (what == "sheep") spawned = game.summon_sheep(count);
+        else if (what == "zombie") spawned = game.summon_zombies(count);
+        else spawned = game.summon_skeletons(count);
+        if (spawned <= 0) { reply = "Failed to summon " + what + " (model missing?)"; return false; }
+        reply = "Summoned " + std::to_string(spawned) + " " + what + (spawned == 1 ? "" : "s");
         return true;
     }
 
@@ -427,9 +434,9 @@ std::vector<std::string> get_command_completions(const std::string& raw_input) {
         } else if (cmd == "time" && word_index == 2 && to_lower(tokens[1]) == "set") {
             candidates = {"day", "noon", "sunset", "night", "midnight", "sunrise"};
         } else if (cmd == "summon" && word_index == 1) {
-            candidates = {"pig", "horse", "cow"};
+            candidates = {"pig", "horse", "cow", "sheep", "zombie", "skeleton"};
         } else if (cmd == "breed" && word_index == 1) {
-            candidates = {"pig", "horse", "cow"};
+            candidates = {"pig", "horse", "cow", "sheep"};
         } else if (cmd == "help" && word_index == 1) {
             for (const Command_Info& info : k_commands) candidates.push_back(info.name);
         }

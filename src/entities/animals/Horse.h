@@ -23,6 +23,7 @@
 #include "entities/animals/ai/Horse_AI.h"
 #include "mobs/Mob.h"
 #include "entities/animals/Breeding.h"
+#include "physics/Liquid_Physics.h"
 #include "world/blocks/Block_Types.h"
 #include "utils/Config.h"
 
@@ -40,7 +41,8 @@ struct Horse_Ride_Input {
     glm::vec3 wish_dir{0.0f};  // горизонтальный единичный вектор желаемого курса; (0,0,0) — не рулить
     float throttle = 0.0f;     // +1 — W (газ), -1 — S (тормоз/задний ход)
     bool jump = false;         // пробел нажат В ЭТОМ кадре (фронт, не удержание) — прыжок
-    bool handbrake = false;    // Ctrl — ручник: сцепление падает, лошадь скользит боком (дрифт)
+    bool handbrake = false;    // Ctrl, удержание — ручник: сцепление падает, лошадь скользит боком (дрифт)
+    bool sprint_toggle = false; // Ctrl, короткий клик — переключить бег (фронт, не удержание)
 };
 
 // Результат удара лошади. Horse не знает, кого бьёт (Player/моб): Game применяет результат сам,
@@ -68,6 +70,7 @@ public:
     bool has_rider() const { return m_has_rider; }
     bool is_tamed() const { return m_tamed; }
     bool is_drifting() const { return m_drifting; }
+    bool is_sprinting() const { return m_sprinting; }
     // Скорость по земле, блоков/сек (для отладки/HUD).
     float get_speed() const { return glm::length(m_ride_velocity); }
     // Посадить всадника. false — уже занята или умирает. Дикая переходит в Taming, своя — в Ridden.
@@ -110,6 +113,8 @@ public:
     glm::vec3 get_hitbox_max() const;
     void compute_hitbox(glm::vec3& out_min, glm::vec3& out_max) const;
     bool take_damage(float amount, const glm::vec3& attacker_position);
+    // Урон среды (утопление): без отбрасывания. Возвращает true, если умерла.
+    bool take_drowning_damage(float amount);
     float get_health() const { return m_health; }
     bool is_dying() const { return m_dying; }
     bool kill() {
@@ -171,7 +176,9 @@ private:
     glm::vec3 m_ride_velocity{0.0f}; // горизонтальная скорость (XZ); общая и для ходьбы, и для езды
     float m_vertical_velocity = 0.0f;
     bool m_on_ground = false;
+    Liquid_Physics::Breath m_breath;   // лошадь плавает; воздух тратится, пока голова под водой
     bool m_drifting = false;
+    bool m_sprinting = false;   // бег: включается кликом Ctrl, держится, пока зажат W
     float m_yaw_rate = 0.0f;   // рад/сек, для наклона корпуса
     float m_roll = 0.0f;       // градусы, сглаженный наклон
     float m_hop_timer = 0.0f;

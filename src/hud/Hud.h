@@ -143,6 +143,8 @@ struct Hud_Panel_Layout {
     std::vector<Hud_Panel_Progress> progress;
     bool player_preview = false;
     Hud_Rect preview_rect;           // в GUI-пикселях панели
+    // true — модель игрока рисуется 3D поверх рамки (Game), плоский силуэт не нужен.
+    bool preview_model = false;
     // Листание страниц Creative: две кнопки и подпись между ними.
     bool page_controls = false;
     glm::vec2 page_prev_pos{0, 0};
@@ -203,9 +205,11 @@ public:
     // --- игровой HUD ---------------------------------------------------------
     void draw_crosshair(int window_width, int window_height, bool target_hit);
     // Сердца и куриные ножки над хотбаром (только Survival).
+    // air/max_air — воздух под водой: ряд пузырьков рисуется, только если air < max_air.
     void draw_player_status(int window_width, int window_height,
                             int health, int max_health,
-                            int food, int max_food);
+                            int food, int max_food,
+                            float air = 0.0f, float max_air = 0.0f);
     // Тонкая полоска под прицелом: прогресс ломания блока / поедания еды (fraction 0..1).
     void draw_action_progress(int window_width, int window_height, float fraction, const glm::vec4& color);
     void draw_hotbar(int window_width, int window_height,

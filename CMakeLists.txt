@@ -38,10 +38,13 @@ set(SOURCES
         ${SRC_DIR}/core/app/Application.cpp
         ${SRC_DIR}/core/game/Game.cpp
         ${SRC_DIR}/core/game/Day_Night_Cycle.cpp
+        ${SRC_DIR}/core/game/Tick.cpp
+        ${SRC_DIR}/mobs/Mobs_Update.cpp
 
         # entities
         ${SRC_DIR}/entities/player/Camera.cpp
         ${SRC_DIR}/entities/player/Player.cpp
+        ${SRC_DIR}/entities/player/Player_Model.cpp
         ${SRC_DIR}/entities/player/Inventory.cpp
         ${SRC_DIR}/entities/items/Dropped_Item.cpp
 
@@ -82,6 +85,7 @@ set(SOURCES
 
         # physics
         ${SRC_DIR}/physics/Raycast.cpp
+        ${SRC_DIR}/physics/Liquid_Physics.cpp
 
         # hud
         ${SRC_DIR}/hud/Hud.cpp
@@ -95,13 +99,13 @@ set(SOURCES
         # entities/AI
         ${SRC_DIR}/entities/animals/ai/Pig_AI.cpp
         ${SRC_DIR}/entities/animals/Pig.cpp
-        ${SRC_DIR}/entities/animals/Cow.cpp
+        ${SRC_DIR}/entities/animals/Passive_Animal.cpp
+        ${SRC_DIR}/entities/hostile/Hostile_Mob.cpp
         ${SRC_DIR}/entities/animals/ai/Horse_AI.cpp
         ${SRC_DIR}/entities/animals/Horse.cpp
 )
 
 set(PLATFORM_SOURCES
-        ${SRC_DIR}/core/app/Events.cpp
         ${SRC_DIR}/core/app/Window.cpp
         ${SRC_DIR}/world/blocks/Block_Types.cpp
         ${SRC_DIR}/rendering/atlas/Texture.cpp
@@ -124,8 +128,8 @@ add_executable(${PROJECT_NAME}
 target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/commands/Command_System.h
         ${SRC_DIR}/core/app/Application.h
-        ${SRC_DIR}/core/app/Events.h
         ${SRC_DIR}/core/game/Game.h
+        ${SRC_DIR}/core/game/Tick.h
         ${SRC_DIR}/core/app/Window.h
 
         ${SRC_DIR}/entities/player/Camera.h
@@ -176,11 +180,14 @@ target_sources(${PROJECT_NAME} PRIVATE
 
         ${SRC_DIR}/mobs/Mob_Model.h
         ${SRC_DIR}/mobs/Mob.h
+        ${SRC_DIR}/mobs/Mobs_Update.h
 
         ${SRC_DIR}/entities/animals/ai/Pig_AI.h
         ${SRC_DIR}/entities/animals/Pig.h
         ${SRC_DIR}/entities/animals/ai/Horse_AI.h
         ${SRC_DIR}/entities/animals/Horse.h
+        ${SRC_DIR}/entities/animals/Passive_Animal.h
+        ${SRC_DIR}/entities/hostile/Hostile_Mob.h
 )
 
 # =============== Флаги оптимизации ===============

@@ -118,6 +118,17 @@ void Horse::compute_hitbox(glm::vec3& out_min, glm::vec3& out_max) const {
 glm::vec3 Horse::get_hitbox_min() const { glm::vec3 lo, hi; compute_hitbox(lo, hi); return lo; }
 glm::vec3 Horse::get_hitbox_max() const { glm::vec3 lo, hi; compute_hitbox(lo, hi); return hi; }
 
+bool Horse::take_drowning_damage(float amount) {
+    if (m_dying || amount <= 0.0f) return false;
+    m_health -= amount;
+    m_hurt_flash_timer = 0.4f;
+    if (m_health <= 0.0f) {
+        kill();
+        return true;
+    }
+    return false;
+}
+
 bool Horse::take_damage(float amount, const glm::vec3& attacker_position) {
     if (m_dying || amount <= 0.0f || m_invulnerable_timer > 0.0f) return false;
 
@@ -195,6 +206,7 @@ bool Horse::mount() {
     if (m_dying || m_has_rider) return false;
 
     m_has_rider = true;
+    m_sprinting = false;
     m_throw_request = false;
     m_taming_time = 0.0f;
     m_ride_velocity = glm::vec3(0.0f);
@@ -209,6 +221,7 @@ void Horse::dismount(const glm::vec3& rider_position) {
     m_has_rider = false;
     m_seat_shake = glm::vec3(0.0f);
     m_drifting = false;
+    m_sprinting = false;
     m_ride_velocity *= 0.3f; // пусть немного докатится
 
     if (m_tamed) {
@@ -375,6 +388,10 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
         m_on_ground = false;
     }
 
+    // Бег: клик Ctrl переключает; без W бег сам выключается (бегут только вперёд).
+    if (input.sprint_toggle) m_sprinting = !m_sprinting;
+    if (input.throttle <= 0.0f) m_sprinting = false;
+
     const float speed_before = glm::length(m_ride_velocity);
     const bool can_drift = input.handbrake && speed_before > Config::horse_drift_min_speed;
 
@@ -396,7 +413,8 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
     glm::vec3 lateral = m_ride_velocity - forward * speed_along;
 
     // --- Газ / тормоз ---
-    const float max_forward = Config::horse_ride_max_speed * energy_factor;
+    const float max_forward = Config::horse_ride_max_speed * energy_factor *
+                              (m_sprinting ? Config::horse_sprint_speed_multiplier : 1.0f);
     const float accel_scale = input.handbrake ? 0.5f : 1.0f;
     if (input.throttle > 0.0f) {
         if (speed_along < max_forward) {
@@ -430,7 +448,8 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
                  glm::length(lateral) > 3.0f;
 
     // --- Усталость от езды ---
-    m_ai.drain_energy(glm::length(m_ride_velocity) * Config::horse_ride_energy_drain * dt);
+    const float sprint_drain = m_sprinting ? Config::horse_sprint_energy_multiplier : 1.0f;
+    m_ai.drain_energy(glm::length(m_ride_velocity) * Config::horse_ride_energy_drain * sprint_drain * dt);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -439,11 +458,21 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
 void Horse::integrate(float dt, const Chunk_Manager& chunk_manager) {
     glm::vec3 position = m_mob.get_position();
 
-    m_vertical_velocity = std::max(Config::mob_max_fall_speed, m_vertical_velocity + Config::mob_gravity * dt);
+    // Вода: лошадь плывёт (всплывает), течение сносит её, воздух тратится под водой.
+    const Liquid_Physics::Sample wet = Liquid_Physics::sample(chunk_manager, position, Config::horse_height);
+    if (const int events = m_breath.tick(dt, wet.head_in_liquid, Config::breath_max_seconds)) {
+        take_drowning_damage(static_cast<float>(events) * Config::drown_damage);
+    }
+    if (wet.body_in_liquid) {
+        m_vertical_velocity = Liquid_Physics::swim_vertical_velocity(wet, true, false, m_vertical_velocity, dt);
+    } else {
+        m_vertical_velocity = std::max(Config::mob_max_fall_speed, m_vertical_velocity + Config::mob_gravity * dt);
+    }
 
     glm::vec3 horizontal = m_ride_velocity + m_knockback;
     m_knockback *= std::exp(-6.0f * dt);
     if (glm::length(m_knockback) < 0.05f) m_knockback = glm::vec3(0.0f);
+    horizontal = horizontal * Liquid_Physics::horizontal_drag(wet) + wet.flow;
 
     bool blocked = false;
     glm::vec3 target = position;

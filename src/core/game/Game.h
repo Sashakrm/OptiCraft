@@ -25,9 +25,9 @@
 #include "entities/player/Inventory.h"
 #include "world/blocks/Block_Interaction.h"
 #include "core/game/Day_Night_Cycle.h"
-#include "entities/animals/Pig.h"
-#include "entities/animals/Horse.h"
-#include "entities/animals/Cow.h"
+#include "core/game/Tick.h"
+#include "mobs/Mobs_Update.h"
+#include "entities/player/Player_Model.h"
 #include "world/crafting/Crop_Manager.h"
 #include "entities/items/Dropped_Item.h"
 
@@ -48,9 +48,16 @@ private:
     // Свиньи в мире — держится после m_window_ptr по объявлению, поэтому
     // уничтожается ДО разрушения GL-контекста (см. предупреждение о времени
     // жизни в src/mobs/Mob_Model.h — иначе деструктор Mob упадёт на мёртвом контексте).
-    std::vector<std::unique_ptr<Pig>> m_pigs;
-    std::vector<std::unique_ptr<Horse>> m_horses;
-    std::vector<std::unique_ptr<Cow>> m_cows;
+    Mobs_Update m_mobs;  // все животные и враги мира; см. mobs/Mobs_Update.h
+    // Ctrl у лошади: короткий клик — бег, удержание — дрифт. Состояние нужно, чтобы отличить клик от удержания.
+    bool m_ctrl_was_held = false;
+    float m_ctrl_hold_time = 0.0f;
+    // 3D-модель игрока (мир от первого лица и превью в инвентаре); без файла — плоский силуэт.
+    Player_Model m_player_model;
+    void draw_inventory_model_preview(const Hud_Panel_Layout& layout);
+    // Импульс от инструмента (ПКМ): время до следующего использования.
+    float m_tool_impulse_cooldown = 0.0f;
+    void handle_tool_impulse(float delta_time);
     // Рост посевов на грядках (см. Crop_Manager.h); сохраняется в crops.txt рядом с миром.
     std::unique_ptr<Crop_Manager> m_crops_ptr;
     // Выпавшие предметы (блоки, мясо...). Не держит GL-ресурсов — рисуется через Renderer,
@@ -98,6 +105,7 @@ private:
     // Реальное время (20 минут по умолчанию — см. Config), а не игровые тики: пользователь
     // явно попросил именно длительность в реальных минутах, не привязанную к TPS/FPS.
     Day_Night_Cycle m_day_night_cycle;
+    Tick_Scheduler m_tick;  // централизованные тики (см. Tick.h)
 
     // Текущая дальность прорисовки в чанках. Стартует с Config::chunk_load_radius
     // и меняется из меню настроек.
@@ -121,38 +129,8 @@ private:
     // Находится ли ТОЧКА ГЛАЗ игрока внутри жидкости. Проверяется именно камера,
     // а не ноги: стоя по пояс в воде экран синим не заливает.
     bool is_camera_underwater() const;
-    // Если свиней в мире меньше Config::min_pig_count — досоздаёт недостающих
-    // рядом с игроком (случайное смещение по XZ в кольце
-    // [pig_spawn_radius_min; pig_spawn_radius_max], Y — как у игрока: террейн
-    // под ногами свиньи не сэмплируется, см. предупреждение в Pig.h).
-    void spawn_missing_pigs(const glm::vec3& player_position);
-    void spawn_missing_cows(const glm::vec3& player_position);
-    float m_cow_respawn_cooldown = 0.0f;
-    // Размножение животных: ищет влюблённые пары, ведёт их друг к другу и рождает детёнышей.
-    void update_breeding();
     // Урожай: выпавшие предметы при сборе ростка и исчезновение дикой грядки.
     void handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block);
-
-    // --- Лошади -----------------------------------------------------------------
-    // Появление — как у свиней (держим Config::min_horse_count рядом с игроком, после убийства
-    // пауза Config::horse_respawn_delay), но лошадь ставится на поверхность травы, а не на Y игрока.
-    void spawn_missing_horses(const glm::vec3& player_position);
-    // Апдейт всех лошадей + посадка/высадка/синхронизация игрока с седлом.
-    void update_horses(float delta_time);
-    void mount_horse(Horse& horse);
-    // place_beside=true — поставить игрока рядом с лошадью (обычная высадка); false — оставить
-    // где стоит (его уже телепортировали/респавнили).
-    void dismount_horse(bool place_beside);
-    Horse* m_ridden_horse = nullptr;      // лошадь, на которой сидит игрок (указатель стабилен: unique_ptr)
-    glm::vec3 m_last_seat_position{0.0f}; // куда мы сами поставили игрока в прошлом кадре — чтобы заметить телепорт
-    Horse_Ride_Input m_horse_ride_input;  // ввод всадника, собирается в handle_gameplay_input
-    bool m_dismount_requested = false;
-    float m_horse_respawn_cooldown = 0.0f;
-
-    // Бой: пауза между ударами и задержка респавна свиней после убийства (иначе мясо можно
-    // было бы фармить бесконечно — новая свинья появлялась бы в тот же кадр).
-    float m_attack_cooldown = 0.0f;
-    float m_pig_respawn_cooldown = 0.0f;
 
     // --- Чат и команды ----------------------------------------------------------
     static constexpr size_t k_chat_log_capacity = 100;   // хранится в логе
@@ -263,6 +241,11 @@ public:
     void handle_gameplay_input();
     // simulation_active=false — полная пауза (меню паузы). player_actions=false — мир живёт,
     // но игрок стоит без управления (открыт инвентарь/контейнер/чат): физика, мобы, время идут.
+    void register_tick_systems();  // регистрирует все системы, которые живут в тиках
+    // Помощники для мобов: контекст игрока, проверка места, применение результата к игроку.
+    Mob_Player_View mob_view() const;
+    Mob_Blocked_Fn mob_blocked_fn() const;
+    void apply_mob_result(const Mob_Result& result);
     void update_gameplay(float delta_time, bool simulation_active, bool player_actions = true);
     void render_gameplay(bool show_gameplay_hud);
     // --- Чат (клавиша T или /) -----------------------------------------------------
@@ -288,7 +271,7 @@ public:
     int get_day_time_ticks() const;
     void set_day_time_ticks(int ticks);
     void add_day_time_ticks(int ticks);
-    int kill_all_mobs();
+    int kill_all_mobs() { return m_mobs.kill_all(); }
     void kill_player();
     void goto_spawn() { teleport_player(m_spawn_position); }
     void toggle_fly() { m_player_ptr->toggle_flying(); }
@@ -296,13 +279,16 @@ public:
     // Возвращает, сколько предметов реально влезло в инвентарь (только Survival).
     int give_item(Block_Types type, int count);
     bool set_block_at(int x, int y, int z, Block_Types type);
-    int summon_pigs(int count);
-    int summon_cows(int count);
-    // Команда /breed: сразу «влюбляет» всех взрослых животных вида (pig|cow|horse) — удобно проверять
-    // размножение без кормёжки. Возвращает, сколько животных затронуто.
-    int breed_all(const std::string& species);
-    int summon_horses(int count);
-    bool is_riding_horse() const { return m_ridden_horse != nullptr; }
+    int summon_pigs(int count) { return m_mobs.summon_pigs(count, get_player_position()); }
+    int summon_cows(int count) { return m_mobs.summon_cows(count, get_player_position()); }
+    int summon_horses(int count) { return m_mobs.summon_horses(count, get_player_position()); }
+    int summon_sheep(int count) { return m_mobs.summon_sheep(count, get_player_position()); }
+    int summon_zombies(int count) { return m_mobs.summon_zombies(count, get_player_position()); }
+    int summon_skeletons(int count) { return m_mobs.summon_skeletons(count, get_player_position()); }
+    // Команда /breed: сразу «влюбляет» всех взрослых животных вида (pig|cow|horse).
+    int breed_all(const std::string& species) { return m_mobs.breed_all(species); }
+    bool is_riding_horse() const { return m_mobs.is_riding(); }
+
     int clear_dropped_items();
     void run_command(const std::string& line_without_slash);
 

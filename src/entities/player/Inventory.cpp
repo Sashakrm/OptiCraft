@@ -218,6 +218,43 @@ void Inventory::click_craft_output() {
     else m_carried.count += result.count;
 }
 
+Item_Stack Inventory::get_armor_slot(size_t index) const {
+    return index < k_armor_count ? m_armor[index] : Item_Stack{};
+}
+
+namespace {
+    // Подходит ли предмет в слот брони с таким индексом.
+    bool fits_armor_slot(const Item_Stack& stack, size_t index) {
+        if (stack.is_empty()) return true;
+        return get_block_props(stack.type).armor_slot == static_cast<Armor_Slot>(index + 1);
+    }
+}
+
+void Inventory::click_armor_slot(size_t index, bool right) {
+    if (index >= k_armor_count || m_mode != Game_Mode::Survival) return;
+    if (!fits_armor_slot(m_carried, index)) return;
+    if (right) right_click_stack(m_armor[index], m_carried);
+    else left_click_stack(m_armor[index], m_carried);
+}
+
+int Inventory::armor_points() const {
+    if (m_mode != Game_Mode::Survival) return 0;
+    int points = 0;
+    for (const Item_Stack& piece : m_armor) {
+        if (!piece.is_empty()) points += get_block_props(piece.type).armor_points;
+    }
+    return points;
+}
+
+void Inventory::damage_armor(int amount) {
+    if (m_mode != Game_Mode::Survival || amount <= 0) return;
+    for (Item_Stack& piece : m_armor) {
+        if (piece.is_empty()) continue;
+        piece.damage += amount;
+        if (piece.damage >= get_block_props(piece.type).max_durability) piece = Item_Stack{};
+    }
+}
+
 void Inventory::return_craft_to_inventory() {
     for (Item_Stack& cell : m_craft_grid) {
         if (!cell.is_empty()) try_add_stack(cell);
@@ -387,6 +424,11 @@ std::string Inventory::serialize() const {
         out << "s " << i << " " << static_cast<int>(m_survival_storage[i].type) << " " << m_survival_storage[i].count << "\n";
         if (m_survival_storage[i].damage > 0) out << "sd " << i << " " << m_survival_storage[i].damage << "\n";
     }
+    for (size_t i = 0; i < m_armor.size(); ++i) {
+        if (m_armor[i].is_empty()) continue;
+        out << "a " << i << " " << static_cast<int>(m_armor[i].type) << "\n";
+        if (m_armor[i].damage > 0) out << "ad " << i << " " << m_armor[i].damage << "\n";
+    }
     return out.str();
 }
 
@@ -408,6 +450,15 @@ void Inventory::deserialize(const std::string& text) {
             if (i < list.size() && id > 0 && id < static_cast<int>(k_max_block_types) && count > 0) {
                 list[i] = Item_Stack{static_cast<Block_Types>(id), std::min(count, max_stack_for(static_cast<Block_Types>(id)))};
             }
+        } else if (tag == "a") {
+            size_t i = 0; int id = 0; in >> i >> id;
+            if (i < m_armor.size() && id > 0 && id < static_cast<int>(k_max_block_types) &&
+                fits_armor_slot(Item_Stack{static_cast<Block_Types>(id), 1}, i)) {
+                m_armor[i] = Item_Stack{static_cast<Block_Types>(id), 1};
+            }
+        } else if (tag == "ad") {
+            size_t i = 0; int dmg = 0; in >> i >> dmg;
+            if (i < m_armor.size() && !m_armor[i].is_empty()) m_armor[i].damage = std::max(0, dmg);
         } else if (tag == "hd" || tag == "sd") {
             size_t i = 0; int dmg = 0; in >> i >> dmg;
             std::vector<Item_Stack>& list = tag == "hd" ? m_survival_hotbar : m_survival_storage;

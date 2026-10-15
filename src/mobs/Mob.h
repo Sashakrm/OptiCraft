@@ -77,13 +77,19 @@ public:
     // перед m_window_ptr.reset()). Кэш — static-переменная внутри load(),
     // у неё static storage duration: без явной очистки она живёт до конца
     // процесса и держит свои shared_ptr<Mob_Model> дольше, чем сами Mob —
-    // очистка одних только Mob (например Game::m_pigs) НЕ освобождает
+    // очистка одних только Mob (например Mobs_Update::m_pigs) НЕ освобождает
     // модель, пока жив кэш. Столкнулись с этим на практике: без вызова
     // деструктор Mob_Model отрабатывал в exit-хендлерах ПОСЛЕ
     // glfwTerminate() и падал на glDeleteVertexArrays с мёртвым контекстом.
     static void clear_model_cache();
 
+    // Скрыть кости, в имени которых есть token (без учёта регистра), вместе со всеми их потомками.
+    // Скрытая кость схлопывается в точку сустава, поэтому её геометрия не рисуется. Нужно для
+    // вида от первого лица: голова модели игрока не должна загораживать камеру. Пустая строка — выключить.
+    void set_hidden_bones_matching(const std::string& token) { m_hidden_bone_token = token; }
+
 private:
+    std::string m_hidden_bone_token;
     std::shared_ptr<Mob_Model> m_model;
 
     glm::vec3 m_position{0.0f};

@@ -433,7 +433,8 @@ void Hud::draw_crosshair(int window_width, int window_height, bool target_hit) {
 }
 
 void Hud::draw_player_status(int window_width, int window_height,
-                             int health, int max_health, int food, int max_food) {
+                             int health, int max_health, int food, int max_food,
+                             float air, float max_air) {
     begin_ui(window_width, window_height);
     const float s = static_cast<float>(get_gui_scale(window_width, window_height));
     const double now = glfwGetTime();
@@ -460,6 +461,22 @@ void Hud::draw_player_status(int window_width, int window_height,
             draw_sprite("heart_full", x, y, 9.0f * s, 9.0f * s);
         } else if (health > lo + hp_per_heart / 2 - (hp_per_heart % 2 == 0 ? 0 : 0) && health > lo) {
             draw_sprite("heart_half", x, y, 9.0f * s, 9.0f * s);
+        }
+    }
+
+    // Пузырьки воздуха над сердцами: показываем, только когда голова под водой и воздух не полный.
+    if (max_air > 0.0f && air < max_air) {
+        const float bubbles_y = row_y - 10.0f * s;
+        const float units = max_air / static_cast<float>(heart_units);
+        for (int i = 0; i < heart_units; ++i) {
+            const float x = hotbar_x + 182.0f * s - 9.0f * s - i * 8.0f * s;
+            draw_rect(x, bubbles_y, 9.0f * s, 9.0f * s, glm::vec4(0.05f, 0.12f, 0.25f, 0.85f));
+            if (air >= (i + 1) * units) {
+                draw_rect(x + 2.0f * s, bubbles_y + 2.0f * s, 5.0f * s, 5.0f * s, glm::vec4(0.55f, 0.82f, 1.0f, 1.0f));
+            } else if (air > i * units) {
+                draw_rect(x + 2.0f * s, bubbles_y + 2.0f * s, 5.0f * s * (air - i * units) / units,
+                          5.0f * s, glm::vec4(0.55f, 0.82f, 1.0f, 1.0f));
+            }
         }
     }
 
@@ -762,9 +779,12 @@ void Hud::draw_panel_screen(int window_width, int window_height,
         const Hud_Rect& r = layout.preview_rect;
         draw_nine_slice("field", panel.x + r.x * s, panel.y + r.y * s, r.w * s, r.h * s, 2.0f, s,
                         glm::vec4(0.55f, 0.58f, 0.62f, 1.0f));
-        const float fig = 2.0f * s;
-        draw_sprite("player", std::floor(panel.x + (r.x + (r.w - 16.0f * 2.0f) * 0.5f) * s),
-                    std::floor(panel.y + (r.y + (r.h - 32.0f * 2.0f) * 0.5f) * s), 16.0f * fig, 32.0f * fig);
+        // Без 3D-модели — плоский силуэт (фолбэк); с моделью её рисует Game поверх этой рамки.
+        if (!layout.preview_model) {
+            const float fig = 2.0f * s;
+            draw_sprite("player", std::floor(panel.x + (r.x + (r.w - 16.0f * 2.0f) * 0.5f) * s),
+                        std::floor(panel.y + (r.y + (r.h - 32.0f * 2.0f) * 0.5f) * s), 16.0f * fig, 32.0f * fig);
+        }
     }
 
     // Фоны слотов и прогресс.

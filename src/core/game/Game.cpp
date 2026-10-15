@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "utils/logging/Logger.h"
 #include "world/crafting/Smelting.h"
@@ -115,6 +117,7 @@ bool Game::initialize() {
     m_application_ptr->initialize();
 
     m_is_running = true;
+    register_tick_systems();
     LOG_INFO("Game initialized successfully");
     return true;
 }
@@ -192,7 +195,7 @@ void Game::handle_gameplay_input() {
         return;
     }
 
-    if (m_input_ptr->is_key_pressed(GLFW_KEY_F1) && !m_ridden_horse) {
+    if (m_input_ptr->is_key_pressed(GLFW_KEY_F1) && !m_mobs.is_riding()) {
         m_player_ptr->toggle_flying();
     }
 
@@ -229,7 +232,7 @@ void Game::handle_gameplay_input() {
 
     auto move_input = m_input_ptr->get_movement_input();
 
-    if (m_ridden_horse) {
+    if (m_mobs.is_riding()) {
         // Верхом WASD/пробел/Ctrl управляют лошадью, а не игроком: руль — к направлению взгляда
         // (S не рулит, только тормозит/сдаёт назад), ПРОБЕЛ — прыжок, CTRL — ручник (дрифт), SHIFT — слезть.
         glm::vec3 front = m_camera_ptr->get_front();
@@ -242,18 +245,32 @@ void Game::handle_gameplay_input() {
         glm::vec3 wish = front * std::max(move_input.forward, 0.0f) + right * move_input.strafe;
         if (glm::length(wish) > 0.001f) wish = glm::normalize(wish);
 
-        m_horse_ride_input.wish_dir = wish;
-        m_horse_ride_input.throttle = move_input.forward;
-        m_horse_ride_input.jump = m_input_ptr->is_key_pressed(GLFW_KEY_SPACE);
+        Horse_Ride_Input ride;
+        ride.wish_dir = wish;
+        ride.throttle = move_input.forward;
+        ride.jump = m_input_ptr->is_key_pressed(GLFW_KEY_SPACE);
         // Ручник (дрифт) — левый Ctrl, пробел — прыжок.
-        m_horse_ride_input.handbrake = m_input_ptr->is_key_held(GLFW_KEY_LEFT_CONTROL);
-        if (m_input_ptr->is_key_pressed(GLFW_KEY_LEFT_SHIFT)) m_dismount_requested = true;
+        // Ctrl: короткий клик — переключает бег, удержание дольше порога — ручник (дрифт).
+        const bool ctrl_held = m_input_ptr->is_key_held(GLFW_KEY_LEFT_CONTROL);
+        if (ctrl_held) m_ctrl_hold_time += m_delta_time;
+        if (!ctrl_held && m_ctrl_was_held && m_ctrl_hold_time < Config::horse_sprint_tap_max_seconds) {
+            ride.sprint_toggle = true;
+        }
+        if (!ctrl_held) m_ctrl_hold_time = 0.0f;
+        m_ctrl_was_held = ctrl_held;
+        ride.handbrake = ctrl_held && m_ctrl_hold_time >= Config::horse_drift_hold_seconds;
+        m_mobs.set_ride_input(ride);
+        if (m_input_ptr->is_key_pressed(GLFW_KEY_LEFT_SHIFT)) m_mobs.request_dismount();
 
         m_player_ptr->set_movement_input({0.0f, 0.0f, false, false}, m_camera_ptr->get_front(), m_camera_ptr->get_right());
         return;
     }
 
-    m_horse_ride_input = Horse_Ride_Input{};
+    m_ctrl_was_held = false;
+    m_ctrl_hold_time = 0.0f;
+
+    m_mobs.set_ride_input(Horse_Ride_Input{});
+    m_player_ptr->set_movement_input(move_input, m_camera_ptr->get_front(), m_camera_ptr->get_right());
     m_player_ptr->set_movement_input(move_input, m_camera_ptr->get_front(), m_camera_ptr->get_right());
 }
 
@@ -263,26 +280,6 @@ void Game::set_gameplay_input_active(bool active) {
 }
 
 namespace {
-    // Пересечение луча с AABB (slab-метод). Возвращает расстояние до входа в коробку или -1.
-    float ray_aabb_distance(const glm::vec3& origin, const glm::vec3& dir,
-                            const glm::vec3& box_min, const glm::vec3& box_max, float max_distance) {
-        float t_min = 0.0f;
-        float t_max = max_distance;
-        for (int axis = 0; axis < 3; ++axis) {
-            if (std::abs(dir[axis]) < 1e-6f) {
-                if (origin[axis] < box_min[axis] || origin[axis] > box_max[axis]) return -1.0f;
-                continue;
-            }
-            float t1 = (box_min[axis] - origin[axis]) / dir[axis];
-            float t2 = (box_max[axis] - origin[axis]) / dir[axis];
-            if (t1 > t2) std::swap(t1, t2);
-            t_min = std::max(t_min, t1);
-            t_max = std::min(t_max, t2);
-            if (t_min > t_max) return -1.0f;
-        }
-        return t_min;
-    }
-
 // infinite_stack — Creative: там стак хранится как {блок, count = 0} («запас бесконечен», см.
 // Inventory::get_hotbar_slot / get_panel_slot), и Item_Stack::is_empty() (count <= 0) принимал
 // ВСЕ такие слоты за пустые — иконки блоков в инвентаре и хотбаре Creative просто не рисовались.
@@ -483,15 +480,12 @@ bool Game::create_world(const std::string& name, const std::string& seed_text, G
 }
 
 void Game::teardown_world() {
-    if (m_ridden_horse) dismount_horse(false);
+    if (m_mobs.is_riding()) apply_mob_result(m_mobs.dismount(false, mob_view(), Mob_Blocked_Fn()));
     if (m_container_session.is_open()) close_container();
     m_chat_open = false;
     m_chat_input.clear();
-    m_pigs.clear();
-    m_horses.clear();
-    m_cows.clear();
+    m_mobs.clear();
     m_crops_ptr.reset();
-    m_ridden_horse = nullptr;
     m_iso_capture_ptr.reset(); // до Chunk_Manager: снимок держит на него ссылку
     if (m_chunk_manager_ptr) {
         m_chunk_manager_ptr->clear(); // сохраняет изменённые чанки
@@ -588,6 +582,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_player_ptr = std::make_unique<Player>();
     m_inventory_ptr = std::make_unique<Inventory>();
     m_inventory_ptr->set_mode(m_game_mode);
+    m_mobs.set_hostiles_enabled(m_game_mode == Game_Mode::Survival);
     {
         std::ifstream inv(m_world_file.get_path().parent_path() / "inventory.txt");
         if (inv) {
@@ -601,10 +596,8 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_container_session = Container_Session{};
     m_open_container_paired = nullptr;
     m_chat_log.clear();
-    m_attack_cooldown = 0.0f;
-    m_pig_respawn_cooldown = 0.0f;
-    m_horse_respawn_cooldown = 0.0f;
-    m_cow_respawn_cooldown = 0.0f;
+    m_mobs.reset_timers();
+    m_tick.reset();
     m_day_night_cycle.set_normalized_time(m_world_settings.day_time);
 
     const int spawn_x = 8;
@@ -746,6 +739,8 @@ Game::Panel_View Game::build_inventory_panel() const {
             v.slots.push_back(make_hud_slot(m_inventory_ptr->get_craft_slot(static_cast<size_t>(slot.id - k_inventory_craft_base))));
         } else if (slot.id == k_inventory_craft_output) {
             v.slots.push_back(make_hud_slot(m_inventory_ptr->peek_craft_output()));
+        } else if (slot.id >= k_inventory_armor_base && slot.id < k_inventory_armor_base + k_inventory_armor_count) {
+            v.slots.push_back(make_hud_slot(m_inventory_ptr->get_armor_slot(static_cast<size_t>(slot.id - k_inventory_armor_base))));
         } else {
             v.slots.push_back(make_hud_slot(m_inventory_ptr->get_panel_slot(static_cast<size_t>(slot.id)), creative));
         }
@@ -754,7 +749,8 @@ Game::Panel_View Game::build_inventory_panel() const {
 }
 
 void Game::draw_inventory_overlay() {
-    const Panel_View v = build_inventory_panel();
+    Panel_View v = build_inventory_panel();
+    v.layout.preview_model = m_player_model.is_loaded();
     const glm::vec2 cursor = get_cursor_position();
     const int w = m_window_ptr->get_width(), h = m_window_ptr->get_height();
     const int hovered = Hud::get_panel_slot_at(w, h, v.layout, cursor.x, cursor.y);
@@ -764,6 +760,29 @@ void Game::draw_inventory_overlay() {
     m_hud_ptr->draw_panel_screen(w, h, m_renderer_ptr->get_texture_atlas(), v.layout, v.slots, hovered,
                                  carried.is_empty() && m_game_mode != Game_Mode::Creative ? nullptr : &carried_slot,
                                  cursor.x, cursor.y, v.title);
+    if (v.layout.preview_model) draw_inventory_model_preview(v.layout);
+}
+
+// Модель игрока в окне инвентаря: своя камера, поворот покачивается. Рисуется поверх плоской рамки.
+void Game::draw_inventory_model_preview(const Hud_Panel_Layout& layout) {
+    Shader* mob_shader = m_renderer_ptr->get_mob_shader();
+    if (!mob_shader) return;
+    const int w = m_window_ptr->get_width(), h = m_window_ptr->get_height();
+    const Hud_Rect panel = Hud::get_panel_rect(w, h, layout);
+    const float s = Hud::get_panel_scale(w, h, layout);
+    const int x = static_cast<int>(std::floor(panel.x + layout.preview_rect.x * s));
+    const int y_top = static_cast<int>(std::floor(panel.y + layout.preview_rect.y * s));
+    const int rw = static_cast<int>(std::ceil(layout.preview_rect.w * s));
+    const int rh = static_cast<int>(std::ceil(layout.preview_rect.h * s));
+    if (rw <= 0 || rh <= 0) return;
+
+    const float yaw = 25.0f * std::sin(static_cast<float>(glfwGetTime()) * 0.8f);
+    const glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.9f, 3.6f), glm::vec3(0.0f, 0.9f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::mat4 projection = glm::perspective(glm::radians(30.0f), static_cast<float>(rw) / static_cast<float>(rh), 0.1f, 20.0f);
+
+    m_renderer_ptr->begin_sub_viewport(x, y_top, rw, rh, h);
+    m_player_model.render_preview(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity(), yaw);
+    m_renderer_ptr->end_sub_viewport(w, h);
 }
 
 void Game::inventory_click(bool right) {
@@ -799,6 +818,8 @@ void Game::inventory_click(bool right) {
         m_inventory_ptr->click_craft_slot(static_cast<size_t>(id - k_inventory_craft_base), right);
     } else if (id == k_inventory_craft_output) {
         m_inventory_ptr->click_craft_output();
+    } else if (id >= k_inventory_armor_base && id < k_inventory_armor_base + k_inventory_armor_count) {
+        m_inventory_ptr->click_armor_slot(static_cast<size_t>(id - k_inventory_armor_base), right);
     }
 }
 
@@ -955,190 +976,80 @@ void Game::reload_world(const std::string& generation_folder) {
     LOG_INFO("Switched world generation to " + generation_folder);
 }
 
-void Game::spawn_missing_pigs(const glm::vec3& player_position) {
-    static int s_pig_counter = 0; // для уникальных имён в логах ("Хрюша #3")
-    static std::mt19937 s_rng(std::random_device{}());
-
-    if (static_cast<int>(m_pigs.size()) >= Config::min_pig_count) return;
-    if (m_pig_respawn_cooldown > 0.0f) return; // недавно кого-то убили — даём миру опустеть
-
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(Config::pig_spawn_radius_min, Config::pig_spawn_radius_max);
-
-    const int missing = Config::min_pig_count - static_cast<int>(m_pigs.size());
-    for (int i = 0; i < missing; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 spawn_position = player_position + glm::vec3(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius);
-
-        auto pig = std::make_unique<Pig>("Хрюша #" + std::to_string(++s_pig_counter), spawn_position);
-        if (!pig->load_model("assets/mobs/pig.glb")) {
-            LOG_ERROR("spawn_missing_pigs: failed to load assets/mobs/pig.glb");
-            break; // модель битая/отсутствует — нет смысла пытаться ещё раз в этом же вызове
+// --- Тики -------------------------------------------------------------------------------
+// Системы, которые живут в тиках (20 в секунду). Порядок: Pre -> Simulate -> Post.
+// Животные — отдельным модулем (mobs/Mobs_Update.h). Ввод, камера и отрисовка сюда не входят.
+void Game::register_tick_systems() {
+    using Phase = Tick_Phase;
+    m_tick.add("day_night", Phase::Pre, 0, [this](float dt) {
+        m_day_night_cycle.update(dt);
+    });
+    m_tick.add("hunger", Phase::Pre, 10, [this](float dt) {
+        m_player_ptr->update_hunger(dt);
+    });
+    m_tick.add("block_entities", Phase::Simulate, 0, [this](float dt) {
+        m_chunk_manager_ptr->update_block_entities(dt);
+    });
+    m_tick.add("fluids", Phase::Simulate, 10, [this](float dt) {
+        m_chunk_manager_ptr->update_fluids(dt);
+    });
+    m_tick.add("mobs", Phase::Simulate, 20, [this](float dt) {
+        apply_mob_result(m_mobs.update_tick(dt, mob_view(), *m_chunk_manager_ptr));
+    });
+    m_tick.add("crops", Phase::Simulate, 30, [this](float dt) {
+        if (!m_crops_ptr) return;
+        std::vector<glm::ivec3> changed_blocks;
+        m_crops_ptr->update(dt, *m_chunk_manager_ptr, changed_blocks);
+        for (const glm::ivec3& pos : changed_blocks) {
+            invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
         }
-        m_pigs.push_back(std::move(pig));
-    }
+        });
+    m_tick.add("dropped_items", Phase::Simulate, 40, [this](float dt) {
+        // Подбирать предметы можно только в Survival и пока жив.
+        const glm::vec3 player_pos = m_player_ptr->get_position();
+        m_dropped_items_ptr->update(
+            dt,
+            *m_chunk_manager_ptr,
+            player_pos,
+            m_player_ptr->get_height(),
+            (m_game_mode == Game_Mode::Survival && m_player_ptr->is_alive()) ? m_inventory_ptr.get() : nullptr);
+    });
 }
 
-void Game::spawn_missing_cows(const glm::vec3& player_position) {
-    static int s_cow_counter = 0;
-    static std::mt19937 s_rng(std::random_device{}());
-
-    if (static_cast<int>(m_cows.size()) >= Config::min_cow_count) return;
-    if (m_cow_respawn_cooldown > 0.0f) return;
-
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(Config::cow_spawn_radius_min, Config::cow_spawn_radius_max);
-    const int missing = Config::min_cow_count - static_cast<int>(m_cows.size());
-    for (int i = 0; i < missing; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 spawn_position = player_position + glm::vec3(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius);
-        auto cow = std::make_unique<Cow>("Cow #" + std::to_string(++s_cow_counter), spawn_position);
-        if (!cow->load_model("assets/mobs/cow.glb")) {
-            LOG_ERROR("spawn_missing_cows: failed to load assets/mobs/cow.glb");
-            m_cow_respawn_cooldown = 30.0f; // не долбим диск битой моделью каждый кадр
-            break;
-        }
-        m_cows.push_back(std::move(cow));
-    }
+Mob_Player_View Game::mob_view() const {
+    Mob_Player_View view;
+    view.position = m_player_ptr->get_position();
+    view.eye_height = m_player_ptr->get_eye_height();
+    view.alive = m_player_ptr->is_alive();
+    view.sneaking = m_player_ptr->is_crouching();
+    view.horizontal_speed = m_player_ptr->get_horizontal_speed();
+    return view;
 }
 
-void Game::spawn_missing_horses(const glm::vec3& player_position) {
-    static int s_horse_counter = 0;
-    static std::mt19937 s_rng(std::random_device{}());
-
-    if (static_cast<int>(m_horses.size()) >= Config::min_horse_count) return;
-    if (m_horse_respawn_cooldown > 0.0f) return; // недавно кого-то убили — даём миру опустеть
-
-    // Одна попытка за кадр: точка в кольце вокруг игрока, как у свиней.
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(Config::horse_spawn_radius_min, Config::horse_spawn_radius_max);
-    const float angle = angle_dist(s_rng);
-    const float radius = radius_dist(s_rng);
-    const float spawn_x = player_position.x + std::cos(angle) * radius;
-    const float spawn_z = player_position.z + std::sin(angle) * radius;
-
-    // В отличие от свиньи, которая просто падает с высоты игрока, лошадь на радиусе 30 блоков
-    // легко оказалась бы внутри холма — поэтому ищем поверхность: трава с двумя свободными
-    // блоками над ней (незагруженный чанк отдаёт воздух — тогда просто попробуем в другом кадре).
-    const int bx = static_cast<int>(std::floor(spawn_x));
-    const int bz = static_cast<int>(std::floor(spawn_z));
-    const int top = static_cast<int>(std::floor(player_position.y)) + 20;
-    const int bottom = static_cast<int>(std::floor(player_position.y)) - 20;
-    int ground_y = -1000000;
-    for (int y = top; y >= bottom; --y) {
-        if (m_chunk_manager_ptr->get_block_world(bx, y, bz) != Block_Types::Grass) continue;
-        const Block_Properties& above1 = get_block_props(m_chunk_manager_ptr->get_block_world(bx, y + 1, bz));
-        const Block_Properties& above2 = get_block_props(m_chunk_manager_ptr->get_block_world(bx, y + 2, bz));
-        if (above1.is_solid || above2.is_solid || above1.state == Block_State::Liquid) continue;
-        ground_y = y;
-        break;
-    }
-    if (ground_y == -1000000) return;
-
-    auto horse = std::make_unique<Horse>("Horse #" + std::to_string(++s_horse_counter),
-                                         glm::vec3(spawn_x, static_cast<float>(ground_y) + 1.02f, spawn_z));
-    if (!horse->load_model("assets/mobs/horse.glb")) {
-        LOG_ERROR("spawn_missing_horses: failed to load assets/mobs/horse.glb");
-        m_horse_respawn_cooldown = 30.0f; // не долбим диск загрузкой битой модели каждый кадр
-        return;
-    }
-    m_horses.push_back(std::move(horse));
+Mob_Blocked_Fn Game::mob_blocked_fn() const {
+    return [this](const glm::vec3& position) {
+        return m_player_ptr->check_collision(position, *m_chunk_manager_ptr);
+    };
 }
 
-void Game::mount_horse(Horse& horse) {
-    if (m_ridden_horse || !m_player_ptr->is_alive()) return;
-    if (!horse.mount()) return;
-
-    m_ridden_horse = &horse;
-    m_player_ptr->set_riding(true);
-    m_block_interaction_ptr->cancel_actions();
-    m_last_seat_position = horse.get_seat_position();
-    m_player_ptr->set_position(m_last_seat_position);
-    m_dismount_requested = false;
-}
-
-void Game::dismount_horse(bool place_beside) {
-    Horse* horse = m_ridden_horse;
-    if (!horse) return;
-    m_ridden_horse = nullptr;
-
-    glm::vec3 player_position = m_player_ptr->get_position();
-    if (place_beside) {
-        // Ставим рядом с лошадью на свободное место: слева, справа, сзади, спереди.
-        const glm::vec3 horse_position = horse->get_position();
-        const float yaw = glm::radians(horse->get_yaw_degrees());
-        const glm::vec3 forward(std::sin(yaw), 0.0f, std::cos(yaw));
-        const glm::vec3 left(std::cos(yaw), 0.0f, -std::sin(yaw));
-        const glm::vec3 offsets[] = { left * 1.3f, -left * 1.3f, -forward * 1.6f, forward * 1.6f };
-
-        bool found = false;
-        for (const glm::vec3& offset : offsets) {
-            const glm::vec3 candidate = horse_position + offset + glm::vec3(0.0f, 0.05f, 0.0f);
-            if (!m_player_ptr->check_collision(candidate, *m_chunk_manager_ptr)) {
-                player_position = candidate;
-                found = true;
-                break;
-            }
-        }
-        if (!found) player_position = horse_position + glm::vec3(0.0f, Config::horse_height + 0.1f, 0.0f);
-    }
-
-    m_player_ptr->set_position(player_position);
-    m_player_ptr->set_riding(false);
-    horse->dismount(player_position);
-    m_horse_ride_input = Horse_Ride_Input{};
-    m_camera_ptr->set_position(player_position + glm::vec3(0.0f, m_player_ptr->get_eye_height(), 0.0f));
-}
-
-void Game::update_horses(float delta_time) {
-    const glm::vec3 player_position = m_player_ptr->get_position();
-
-    if (m_ridden_horse) {
-        // Игрока унесло с седла без нашего ведома (/tp, респавн после смерти, смена мира) или
-        // лошадь погибла — слезаем там, где он оказался.
-        if (!m_player_ptr->is_alive() || m_ridden_horse->is_dying() ||
-            glm::length(player_position - m_last_seat_position) > 3.0f) {
-            dismount_horse(false);
-        } else if (m_dismount_requested) {
-            dismount_horse(true);
+// Применяет результат Mobs_Update к игроку, камере, блок-взаимодействию и инвентарю.
+void Game::apply_mob_result(const Mob_Result& result) {
+    if (result.set_player_position) {
+        m_player_ptr->set_position(result.player_position);
+        m_camera_ptr->set_position(result.player_position + glm::vec3(0.0f, m_player_ptr->get_eye_height(), 0.0f));
+        if (result.set_riding) m_player_ptr->set_riding(result.riding);
+        if (result.cancel_block_actions) m_block_interaction_ptr->cancel_actions();
+        if (result.consume_held_item) m_inventory_ptr->consume_selected(1);
+        if (result.damage_held_tool) m_inventory_ptr->damage_selected_tool(1);
+        if (result.exhaustion > 0.0f) m_player_ptr->add_exhaustion(result.exhaustion);
+        if (result.player_damage > 0) {
+            const int points = std::min(m_inventory_ptr->armor_points(), Config::armor_points_cap);
+            const float reduction = static_cast<float>(points) / Config::armor_points_divisor;
+            const int damage = static_cast<int>(std::ceil(static_cast<float>(result.player_damage) * (1.0f - reduction)));
+            m_player_ptr->take_damage(std::max(damage, 1));
+            m_inventory_ptr->damage_armor(1);
         }
     }
-    m_dismount_requested = false;
-
-    spawn_missing_horses(player_position);
-
-    Horse_Context context;
-    context.player_position = m_player_ptr->get_position();
-    context.player_sneaking = m_player_ptr->is_crouching();
-    context.player_alive = m_player_ptr->is_alive();
-    const Horse_Ride_Input no_input{};
-
-    for (auto& horse : m_horses) {
-        horse->update(delta_time, *m_chunk_manager_ptr, context,
-                      horse.get() == m_ridden_horse ? m_horse_ride_input : no_input);
-    }
-
-    if (m_ridden_horse) {
-        if (m_ridden_horse->consume_throw_request()) {
-            // Дикая лошадь сбросила всадника.
-            dismount_horse(true);
-        } else {
-            m_last_seat_position = m_ridden_horse->get_seat_position();
-            m_player_ptr->set_position(m_last_seat_position);
-        }
-    }
-
-    // Убитые лошади исчезают, когда доиграна анимация падения.
-    m_horses.erase(std::remove_if(m_horses.begin(), m_horses.end(),
-                       [this](const std::unique_ptr<Horse>& horse) {
-                           if (!horse->is_removable()) return false;
-                           if (horse.get() == m_ridden_horse) m_ridden_horse = nullptr;
-                           return true;
-                       }),
-                   m_horses.end());
-    m_horse_respawn_cooldown = std::max(0.0f, m_horse_respawn_cooldown - delta_time);
 }
 
 void Game::update_gameplay(float delta_time, bool simulation_active, bool player_actions) {
@@ -1155,28 +1066,31 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
         return;
     }
 
-    m_day_night_cycle.update(delta_time);
-
     if (!player_actions) {
         // Окно открыто: управление отключено (иначе зажатая клавиша «залипла» бы), но физика идёт.
         m_player_ptr->set_movement_input({0.0f, 0.0f, false, false}, m_camera_ptr->get_front(), m_camera_ptr->get_right());
-        m_horse_ride_input = Horse_Ride_Input{};
+        m_mobs.set_ride_input(Horse_Ride_Input{});
     }
 
     m_player_ptr->update(delta_time, *m_chunk_manager_ptr);
-    m_player_ptr->update_hunger(delta_time);
-    m_chunk_manager_ptr->update_block_entities(delta_time);
-    m_chunk_manager_ptr->update_fluids(delta_time);
+
+    // Модель игрока: поворот по взгляду, ходьба/стойка по скорости. Без файла модели ничего не делает.
+    m_player_model.ensure_loaded();
+    {
+        const glm::vec3 front = m_camera_ptr->get_front();
+        m_player_model.update(delta_time, m_player_ptr->get_position(),
+                              glm::degrees(std::atan2(front.x, front.z)),
+                              m_player_ptr->get_horizontal_speed() > 0.3f);
+    }
 
     // Survival: смерть -> телепорт обратно на изначальную точку спавна с полным здоровьем.
     if (m_game_mode == Game_Mode::Survival && !m_player_ptr->is_alive()) {
         m_player_ptr->respawn(m_spawn_position);
         m_block_interaction_ptr->cancel_actions();
     }
-
-    // Лошади обновляются ДО камеры: верхом позицию игрока выставляет седло, и камера должна
-    // взять уже свежую, иначе картинка отставала бы на кадр.
-    update_horses(delta_time);
+            // КОМПРОМИСС: животные-всадники (лошади) обновляются по кадрам, а не в тиках. Верхом позицию
+            // игрока выставляет седло, и камера должна взять её в этом же кадре, иначе картинка дёргается.
+            apply_mob_result(m_mobs.update_frame(delta_time, mob_view(), mob_blocked_fn(), *m_chunk_manager_ptr));
 
     m_camera_ptr->set_position(
         m_player_ptr->get_position() + glm::vec3(0.0f, m_player_ptr->get_eye_height(), 0.0f)
@@ -1185,39 +1099,9 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
     auto player_pos = m_player_ptr->get_position();
     m_chunk_manager_ptr->update_player_position(player_pos.x, player_pos.y, player_pos.z);
 
-    spawn_missing_pigs(player_pos);
-    spawn_missing_cows(player_pos);
-    m_cow_respawn_cooldown = std::max(0.0f, m_cow_respawn_cooldown - delta_time);
-    for (auto& pig : m_pigs) {
-        pig->update(delta_time, *m_chunk_manager_ptr);
-    }
-    for (auto& cow : m_cows) {
-        cow->update(delta_time, *m_chunk_manager_ptr);
-    }
-    m_cows.erase(std::remove_if(m_cows.begin(), m_cows.end(),
-                     [](const std::unique_ptr<Cow>& cow) { return cow->is_removable(); }),
-                 m_cows.end());
-    update_breeding();
-
-    if (m_crops_ptr) {
-        std::vector<glm::ivec3> changed_blocks;
-        m_crops_ptr->update(delta_time, *m_chunk_manager_ptr, changed_blocks);
-        for (const glm::ivec3& pos : changed_blocks) {
-            invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
-        }
-    }
-    // Убитые свиньи исчезают, когда доиграна анимация падения (мясо выпало ещё в момент удара).
-    m_pigs.erase(std::remove_if(m_pigs.begin(), m_pigs.end(),
-                     [](const std::unique_ptr<Pig>& pig) { return pig->is_removable(); }),
-                 m_pigs.end());
-
-    // Подбирать предметы можно только в Survival и пока жив; в Creative они просто лежат до таймера.
-    m_dropped_items_ptr->update(
-        delta_time,
-        *m_chunk_manager_ptr,
-        player_pos,
-        m_player_ptr->get_height(),
-        (m_game_mode == Game_Mode::Survival && m_player_ptr->is_alive()) ? m_inventory_ptr.get() : nullptr);
+    // --- Тики: мир, существа, время и голод выполняются с фиксированным шагом -------------
+    // Системы регистрируются в register_tick_systems(). Здесь только прокрутка часов.
+    m_tick.run_frame(delta_time);
 
     for (const glm::ivec3& position : m_chunk_manager_ptr->take_unloaded_chunk_positions()) {
         m_renderer_ptr->invalidate_chunk_cache(position);
@@ -1227,38 +1111,8 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
 
     const glm::vec3 eye = m_camera_ptr->get_position();
     m_block_interaction_ptr->set_place_block(m_inventory_ptr->get_selected_block());
-
-    // Ближайшее существо (свинья/корова/лошадь) на луче взгляда в пределах досягаемости удара.
-    Pig* targeted_pig = nullptr;
-    Cow* targeted_cow = nullptr;
-    Horse* targeted_horse = nullptr;
-    float entity_distance = -1.0f;
-    const auto consider = [&](float d) {
-        if (d >= 0.0f && (entity_distance < 0.0f || d < entity_distance)) {
-            entity_distance = d;
-            return true;
-        }
-        return false;
-    };
-    for (auto& pig : m_pigs) {
-        if (pig->is_dying()) continue;
-        const float d = ray_aabb_distance(eye, m_camera_ptr->get_front(), pig->get_hitbox_min(),
-                                          pig->get_hitbox_max(), Config::player_attack_reach);
-        if (consider(d)) { targeted_pig = pig.get(); targeted_cow = nullptr; targeted_horse = nullptr; }
-    }
-    for (auto& cow : m_cows) {
-        if (cow->is_dying()) continue;
-        const float d = ray_aabb_distance(eye, m_camera_ptr->get_front(), cow->get_hitbox_min(),
-                                          cow->get_hitbox_max(), Config::player_attack_reach);
-        if (consider(d)) { targeted_cow = cow.get(); targeted_pig = nullptr; targeted_horse = nullptr; }
-    }
-    // Лошадь, на которой сидим, не целим — хитбокс вокруг камеры мешал бы.
-    for (auto& horse : m_horses) {
-        if (horse->is_dying() || horse.get() == m_ridden_horse) continue;
-        const float d = ray_aabb_distance(eye, m_camera_ptr->get_front(), horse->get_hitbox_min(),
-                                          horse->get_hitbox_max(), Config::player_attack_reach);
-        if (consider(d)) { targeted_horse = horse.get(); targeted_pig = nullptr; targeted_cow = nullptr; }
-    }
+    // Ближайшее животное на луче взгляда (логика — в Mobs_Update::aim).
+    const float entity_distance = m_mobs.aim(eye, m_camera_ptr->get_front());
 
     m_block_interaction_ptr->update(
         delta_time,
@@ -1272,90 +1126,22 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
         entity_distance
     );
 
-    const bool survival = m_game_mode == Game_Mode::Survival;
-    m_attack_cooldown = std::max(0.0f, m_attack_cooldown - delta_time);
-    m_pig_respawn_cooldown = std::max(0.0f, m_pig_respawn_cooldown - delta_time);
-    const bool entity_in_focus = m_block_interaction_ptr->is_entity_targeted() &&
-                                 (targeted_pig || targeted_cow || targeted_horse);
+    handle_tool_impulse(delta_time);
 
-    static std::mt19937 s_drop_rng(std::random_device{}());
-    if (entity_in_focus) {
-        const bool right_click = m_input_ptr->is_mouse_button_pressed(1);
-        const bool left_click = m_input_ptr->is_mouse_button_pressed(0);
-        // Предмет в руке: в Survival — из активного слота, в Creative — выбранный блок хотбара.
-        const Block_Types held = m_inventory_ptr->get_selected_block();
-
-        // --- Кормление (ПКМ едой, которую животное ест) --------------------------------------
-        if (right_click) {
-            bool fed = false;
-            const char* species = "";
-            if (targeted_pig && Pig::accepts_food(held) && targeted_pig->breeding().can_be_fed()) {
-                targeted_pig->breeding().start_love(); fed = true; species = "Pig";
-            } else if (targeted_cow && Cow::accepts_food(held) && targeted_cow->breeding().can_be_fed()) {
-                targeted_cow->breeding().start_love(); fed = true; species = "Cow";
-            } else if (targeted_horse && Horse::accepts_food(held) && targeted_horse->feed(held)) {
-                fed = true; species = "Horse";
-                push_chat_message(std::string("Horse ate: ") + get_block_props(held).name);
-            }
-            if (fed) {
-                (void)species;
-                if (survival) m_inventory_ptr->consume_selected(1);
-                m_block_interaction_ptr->cancel_actions();
-            } else if (targeted_horse && !m_ridden_horse && !targeted_horse->is_baby()) {
-                // Не еда — садимся верхом (жеребёнка оседлать нельзя).
-                mount_horse(*targeted_horse);
-            }
-        }
-
-        // --- Удар (ЛКМ) ----------------------------------------------------------------------
-        if (left_click && m_attack_cooldown <= 0.0f) {
-            m_attack_cooldown = Config::player_attack_cooldown;
-            m_player_ptr->add_exhaustion(Config::exhaustion_attack);
-
-            // Урон: в Creative — с одного удара; в Survival — кулак или оружие/инструмент в руке.
-            float damage = Config::player_fist_damage;
-            if (survival) {
-                const Item_Stack held_stack = m_inventory_ptr->get_selected_stack();
-                if (!held_stack.is_empty()) {
-                    damage = std::max(damage, get_block_props(held_stack.type).attack_damage);
-                }
-            }
-            auto roll = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(s_drop_rng); };
-            bool hit = false;
-            if (targeted_pig) {
-                const float d = survival ? damage : Config::pig_max_health * 100.0f;
-                hit = true;
-                if (targeted_pig->take_damage(d, m_player_ptr->get_position())) {
-                    m_pig_respawn_cooldown = Config::pig_respawn_delay;
-                    if (survival) {
-                        m_dropped_items_ptr->spawn_from_mob(targeted_pig->get_position(),
-                            Item_Stack{Block_Types::Raw_Porkchop, roll(Config::pig_drop_min, Config::pig_drop_max)});
-                    }
-                }
-            } else if (targeted_cow) {
-                const float d = survival ? damage : Config::cow_max_health * 100.0f;
-                hit = true;
-                if (targeted_cow->take_damage(d, m_player_ptr->get_position())) {
-                    m_cow_respawn_cooldown = Config::cow_respawn_delay;
-                    if (survival) {
-                        m_dropped_items_ptr->spawn_from_mob(targeted_cow->get_position(),
-                            Item_Stack{Block_Types::Raw_Beef, roll(Config::cow_drop_min, Config::cow_drop_max)});
-                    }
-                }
-            } else if (targeted_horse) {
-                const float d = survival ? damage : Config::horse_max_health * 100.0f;
-                hit = true;
-                if (targeted_horse->take_damage(d, m_player_ptr->get_position())) {
-                    m_horse_respawn_cooldown = Config::horse_respawn_delay;
-                    if (survival) {
-                        m_dropped_items_ptr->spawn_from_mob(targeted_horse->get_position(),
-                            Item_Stack{Block_Types::Raw_Horse_Meat, roll(Config::horse_drop_min, Config::horse_drop_max)});
-                    }
-                }
-            }
-            if (hit && survival) m_inventory_ptr->damage_selected_tool(1);
-        }
-    }
+    // Взаимодействие с животными: кормление, посадка, удар. Логика — в Mobs_Update::interact. /
+    Mob_Interact_Input mob_input;
+    mob_input.delta_time = delta_time;
+    mob_input.eye = eye;
+    mob_input.look_dir = m_camera_ptr->get_front();
+    mob_input.block_targets_entity = m_block_interaction_ptr->is_entity_targeted();
+    mob_input.right_click = m_input_ptr->is_mouse_button_pressed(1);
+    mob_input.left_click = m_input_ptr->is_mouse_button_pressed(0);
+    mob_input.survival = m_game_mode == Game_Mode::Survival;
+    mob_input.held_block = m_inventory_ptr->get_selected_block();
+    mob_input.held_stack = m_inventory_ptr->get_selected_stack();
+    mob_input.player = mob_view();
+    mob_input.chat = [this](const std::string& text) { push_chat_message(text); };
+    apply_mob_result(m_mobs.interact(mob_input, *m_dropped_items_ptr));
 
     // Сломанные блоки -> выпавшие предметы (содержимое контейнеров снято ещё до удаления блока).
     for (const Broken_Block_Event& event : m_block_interaction_ptr->take_broken_blocks()) {
@@ -1379,6 +1165,24 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
             m_open_container_paired = m_chunk_manager_ptr->get_paired_block_entity(pos.x, pos.y, pos.z);
         }
     }
+}
+
+// Инструмент с "impulse_speed" в blocks.json: ПКМ разгоняет игрока в сторону взгляда и тратит прочность.
+void Game::handle_tool_impulse(float delta_time) {
+    m_tool_impulse_cooldown = std::max(0.0f, m_tool_impulse_cooldown - delta_time);
+    if (!m_input_ptr->is_mouse_button_pressed(1)) return;   // edge: только момент нажатия
+    if (m_game_mode != Game_Mode::Survival || !m_player_ptr->is_alive() || m_player_ptr->is_riding()) return;
+    if (m_tool_impulse_cooldown > 0.0f) return;
+
+    const Item_Stack held = m_inventory_ptr->get_selected_stack();
+    if (held.is_empty()) return;
+    const float speed = get_block_props(held.type).impulse_speed;
+    if (speed <= 0.0f) return;
+
+    m_tool_impulse_cooldown = Config::tool_impulse_cooldown;
+    m_player_ptr->apply_impulse(m_camera_ptr->get_front(), speed);
+    m_player_ptr->add_exhaustion(Config::exhaustion_attack);
+    m_inventory_ptr->damage_selected_tool(1);
 }
 
 void Game::render_gameplay(bool show_gameplay_hud) {
@@ -1416,14 +1220,10 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     m_renderer_ptr->render_chunks(renderable, view, projection, m_day_night_cycle.get_ambient_intensity());
 
     if (Shader* mob_shader = m_renderer_ptr->get_mob_shader()) {
-        for (const auto& pig : m_pigs) {
-            pig->render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
-        }
-        for (const auto& cow : m_cows) {
-            cow->render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
-        }
-        for (const auto& horse : m_horses) {
-            horse->render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
+        m_mobs.render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
+        // Тело игрока: видно при взгляде вниз (голова скрыта, см. Player_Model).
+        if (m_player_ptr->is_alive()) {
+            m_player_model.render_world(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
         }
     }
 
@@ -1479,7 +1279,9 @@ void Game::render_gameplay(bool show_gameplay_hud) {
                 m_player_ptr->get_health(),
                 m_player_ptr->get_max_health(),
                 m_player_ptr->get_food_level(),
-                m_player_ptr->get_max_food()
+                m_player_ptr->get_max_food(),
+                m_player_ptr->get_air(),
+                m_player_ptr->get_max_air()
             );
             // Полоска под прицелом: прогресс ломания блока (жёлтая) или поедания (зелёная).
             const float eat_progress = m_block_interaction_ptr->get_eat_progress();
@@ -1634,20 +1436,7 @@ void Game::shutdown() {
     save_options();
 
     m_application_ptr.reset();
-    // Свиньи держат GL-ресурсы (VAO/VBO) — обязаны быть уничтожены ДО
-    // m_window_ptr.reset()/glfwTerminate() ниже, иначе деструктор Mob_Model
-    // упадёт на мёртвом GL-контексте (см. предупреждение в Mob_Model.h).
-    m_iso_capture_ptr.reset();
-    m_pigs.clear();
-    m_horses.clear();
-    m_cows.clear();
-    m_ridden_horse = nullptr;
-    // Этого мало! Mob::load() кэширует Mob_Model в статической мапе —
-    // очистка m_pigs не убивает саму модель, пока жив кэш (у него свой
-    // shared_ptr). Без этого вызова кэш чистится в exit-хендлерах ПОСЛЕ
-    // glfwTerminate() ниже и падает — поймано и отлажено на практике
-    // (см. предупреждение и подробности в Mob.h::clear_model_cache).
-    Mob::clear_model_cache();
+        m_mobs.shutdown();  // мобы держат GL-ресурсы: очищаются до GL-контекста (см. Mobs_Update.h)
     m_hud_ptr.reset();
     m_block_interaction_ptr.reset();
     m_chunk_manager_ptr.reset();
@@ -1694,6 +1483,7 @@ std::string Game::get_game_mode_name() const {
 void Game::toggle_game_mode() {
     m_game_mode = (m_game_mode == Game_Mode::Creative) ? Game_Mode::Survival : Game_Mode::Creative;
     m_inventory_ptr->set_mode(m_game_mode);
+    m_mobs.set_hostiles_enabled(m_game_mode == Game_Mode::Survival);
     m_player_ptr->set_fall_damage_enabled(m_game_mode == Game_Mode::Survival);
     m_player_ptr->set_hunger_enabled(m_game_mode == Game_Mode::Survival);
     m_block_interaction_ptr->cancel_actions();
@@ -1935,27 +1725,6 @@ void Game::add_day_time_ticks(int ticks) {
     set_day_time_ticks(get_day_time_ticks() + ticks);
 }
 
-int Game::kill_all_mobs() {
-    int killed = 0;
-    for (auto& pig : m_pigs) {
-        if (pig->kill()) ++killed;
-    }
-    // Иначе spawn_missing_pigs тут же досоздаст новых — команда выглядела бы бесполезной.
-    if (killed > 0) m_pig_respawn_cooldown = Config::pig_respawn_delay;
-
-    int killed_horses = 0;
-    for (auto& horse : m_horses) {
-        if (horse->kill()) ++killed_horses;
-    }
-    if (killed_horses > 0) m_horse_respawn_cooldown = Config::horse_respawn_delay;
-
-    int killed_cows = 0;
-    for (auto& cow : m_cows) {
-        if (cow->kill()) ++killed_cows;
-    }
-    if (killed_cows > 0) m_cow_respawn_cooldown = Config::cow_respawn_delay;
-    return killed + killed_horses + killed_cows;
-}
 
 void Game::kill_player() {
     // Респавн в обоих режимах: в Survival так же случилось бы само после смерти, в Creative
@@ -1984,157 +1753,6 @@ bool Game::set_block_at(int x, int y, int z, Block_Types type) {
     return ok;
 }
 
-int Game::summon_pigs(int count) {
-    static int s_summon_counter = 0;
-    static std::mt19937 s_rng(std::random_device{}());
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(2.0f, 5.0f);
-
-    const glm::vec3 player_pos = m_player_ptr->get_position();
-    int spawned = 0;
-    for (int i = 0; i < count; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 pos = player_pos + glm::vec3(std::cos(angle) * radius, 1.0f, std::sin(angle) * radius);
-        auto pig = std::make_unique<Pig>("Summoned #" + std::to_string(++s_summon_counter), pos);
-        if (!pig->load_model("assets/mobs/pig.glb")) break;
-        m_pigs.push_back(std::move(pig));
-        ++spawned;
-    }
-    return spawned;
-}
-
-int Game::summon_horses(int count) {
-    static int s_summon_counter = 0;
-    static std::mt19937 s_rng(std::random_device{}());
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(3.0f, 6.0f);
-
-    const glm::vec3 player_pos = m_player_ptr->get_position();
-    int spawned = 0;
-    for (int i = 0; i < count; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 pos = player_pos + glm::vec3(std::cos(angle) * radius, 1.0f, std::sin(angle) * radius);
-        auto horse = std::make_unique<Horse>("Summoned horse #" + std::to_string(++s_summon_counter), pos);
-        if (!horse->load_model("assets/mobs/horse.glb")) break;
-        m_horses.push_back(std::move(horse));
-        ++spawned;
-    }
-    return spawned;
-}
-
-int Game::summon_cows(int count) {
-    static int s_summon_counter = 0;
-    static std::mt19937 s_rng(std::random_device{}());
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(2.0f, 5.0f);
-
-    const glm::vec3 player_pos = m_player_ptr->get_position();
-    int spawned = 0;
-    for (int i = 0; i < count; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 pos = player_pos + glm::vec3(std::cos(angle) * radius, 1.0f, std::sin(angle) * radius);
-        auto cow = std::make_unique<Cow>("Summoned cow #" + std::to_string(++s_summon_counter), pos);
-        if (!cow->load_model("assets/mobs/cow.glb")) break;
-        m_cows.push_back(std::move(cow));
-        ++spawned;
-    }
-    return spawned;
-}
-
-namespace {
-    // Общая логика размножения для любого вида (Pig/Cow/Horse имеют breeding(), get_position(),
-    // seek_towards() и is_dying()/kill()). Возвращает пары, у которых родился детёныш.
-    template <class Animal>
-    std::vector<std::pair<Animal*, Animal*>> find_breeding_pairs(std::vector<std::unique_ptr<Animal>>& animals) {
-        std::vector<std::pair<Animal*, Animal*>> born;
-        for (size_t i = 0; i < animals.size(); ++i) {
-            Animal& a = *animals[i];
-            if (a.is_dying() || !a.breeding().in_love()) continue;
-
-            // Ближайший влюблённый партнёр того же вида в радиусе поиска.
-            Animal* partner = nullptr;
-            float best = Config::animal_breed_search_radius;
-            for (size_t j = 0; j < animals.size(); ++j) {
-                if (i == j) continue;
-                Animal& b = *animals[j];
-                if (b.is_dying() || !b.breeding().in_love()) continue;
-                const float d = glm::length(glm::vec2(b.get_position().x - a.get_position().x,
-                                                      b.get_position().z - a.get_position().z));
-                if (d < best) { best = d; partner = &b; }
-            }
-            if (!partner) continue;
-
-            a.seek_towards(partner->get_position());
-            // Пара считается один раз (индекс i < индекса партнёра).
-            if (best < 1.6f && &a < partner) born.emplace_back(&a, partner);
-        }
-        return born;
-    }
-}
-
-void Game::update_breeding() {
-    const glm::vec3 player_position = m_player_ptr->get_position();
-    (void)player_position;
-
-    // --- Свиньи ---
-    {
-        std::vector<std::unique_ptr<Pig>> babies;
-        for (auto [a, b] : find_breeding_pairs(m_pigs)) {
-            if (!a->breeding().in_love() || !b->breeding().in_love()) continue; // уже участвовали в другой паре
-            a->breeding().finish_breeding();
-            b->breeding().finish_breeding();
-            const glm::vec3 pos = (a->get_position() + b->get_position()) * 0.5f + glm::vec3(0.0f, 0.3f, 0.0f);
-            auto baby = std::make_unique<Pig>("Piglet", pos);
-            if (baby->load_model("assets/mobs/pig.glb")) {
-                LOG_INFO("Pig born");
-                baby->breeding().make_baby();
-                babies.push_back(std::move(baby));
-            }
-        }
-        for (auto& baby : babies) m_pigs.push_back(std::move(baby));
-    }
-    // --- Коровы ---
-    {
-        std::vector<std::unique_ptr<Cow>> babies;
-        for (auto [a, b] : find_breeding_pairs(m_cows)) {
-            if (!a->breeding().in_love() || !b->breeding().in_love()) continue; // уже участвовали в другой паре
-            a->breeding().finish_breeding();
-            b->breeding().finish_breeding();
-            const glm::vec3 pos = (a->get_position() + b->get_position()) * 0.5f + glm::vec3(0.0f, 0.3f, 0.0f);
-            auto baby = std::make_unique<Cow>("Calf", pos);
-            if (baby->load_model("assets/mobs/cow.glb")) {
-                LOG_INFO("Cow born");
-                baby->breeding().make_baby();
-                babies.push_back(std::move(baby));
-            }
-        }
-        for (auto& baby : babies) m_cows.push_back(std::move(baby));
-    }
-    // --- Лошади (жеребёнок запоминает, чем кормили родителей) ---
-    {
-        std::vector<std::unique_ptr<Horse>> babies;
-        for (auto [a, b] : find_breeding_pairs(m_horses)) {
-            if (!a->breeding().in_love() || !b->breeding().in_love()) continue; // уже участвовали в другой паре
-            const Block_Types food_a = a->get_last_food();
-            const Block_Types food_b = b->get_last_food();
-            a->breeding().finish_breeding();
-            b->breeding().finish_breeding();
-            const glm::vec3 pos = (a->get_position() + b->get_position()) * 0.5f + glm::vec3(0.0f, 0.3f, 0.0f);
-            auto baby = std::make_unique<Horse>("Foal", pos);
-            if (baby->load_model("assets/mobs/horse.glb")) {
-                LOG_INFO(std::string("Horse born; parents last food: ") + get_block_props(food_a).name + " / " +
-                         get_block_props(food_b).name);
-                baby->breeding().make_baby();
-                baby->set_parent_foods(food_a, food_b);
-                babies.push_back(std::move(baby));
-            }
-        }
-        for (auto& baby : babies) m_horses.push_back(std::move(baby));
-    }
-}
 
 void Game::handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block) {
     static std::mt19937 s_rng(std::random_device{}());
@@ -2166,24 +1784,8 @@ void Game::handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block) {
     }
 }
 
-int Game::breed_all(const std::string& species) {
-    int affected = 0;
-    auto love = [&](auto& animals) {
-        for (auto& animal : animals) {
-            if (!animal->is_dying() && animal->breeding().can_be_fed()) {
-                animal->breeding().start_love();
-                ++affected;
-            }
-        }
-    };
-    if (species == "pig") love(m_pigs);
-    else if (species == "cow") love(m_cows);
-    else if (species == "horse") love(m_horses);
-    return affected;
-}
-
 int Game::clear_dropped_items() {
     const int removed = static_cast<int>(m_dropped_items_ptr->size());
     m_dropped_items_ptr->clear();
     return removed;
-}
+};

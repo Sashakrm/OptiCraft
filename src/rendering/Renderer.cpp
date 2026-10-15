@@ -14,6 +14,20 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <GLFW/glfw3.h>
 
+void Renderer::begin_sub_viewport(int x, int y_top, int width, int height, int window_height) {
+    const int y = window_height - (y_top + height);   // GL отсчитывает снизу
+    glViewport(x, y, width, height);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x, y, width, height);
+    glClear(GL_DEPTH_BUFFER_BIT);   // превью рисуется поверх уже отрисованного HUD без чужой глубины
+    glEnable(GL_DEPTH_TEST);
+}
+
+void Renderer::end_sub_viewport(int window_width, int window_height) {
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, window_width, window_height);
+}
+
 namespace {
     // Компиляция и линковка compute-шейдера (GL 4.3). 0 при ошибке, причина — в логе.
     unsigned int compile_compute_program(const std::string& path) {

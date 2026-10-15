@@ -71,6 +71,9 @@ namespace Config {
     constexpr float player_sneak_speed_multiplier = 0.3f;  // Shift: скорость ходьбы × это значение
     constexpr float player_sneak_edge_drop = 0.6f;         // Shift: не шагать туда, где под ногами пусто глубже этого
     constexpr float player_fly_speed = 8.0f;
+    // Бег: удержание Ctrl на земле при движении вперёд. Не работает при приседе и в полёте.
+    constexpr float player_sprint_speed_multiplier = 1.3f;
+    constexpr float exhaustion_sprint_per_meter = 0.1f;   // бег тратит сытость в 10 раз быстрее ходьбы
     // Падение (Survival): первые fall_damage_safe_height блоков падения — без урона (как в
     // Minecraft), дальше — fall_damage_per_block HP за каждый блок сверху.
     constexpr float fall_damage_safe_height = 3.0f;
@@ -162,10 +165,59 @@ namespace Config {
     constexpr int horse_drop_min = 1;
     constexpr int horse_drop_max = 3;
 
+    // --- Враждебные мобы (Survival, по умолчанию появляются вокруг игрока) -----------------
+    // Зомби и скелет: видят игрока в radius (вдвое меньше, если игрок крадётся), бегут к нему и
+    // бьют в упор. Заметившие игрока тревожат других врагов рядом (alert_radius) — идут толпой.
+    // После того как игрок скрылся, враг помнит его memory_seconds и идёт к последней точке.
+    constexpr float hostile_memory_seconds = 8.0f;
+    constexpr float hostile_alert_radius = 16.0f;
+    // Если за hostile_stuck_check_seconds погоня не сдвинула врага, он на hostile_detour_seconds уходит боком.
+    constexpr float hostile_stuck_check_seconds = 0.5f;
+    constexpr float hostile_detour_seconds = 1.0f;
+    constexpr float hostile_attack_height_tolerance = 2.0f; // по вертикали удар достаёт, если разница не больше
+    // Зомби. Модель assets/mobs/zombie.glb: клипы Idle, Walk и (необязательно) Attack.
+    constexpr int min_zombie_count = 4;
+    constexpr float zombie_spawn_radius_min = 16.0f;
+    constexpr float zombie_spawn_radius_max = 28.0f;
+    constexpr float zombie_walk_speed = 1.0f;
+    constexpr float zombie_run_speed = 2.8f;
+    constexpr float zombie_detect_range = 16.0f;
+    constexpr float zombie_width = 0.6f;
+    constexpr float zombie_height = 1.9f;
+    constexpr float zombie_max_health = 20.0f;
+    constexpr float zombie_attack_damage = 3.0f;         // HP за удар
+    constexpr float zombie_attack_reach = 1.6f;          // горизонтально, блоков
+    constexpr float zombie_attack_cooldown = 1.0f;
+    constexpr float zombie_invulnerable_seconds = 0.4f;
+    constexpr float zombie_death_seconds = 0.8f;
+    // Скелет. Модель assets/mobs/skeleton.glb: клипы Idle, Walk и (необязательно) Attack.
+    constexpr int min_skeleton_count = 3;
+    constexpr float skeleton_spawn_radius_min = 16.0f;
+    constexpr float skeleton_spawn_radius_max = 28.0f;
+    constexpr float skeleton_walk_speed = 1.0f;
+    constexpr float skeleton_run_speed = 2.6f;
+    constexpr float skeleton_detect_range = 16.0f;
+    constexpr float skeleton_width = 0.6f;
+    constexpr float skeleton_height = 1.9f;
+    constexpr float skeleton_max_health = 16.0f;
+    constexpr float skeleton_attack_damage = 2.0f;
+    constexpr float skeleton_attack_reach = 1.6f;
+    constexpr float skeleton_attack_cooldown = 1.2f;
+    constexpr float skeleton_invulnerable_seconds = 0.4f;
+    constexpr float skeleton_death_seconds = 0.8f;
+    // После убийства враждебного моба новый появляется не раньше, чем через это время.
+    constexpr float hostile_respawn_delay = 20.0f;
+
     // --- Бой -----------------------------------------------------------------------------
     constexpr float player_attack_reach = 3.5f;
     constexpr float player_attack_cooldown = 0.3f;
     constexpr float player_fist_damage = 1.0f;
+    // Ctrl: короткий клик (меньше horse_sprint_tap_max_seconds) включает/выключает бег, удержание
+    // дольше horse_drift_hold_seconds — ручник (дрифт). Бег держится, пока зажат W.
+    constexpr float horse_sprint_tap_max_seconds = 0.2f;
+    constexpr float horse_drift_hold_seconds = 0.2f;
+    constexpr float horse_sprint_speed_multiplier = 1.5f;
+    constexpr float horse_sprint_energy_multiplier = 1.5f; // бег быстрее утомляет
 
     // Камера
     constexpr float camera_fov = 70.0f;
@@ -204,7 +256,7 @@ namespace Config {
     // Мобы
     // Игра поддерживает у игрока не меньше этого числа свиней одновременно —
     // если меньше, при каждом апдейте доспавнивается недостающее количество
-    // рядом с игроком (см. Game::spawn_missing_pigs).
+    // рядом с игроком (см. Mobs_Update::spawn_missing_pigs).
     constexpr int min_pig_count = 8;
     // Радиус (в блоках, по XZ) вокруг игрока, в котором рождаются новые свиньи.
     constexpr float pig_spawn_radius_min = 5.0f;
@@ -225,8 +277,22 @@ namespace Config {
     // Сколько мяса выпадает из свиньи (включительно).
     constexpr int pig_drop_min = 1;
     constexpr int pig_drop_max = 3;
+
+    // Овцы — пассивные, как коровы (блуждание, паника, кормление пшеницей), отдельные параметры.
+    constexpr int min_sheep_count = 4;
+    constexpr float sheep_spawn_radius_min = 6.0f;
+    constexpr float sheep_spawn_radius_max = 18.0f;
+    constexpr float sheep_walk_speed = 0.9f;
+    constexpr float sheep_width = 0.8f;
+    constexpr float sheep_height = 1.1f;
+    constexpr float sheep_max_health = 8.0f;
+    constexpr float sheep_panic_seconds = 3.0f;
+    constexpr float sheep_panic_speed = 3.2f;
+    constexpr float sheep_invulnerable_seconds = 0.5f;
+    constexpr float sheep_death_seconds = 0.8f;
+    constexpr float sheep_respawn_delay = 25.0f;
     // --- Лошади -----------------------------------------------------------------------
-    // Логика появления как у свиней (см. Game::spawn_missing_horses): держим минимум лошадей
+    // Логика появления как у свиней (см. Mobs_Update::spawn_missing_horses): держим минимум лошадей
     // рядом с игроком, но лошади редкие и рождаются дальше.
     constexpr int min_horse_count = 2;
     constexpr float horse_spawn_radius_min = 12.0f;
@@ -274,6 +340,41 @@ namespace Config {
     // землёй, мог бы за один долгий кадр (лагающий момент, загрузка чанков)
     // провалиться сквозь несколько блоков подряд, не пересекая их в свипе.
     constexpr float mob_max_fall_speed = -40.0f;
+
+    // --- Вода: сопротивление, плавучесть, течение, воздух (игрок и мобы) -----------------
+    // Вода — жидкость из Fluid_Simulator (state == Liquid). Все мобы и игрок сэмплируют её
+    // через Liquid_Physics; разница только в флаге can_swim (см. Hostile_Stats/Passive_Stats).
+    // Горизонтальная скорость внутри жидкости умножается на это значение (0.45 — ходьба по воде
+    // примерно вдвое медленнее, как в Minecraft).
+    constexpr float water_horizontal_drag = 0.45f;
+    // Игрок и мобы, умеющие плавать: удерживаемый прыжок (или подъём) поднимает со скоростью
+    // не выше этой (блоков/с); игрок может активно выплыть и выпрыгнуть из воды.
+    constexpr float water_swim_up_speed = 8.0f;
+    // Предельная скорость погружения тонущего/неплавающего тела.
+    constexpr float water_sink_speed = -2.0f;
+    // Скорость течения при полном перепаде уровней между соседними клетками жидкости.
+    constexpr float water_flow_speed = 1.4f;
+    // Воздух: сколько секунд можно держать голову под водой; над водой восстанавливается быстро.
+    constexpr float breath_max_seconds = 15.0f;
+    constexpr float breath_refill_per_second = 10.0f;
+    // Когда воздух кончился, раз в интервал отнимается урон утопления.
+    constexpr float drown_damage_interval = 1.0f;
+    constexpr float drown_damage = 2.0f;
+
+    // --- Импульс и скорость (игрок) --------------------------------------------------------
+    // Горизонтальный импульс от инструментов затухает экспоненциально с этим коэффициентом.
+    constexpr float impulse_drag = 2.2f;
+    // Инструмент с полем "impulse_speed" в blocks.json (ПКМ): не раньше, чем через это время.
+    constexpr float tool_impulse_cooldown = 0.6f;
+    // Урон удара растёт от скорости игрока: + melee_speed_bonus_per_speed за каждый блок/с
+    // сверх ходьбы; потолок бонуса — melee_speed_bonus_max (как множитель урона, 0.5 = +50%).
+    constexpr float melee_speed_bonus_per_speed = 0.12f;
+    constexpr float melee_speed_bonus_max = 1.5f;
+
+    // --- Броня (Survival) -------------------------------------------------------------------
+    // Каждое очко защиты снижает урон от мобов на (1/25), но не больше чем на 20 очков (80%).
+    constexpr int armor_points_cap = 20;
+    constexpr float armor_points_divisor = 25.0f;
 }
 
 #endif //OPTICRAFT_CONFIG_H

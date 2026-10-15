@@ -2067,6 +2067,94 @@
       "tool_tier": 4,
       "tool_speed": 8.0,
       "attack_damage": 1.0
+    },
+    {
+      "id": 102,
+      "name": "Iron Helmet",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_iron_helmet",
+        "side": "armor_iron_helmet",
+        "bottom": "armor_iron_helmet"
+      },
+      "armor_slot": "head",
+      "armor_points": 2,
+      "durability": 165
+    },
+    {
+      "id": 103,
+      "name": "Iron Chestplate",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_iron_chestplate",
+        "side": "armor_iron_chestplate",
+        "bottom": "armor_iron_chestplate"
+      },
+      "armor_slot": "chest",
+      "armor_points": 6,
+      "durability": 240
+    },
+    {
+      "id": 104,
+      "name": "Iron Leggings",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_iron_leggings",
+        "side": "armor_iron_leggings",
+        "bottom": "armor_iron_leggings"
+      },
+      "armor_slot": "legs",
+      "armor_points": 5,
+      "durability": 225
+    },
+    {
+      "id": 105,
+      "name": "Iron Boots",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_iron_boots",
+        "side": "armor_iron_boots",
+        "bottom": "armor_iron_boots"
+      },
+      "armor_slot": "feet",
+      "armor_points": 2,
+      "durability": 195
     }
   ]
 }

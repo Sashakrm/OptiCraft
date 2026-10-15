@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include "input/Input_Manager.h"
 #include "world/chunks/Chunk_Manager.h"
+#include "physics/Liquid_Physics.h"
 
 class Player {
 private:
@@ -29,7 +30,7 @@ private:
     float m_fly_speed = Config::player_fly_speed;
 
     // Верховая езда: пока true, Player не двигает себя сам — позицию каждый кадр выставляет
-    // лошадь (см. Game::update_horses), физика/гравитация/падение отключены.
+    // лошадь (см. Mobs_Update::update_frame), физика/гравитация/падение отключены.
     bool m_is_riding = false;
 
     // Присед
@@ -50,6 +51,18 @@ private:
     float m_heal_fraction = 0.0f;   // дробная часть лечения от быстрого восстановления (HP целые)
     float m_starvation_timer = 0.0f;
     bool m_hunger_enabled = false;
+
+    // Вода и воздух. m_breath — сколько воздуха осталось под водой; m_head_underwater — голова в
+    // жидкости прямо сейчас (для HUD и для тонущих мобов). Урон среды (падение, утопление) включается
+    // одним флагом m_fall_damage_enabled — он же означает "правила Survival".
+    Liquid_Physics::Breath m_breath;
+    bool m_head_underwater = false;
+    bool m_in_liquid = false;
+    void tick_breath(float delta_time, bool head_in_liquid);
+
+    // Импульс от инструментов (см. apply_impulse): горизонтальная скорость, которая затухает со временем.
+    // Прибавляется к движению каждый кадр, останавливается о стену.
+    glm::vec3 m_impulse{0.0f};
 
     // Падение (см. take_damage от удара о землю после update_crouch/движения по Y ниже).
     // "Было ли на земле в начале кадра" + наивысшая точка с начала падения — чтобы посчитать
@@ -124,7 +137,20 @@ public:
     // чтобы не получить урон за падение, случившееся ещё в Creative/полёте.
     void reset_fall_tracking() { m_fall_start_height = m_position.y; }
     // Гасит текущую скорость — нужно после телепорта, чтобы игрок не "долетел" со старым импульсом.
-    void reset_velocity() { m_velocity = glm::vec3(0.0f); }
+    void reset_velocity() { m_velocity = glm::vec3(0.0f); m_impulse = glm::vec3(0.0f); }
+
+    // Импульс от инструмента: direction — направление (нормализуется), speed — блоков/с.
+    // Горизонталь уходит в m_impulse и затухает; вертикаль даётся сразу скоростью прыжка.
+    void apply_impulse(const glm::vec3& direction, float speed);
+    // Горизонтальная скорость тела (включая импульс и течение) — от неё зависит урон удара.
+    float get_horizontal_speed() const { return glm::length(glm::vec2(m_velocity.x, m_velocity.z)); }
+
+    // Воздух (Survival): сколько секунд осталось и голова ли под водой (для HUD).
+    float get_air() const { return m_breath.air; }
+    float get_max_air() const { return Config::breath_max_seconds; }
+    bool is_head_underwater() const { return m_head_underwater; }
+    // Тело в жидкости (центр) — для HUD и физики.
+    bool is_in_liquid() const { return m_in_liquid; }
 
     // Смерть: полное восстановление здоровья и телепорт в заданную точку (точка спавна мира).
     void respawn(const glm::vec3& position);

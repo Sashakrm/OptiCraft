@@ -230,6 +230,10 @@ public:
     // Шейдер мобов (skinning) — см. assets/shaders/mob_vertex.glsl / mob_fragment.glsl
     // и src/mobs/Mob.cpp. Нужен вызывающему коду (Game), чтобы передать его в Mob::render().
     Shader* get_mob_shader() { return m_mob_shader_ptr; }
+    // Рисование в прямоугольник окна (x, y_top — в пикселях, y_top отсчитывается сверху, как в HUD):
+    // свой вьюпорт, своя глубина. end_sub_viewport возвращает полный кадр.
+    void begin_sub_viewport(int x, int y_top, int width, int height, int window_height);
+    void end_sub_viewport(int window_width, int window_height);
     const Texture_Atlas& get_texture_atlas() const { return *m_blocks_atlas_ptr; }
     size_t get_last_rendered_chunk_count() const { return m_last_rendered_chunk_count; }
     size_t get_last_rendered_triangle_count() const { return m_last_rendered_triangle_count; }

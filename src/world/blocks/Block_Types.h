@@ -96,8 +96,13 @@ enum class Block_Types : Block_ID {
     Diamond = 80,
     Diamond_Ore = 81,
     // Инструменты 82..101 — см. blocks.json (4 материала x 5 видов).
+    // Броня 102..105 — см. blocks.json (поле "armor_slot").
+    Iron_Helmet = 102,
+    Iron_Chestplate = 103,
+    Iron_Leggings = 104,
+    Iron_Boots = 105,
 
-    Count = 102
+    Count = 106
 };
 
 // Максимальная ёмкость реестра блоков: данные из blocks.json могут занимать любые id в этом
@@ -106,6 +111,10 @@ inline constexpr Block_ID k_max_block_types = 256;
 
 // Вид инструмента. Для БЛОКА поле effective_tool говорит, каким инструментом он копается быстрее.
 enum class Tool_Type : uint8_t { None = 0, Pickaxe, Axe, Shovel, Sword, Hoe };
+
+// Слот брони игрока. None — предмет не броня. Для блока/предмета поле armor_slot из blocks.json.
+enum class Armor_Slot : uint8_t { None = 0, Head, Chest, Legs, Feet };
+constexpr size_t k_armor_slot_count = 4;
 
 enum class Block_Mesh_Type : uint8_t {
     Solid = 0,
@@ -229,6 +238,12 @@ struct Block_Properties {
     int tool_tier = 0;                 // 1 дерево, 2 камень, 3 железо, 4 алмаз
     float tool_speed = 1.0f;           // множитель скорости добычи "своих" блоков
     float attack_damage = 0.0f;        // урон по мобам (0 = как кулак)
+    // Импульс игрока при использовании предмета (ПКМ): блоков/с в направлении взгляда. 0 = нет.
+    // Из blocks.json: "impulse_speed". Расход прочности — как у инструмента.
+    float impulse_speed = 0.0f;
+    // Броня: слот, в который предмет надевается, и сколько очков защиты даёт (blocks.json: armor_slot, armor_points).
+    Armor_Slot armor_slot = Armor_Slot::None;
+    int armor_points = 0;
     Tool_Type effective_tool = Tool_Type::None; // для блока: лучший инструмент
     int harvest_tier = 0;              // для блока: минимальный tier кирки, чтобы получить дроп
     bool show_in_creative = true;      // false — не показывать в творческом инвентаре

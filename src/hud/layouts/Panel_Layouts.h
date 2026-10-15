@@ -27,6 +27,8 @@ namespace Panel_Layouts {
         constexpr int k_inventory_craft_base = 100;   // 100..103 — сетка 2x2 в инвентаре
         constexpr int k_inventory_craft_count = 4;
         constexpr int k_inventory_craft_output = 200; // результат крафта 2x2
+        constexpr int k_inventory_armor_base = 300;   // 300..303 — слоты брони (шлем, нагрудник, поножи, ботинки)
+        constexpr int k_inventory_armor_count = 4;
         constexpr int k_container_output = -2;        // результат верстака / выход печи в сессии
     }
 

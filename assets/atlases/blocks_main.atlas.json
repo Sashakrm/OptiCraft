@@ -673,6 +673,30 @@
       "y": 32,
       "w": 16,
       "h": 16
+    },
+    "armor_iron_helmet": {
+      "x": 0,
+      "y": 64,
+      "w": 16,
+      "h": 16
+    },
+    "armor_iron_chestplate": {
+      "x": 16,
+      "y": 64,
+      "w": 16,
+      "h": 16
+    },
+    "armor_iron_leggings": {
+      "x": 32,
+      "y": 64,
+      "w": 16,
+      "h": 16
+    },
+    "armor_iron_boots": {
+      "x": 48,
+      "y": 64,
+      "w": 16,
+      "h": 16
     }
   }
 }

@@ -5,6 +5,7 @@
 #ifndef OPTICRAFT_INVENTORY_H
 #define OPTICRAFT_INVENTORY_H
 
+#include <array>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -119,6 +120,17 @@ public:
     void quick_move_panel(size_t index);
     void quick_move_craft_slot(size_t index);
     void quick_craft_output();
+    // --- Броня (только Survival) ----------------------------------------------------------
+    // Четыре слота: index 0 — шлем, 1 — нагрудник, 2 — поножи, 3 — ботинки (= Armor_Slot - 1).
+    // Надеть можно только предмет нужного слота (см. blocks.json, "armor_slot").
+    static constexpr size_t k_armor_count = k_armor_slot_count;
+    Item_Stack get_armor_slot(size_t index) const;
+    void click_armor_slot(size_t index, bool right = false);
+    // Очки защиты надетой брони (сумма по надетым деталям).
+    int armor_points() const;
+    // Износ брони от удара: каждая надетая деталь теряет amount прочности, сломанная пропадает.
+    void damage_armor(int amount = 1);
+
     // Прямой доступ к слоту панели (nullptr в Creative или вне диапазона) — для контейнеров.
     Item_Stack* get_panel_slot_mutable(size_t index);
     // Вернуть содержимое сетки в инвентарь (при закрытии окна).
@@ -160,6 +172,7 @@ private:
     std::vector<Item_Stack> m_survival_hotbar;   // k_hotbar_size, изначально пусто
     std::vector<Item_Stack> m_survival_storage;  // k_survival_storage_size, изначально пусто
     Item_Stack m_craft_grid[k_craft_size];       // сетка крафта 2x2 в окне инвентаря
+    std::array<Item_Stack, k_armor_count> m_armor{}; // надетая броня (Survival)
 
     // Блок, который должен показываться в слоте панели index для Creative
     // (с учётом текущей страницы). Air — слот за пределами списка блоков.

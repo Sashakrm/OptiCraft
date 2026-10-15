@@ -5,7 +5,7 @@
 //   - после кормёжки взрослое животное «влюблено» Config::animal_love_seconds: если рядом
 //     другое влюблённое того же вида, они идут друг к другу и рождают детёныша;
 //   - после рождения у обоих родителей перезарядка Config::animal_breed_cooldown_seconds (5 минут).
-// Саму логику поиска пары и рождения ведёт Game (шаблон update_breeding), здесь только таймеры.
+// Саму логику поиска пары и рождения ведёт Mobs_Update (update_breeding), здесь только таймеры.
 //
 #ifndef OPTICRAFT_BREEDING_H
 #define OPTICRAFT_BREEDING_H

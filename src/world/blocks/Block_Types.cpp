@@ -377,6 +377,19 @@ void Block_Registry::load_from_file(const std::string& path) {
             if (const auto* v = entry.find("attack_damage")) {
                 properties.attack_damage = std::max(0.0f, read_float(*v, 0.0f));
             }
+            if (const auto* v = entry.find("impulse_speed")) {
+                properties.impulse_speed = std::max(0.0f, read_float(*v, 0.0f));
+            }
+            if (const auto* v = entry.find("armor_points")) {
+                properties.armor_points = std::max(0, read_int(*v, 0));
+            }
+            if (const auto* v = entry.find("armor_slot"); v && v->is_string()) {
+                const std::string n = lower(trim(v->string_value));
+                if (n == "head") properties.armor_slot = Armor_Slot::Head;
+                else if (n == "chest") properties.armor_slot = Armor_Slot::Chest;
+                else if (n == "legs") properties.armor_slot = Armor_Slot::Legs;
+                else if (n == "feet") properties.armor_slot = Armor_Slot::Feet;
+            }
             if (const auto* v = entry.find("harvest_tier")) {
                 properties.harvest_tier = std::max(0, read_int(*v, 0));
             }

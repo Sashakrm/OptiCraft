@@ -111,6 +111,19 @@ glm::vec3 Pig::get_hitbox_max() const {
     return hi;
 }
 
+bool Pig::take_drowning_damage(float amount) {
+    if (m_dying || amount <= 0.0f) return false;
+    m_health -= amount;
+    m_hurt_flash_timer = 0.4f;
+    if (m_health <= 0.0f) {
+        m_dying = true;
+        m_death_timer = 0.0f;
+        m_knockback = glm::vec3(0.0f);
+        return true;
+    }
+    return false;
+}
+
 bool Pig::take_damage(float amount, const glm::vec3& attacker_position) {
     if (m_dying || amount <= 0.0f || m_invulnerable_timer > 0.0f) return false;
 
@@ -199,12 +212,22 @@ void Pig::update(float delta_time, const Chunk_Manager& chunk_manager) {
 
     glm::vec3 position = m_mob.get_position();
 
+    // Вода: свинья плавает (всплывает), воздух тратится, пока голова под водой.
+    const Liquid_Physics::Sample wet = Liquid_Physics::sample(chunk_manager, position, Config::pig_height);
+    if (const int events = m_breath.tick(delta_time, wet.head_in_liquid, Config::breath_max_seconds)) {
+        take_drowning_damage(static_cast<float>(events) * Config::drown_damage);
+    }
+
     // Гравитация — та же схема, что и у игрока (Player::update): скорость копится
     // каждый кадр, ось падения проверяется отдельно от горизонтального движения,
     // чтобы свинья аккуратно останавливалась на первом блоке под ногами, а не
     // проваливалась сквозь пол/потолок при диагональном движении.
-    m_vertical_velocity = std::max(Config::mob_max_fall_speed,
-                                    m_vertical_velocity + Config::mob_gravity * delta_time);
+    if (wet.body_in_liquid) {
+        m_vertical_velocity = Liquid_Physics::swim_vertical_velocity(wet, true, false, m_vertical_velocity, delta_time);
+    } else {
+        m_vertical_velocity = std::max(Config::mob_max_fall_speed,
+                                        m_vertical_velocity + Config::mob_gravity * delta_time);
+    }
 
     // Горизонтальное движение: испуганная свинья бежит быстрее и не останавливается, обычная —
     // только в состоянии Walking; поверх всего накладывается затухающее отбрасывание.
@@ -220,6 +243,8 @@ void Pig::update(float delta_time, const Chunk_Manager& chunk_manager) {
     }
     m_knockback *= std::exp(-6.0f * delta_time);
     if (glm::length(m_knockback) < 0.05f) m_knockback = glm::vec3(0.0f);
+    // В воде замедляется и сносится течением.
+    horizontal_velocity = horizontal_velocity * Liquid_Physics::horizontal_drag(wet) + wet.flow;
 
     bool blocked = false;
     glm::vec3 target = position;

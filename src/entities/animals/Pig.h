@@ -17,6 +17,7 @@
 #include "entities/animals/ai/Pig_AI.h"
 #include "mobs/Mob.h"
 #include "entities/animals/Breeding.h"
+#include "physics/Liquid_Physics.h"
 #include "world/blocks/Block_Types.h"
 #include "utils/Config.h"
 
@@ -46,6 +47,8 @@ public:
     // (Config::pig_panic_seconds). Возвращает true, если ЭТИМ ударом свинья умерла.
     // Повторный удар в пределах Config::pig_invulnerable_seconds игнорируется.
     bool take_damage(float amount, const glm::vec3& attacker_position);
+    // Урон среды (утопление): без отбрасывания. Возвращает true, если умер.
+    bool take_drowning_damage(float amount);
     float get_health() const { return m_health; }
     bool is_dying() const { return m_dying; }
     // Мгновенная смерть без дропа и без учёта неуязвимости (команда /killall).
@@ -95,6 +98,7 @@ private:
     // свинья касается земли — так же, как у игрока (Player::m_velocity.y).
     float m_vertical_velocity = 0.0f;
     bool m_on_ground = false;
+    Liquid_Physics::Breath m_breath;   // свинья плавает (всплывает), воздух тратится под водой
 
     // Возвращает имя анимационного клипа для состояния ИИ — используется,
     // только если модель реально содержит клип с таким именем (см.

@@ -2,7 +2,16 @@
 #include "utils/logging/Logger.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_map>
+#include <cctype>
 #include <cmath>
+#include <string>
+
+namespace {
+    std::string to_lower_ascii(std::string text) {
+        for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return text;
+    }
+}
 
 namespace {
 
@@ -113,6 +122,18 @@ void Mob::compute_bone_matrices(std::vector<glm::mat4>& out_skin_matrices, const
 
     std::vector<glm::mat4> global_matrices(bones.size(), glm::mat4(1.0f));
 
+    // Скрытые кости (см. set_hidden_bones_matching): совпадение по имени и все потомки.
+    // Порядок eval_order гарантирует, что родитель уже помечен, когда доходим до потомка.
+    std::vector<bool> hidden(bones.size(), false);
+    if (!m_hidden_bone_token.empty()) {
+        const std::string token = to_lower_ascii(m_hidden_bone_token);
+        for (const int bone_index : m_model->get_bone_eval_order()) {
+            const Mob_Bone& bone = bones[bone_index];
+            const bool parent_hidden = bone.parent_index >= 0 && hidden[bone.parent_index];
+            hidden[bone_index] = parent_hidden || to_lower_ascii(bone.name).find(token) != std::string::npos;
+        }
+    }
+
     for (const int bone_index : m_model->get_bone_eval_order()) {
         const Mob_Bone& bone = bones[bone_index];
 
@@ -137,7 +158,13 @@ void Mob::compute_bone_matrices(std::vector<glm::mat4>& out_skin_matrices, const
         const glm::mat4 parent_global = bone.parent_index >= 0 ? global_matrices[bone.parent_index] : bone.root_parent_transform;
 
         global_matrices[bone_index] = parent_global * local_matrix;
-        out_skin_matrices[bone_index] = global_matrices[bone_index] * bone.inverse_bind_matrix;
+        if (hidden[bone_index]) {
+            // Масштаб 0 в системе кости (до global): вершины схлопываются в сустав, а не в начало мира.
+            out_skin_matrices[bone_index] = global_matrices[bone_index] *
+                glm::scale(glm::mat4(1.0f), glm::vec3(0.0f)) * bone.inverse_bind_matrix;
+        } else {
+            out_skin_matrices[bone_index] = global_matrices[bone_index] * bone.inverse_bind_matrix;
+        }
     }
 }
 

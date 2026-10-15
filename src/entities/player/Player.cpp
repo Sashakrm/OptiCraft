@@ -4,6 +4,7 @@
 
 #include "entities/player/Player.h"
 #include "utils/Config.h"
+#include "physics/Liquid_Physics.h"
 #include "world/blocks/Block_Types.h"
 #include <cmath>
 #include <algorithm>
@@ -23,7 +24,6 @@ Player::Player()
     , m_standing_eye_height(Config::player_eye_height)
     , m_health(Config::player_max_health)
     , m_max_health(Config::player_max_health)
-
 {}
 
 void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
@@ -51,10 +51,21 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
         update_crouch(chunk_manager);
     }
 
+    // Вода: тело тормозит и сносится течением; в полёте воду игнорируем.
+    const Liquid_Physics::Sample wet = m_is_flying
+        ? Liquid_Physics::Sample{}
+        : Liquid_Physics::sample(chunk_manager, m_position, m_size.y);
+    m_in_liquid = wet.body_in_liquid;
+    tick_breath(delta_time, wet.head_in_liquid);
+
     // Shift на земле: медленная ходьба (подкрадывание). В полёте Shift — спуск, скорость не трогаем.
     const bool sneaking = !m_is_flying && m_pending_input.crouch;
-    const float current_speed = m_is_flying ? m_fly_speed
-        : (sneaking ? m_move_speed * Config::player_sneak_speed_multiplier : m_move_speed);
+    // Бег: Ctrl на земле при движении вперёд; при приседе и в полёте не работает.
+    const bool sprinting = !m_is_flying && !sneaking && m_pending_input.sprint && m_pending_input.forward > 0.0f;
+    const float current_speed = (m_is_flying ? m_fly_speed
+    : (sneaking ? m_move_speed * Config::player_sneak_speed_multiplier
+           : (sprinting ? m_move_speed * Config::player_sprint_speed_multiplier : m_move_speed)))
+        * Liquid_Physics::horizontal_drag(wet);
 
     if (m_pending_input.forward != 0.0f || m_pending_input.strafe != 0.0f) {
         glm::vec3 move_direction = forward * m_pending_input.forward + right * m_pending_input.strafe;
@@ -67,6 +78,12 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
         m_velocity.x = 0.0f;
         m_velocity.z = 0.0f;
     }
+    // Импульс от инструмента и течение воды прибавляются поверх движения игрока.
+    m_velocity.x += m_impulse.x + wet.flow.x;
+    m_velocity.z += m_impulse.z + wet.flow.z;
+    m_impulse *= std::exp(-Config::impulse_drag * delta_time);
+    if (glm::length(m_impulse) < 0.02f) m_impulse = glm::vec3(0.0f);
+
     if (m_is_flying) {
         if (m_pending_input.jump) {
             m_velocity.y = m_fly_speed;
@@ -94,14 +111,26 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
         m_fall_start_height = std::max(m_fall_start_height, m_position.y);
     }
 
-    // Прыжок
-    if (m_pending_input.jump && m_on_ground) {
+    // Прыжок. В воде прыжок — гребок вверх, а не отскок от земли.
+    if (m_pending_input.jump && m_on_ground && !wet.body_in_liquid) {
         m_velocity.y = m_jump_force;
         m_on_ground = false;
         add_exhaustion(Config::exhaustion_jump);
     }
 
-    m_velocity.y += m_gravity * delta_time;
+    if (wet.body_in_liquid) {
+        if (m_pending_input.jump) {
+            // Не сглаживаем гребок: на поверхности скорость иначе успевала упасть до выхода
+            // центра тела из жидкого блока, и игрок снова проваливался в воду.
+            m_velocity.y = std::max(m_velocity.y,
+                                    std::max(Config::water_swim_up_speed, m_jump_force));
+        } else {
+            m_velocity.y = Liquid_Physics::swim_vertical_velocity(wet, true, false,
+                m_velocity.y, delta_time, m_pending_input.crouch, true);
+        }
+    } else {
+        m_velocity.y += m_gravity * delta_time;
+    }
     m_on_ground = false;
 
     glm::vec3 target = m_position;
@@ -118,6 +147,7 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
     if (collides_at(target, chunk_manager) || leaves_ground(target)) {
         target.x = m_position.x;
         m_velocity.x = 0.0f;
+        m_impulse.x = 0.0f;
     } else {
         m_position.x = target.x;
     }
@@ -143,19 +173,42 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
     if (collides_at(target, chunk_manager) || leaves_ground(target)) {
         target.z = m_position.z;
         m_velocity.z = 0.0f;
+        m_impulse.z = 0.0f;
     } else {
         m_position.z = target.z;
     }
 
-    // Ходьба по земле тоже понемногу утомляет (0.01 за метр, как в Minecraft).
+    // Ходьба по земле тоже понемногу утомляет (0.01 за метр), бег — заметно сильнее (0.1, как в Minecraft).
     if (m_on_ground) {
         const float dx = m_position.x - frame_start_position.x;
         const float dz = m_position.z - frame_start_position.z;
-        add_exhaustion(std::sqrt(dx * dx + dz * dz) * Config::exhaustion_walk_per_meter);
+        add_exhaustion(std::sqrt(dx * dx + dz * dz) *
+            (sprinting ? Config::exhaustion_sprint_per_meter : Config::exhaustion_walk_per_meter));
     }
 
     // Сбрасываем ввод
     m_pending_input = {0.0f, 0.0f, false, false};
+}
+
+void Player::apply_impulse(const glm::vec3& direction, float speed) {
+    if (speed <= 0.0f || glm::length(direction) < 0.001f) return;
+    const glm::vec3 d = glm::normalize(direction);
+    m_impulse += glm::vec3(d.x, 0.0f, d.z) * speed;
+    m_velocity.y += d.y * speed;   // вертикальная часть — сразу в скорость (вверх или вниз)
+    m_on_ground = false;
+}
+
+void Player::tick_breath(float delta_time, bool head_in_liquid) {
+    m_head_underwater = head_in_liquid;
+    // Воздух тратится и утопление бьёт только по правилам Survival (см. m_fall_damage_enabled).
+    if (!m_fall_damage_enabled) {
+        m_breath = Liquid_Physics::Breath{};
+        return;
+    }
+    const int events = m_breath.tick(delta_time, head_in_liquid, Config::breath_max_seconds);
+    for (int i = 0; i < events; ++i) {
+        take_damage(static_cast<int>(Config::drown_damage));
+    }
 }
 
 void Player::set_movement_input(const Input_Manager::Move_Input& input,
@@ -289,6 +342,8 @@ void Player::respawn(const glm::vec3& position) {
     m_hunger_regen_timer = 0.0f;
     m_heal_fraction = 0.0f;
     m_starvation_timer = 0.0f;
+    m_impulse = glm::vec3(0.0f);
+    m_breath = Liquid_Physics::Breath{};
 }
 
 void Player::add_exhaustion(float amount) {

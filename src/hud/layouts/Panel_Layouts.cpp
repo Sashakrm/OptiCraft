@@ -17,7 +17,8 @@ namespace Panel_Layouts {
 
         // --- инвентарь: Survival ---
         constexpr float k_survival_height = 166.0f;
-        constexpr glm::vec4 k_player_preview{8.0f, 8.0f, 66.0f, 70.0f};   // x, y, w, h
+        constexpr glm::vec4 k_player_preview{32.0f, 8.0f, 44.0f, 70.0f};  // x, y, w, h (правее столбца брони)
+        constexpr glm::vec2 k_armor_column{8.0f, 8.0f};                   // столбец слотов брони, шаг k_slot_pitch
         constexpr glm::vec2 k_craft_label{80.0f, 6.0f};
         constexpr glm::vec2 k_craft_grid_origin{80.0f, 18.0f};            // сетка 2x2, шаг k_slot_pitch
         constexpr glm::vec2 k_craft_arrow{119.0f, 28.0f};
@@ -104,6 +105,10 @@ namespace Panel_Layouts {
         }
         layout.progress.push_back({k_craft_arrow, 0.0f, false});
         layout.slots.push_back({k_craft_output, Panel_Slot_Ids::k_inventory_craft_output, true});
+        for (int i = 0; i < Panel_Slot_Ids::k_inventory_armor_count; ++i) {
+            layout.slots.push_back({{k_armor_column.x, k_armor_column.y + k_slot_pitch * static_cast<float>(i)},
+                                    Panel_Slot_Ids::k_inventory_armor_base + i, false});
+        }
         append_player_slots(layout, k_panel_margin, k_survival_storage_y, k_survival_hotbar_y, true, 0, hotbar_start);
         return layout;
     }

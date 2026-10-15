@@ -38,6 +38,7 @@ private:
     int m_key_right;
     int m_key_jump;
     int m_key_crouch;
+    int m_key_sprint;
 
 
 public:
@@ -56,6 +57,7 @@ public:
         float strafe;   // A/D: -1..1
         bool jump;
         bool crouch;
+        bool sprint = false;   // Ctrl, удержание — бег (игрок; лошадь читает Ctrl сама)
     };
     Move_Input get_movement_input() const;
 

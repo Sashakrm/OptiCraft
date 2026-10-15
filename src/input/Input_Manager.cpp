@@ -19,6 +19,7 @@ Input_Manager::Input_Manager(GLFWwindow* window_ptr)
     , m_key_right(GLFW_KEY_D)
     , m_key_jump(GLFW_KEY_SPACE)
     ,m_key_crouch(GLFW_KEY_LEFT_SHIFT)
+    ,m_key_sprint(GLFW_KEY_LEFT_CONTROL)
 {}
 
 void Input_Manager::update() {
@@ -64,6 +65,7 @@ Input_Manager::Move_Input Input_Manager::get_movement_input() const {
     if (is_key_held(m_key_right)) input.strafe += 1.0f;
     if (is_key_held(m_key_jump)) input.jump = true;
     if (is_key_held(m_key_crouch)) input.crouch = true;
+    if (is_key_held(m_key_sprint)) input.sprint = true;
 
     return input;
 }
