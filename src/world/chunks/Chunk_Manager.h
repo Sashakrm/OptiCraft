@@ -104,7 +104,7 @@ private:
         Chunk_Light_Faces neighbor_light;
         // Рёбра и углы за границей (кольцо для AO). ring_valid = false: соседа не было при постановке,
         // клетку отдаст генератор в воркере, как и грани без снимка.
-        std::array<uint8_t, Chunk_Ring::kSize> ring_blocks{};
+        std::array<Block_ID, Chunk_Ring::kSize> ring_blocks{};
         std::array<bool, Chunk_Ring::kSize> ring_valid{};
         uint64_t generation_id;
         // Счётчик пометок чанка на момент снимка (см. Chunk::get_dirty_epoch): при применении сравнивается.
@@ -268,6 +268,7 @@ private:
     // loaded world - see the comment at the implementation and at m_columns_pending_sky_recompute.
     void recompute_sky_lighting(const std::unordered_set<uint64_t>& changed_chunk_columns,
                                 bool propagate_horizontal = true);
+    void rebuild_cross_chunk_greedy_meshes(const std::vector<glm::ivec3>& changed_chunks);
 
 public:
     // Загружен ли чанк (нужен менеджеру посевов: вне загруженной зоны ничего не растёт).
@@ -326,7 +327,8 @@ public:
     std::vector<Renderable_Chunk> get_renderable_chunks(
         const Frustum* frustum = nullptr,
         const glm::vec3* camera_position = nullptr,
-        int flora_render_distance_chunks = -1
+        int flora_render_distance_chunks = -1,
+        bool spectator = false
     ) const;
     std::vector<glm::ivec3> take_unloaded_chunk_positions();
 

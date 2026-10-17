@@ -1235,7 +1235,7 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     if (!cpu_fallback.empty()) m_chunk_manager_ptr->request_cpu_remesh(cpu_fallback);
 
     const auto renderable = m_chunk_manager_ptr->get_renderable_chunks(
-        &frustum, &camera_position, m_renderer_ptr->get_flora_render_distance());
+        &frustum, &camera_position, m_renderer_ptr->get_flora_render_distance(), m_spectator);
 
     m_renderer_ptr->draw_sky(
         camera_position,
@@ -1247,7 +1247,8 @@ void Game::render_gameplay(bool show_gameplay_hud) {
         m_day_night_cycle.get_moon_direction()
     );
 
-    m_renderer_ptr->render_chunks(renderable, view, projection, m_day_night_cycle.get_ambient_intensity());
+    m_renderer_ptr->render_chunks(renderable, view, projection,
+                                  m_day_night_cycle.get_ambient_intensity(), m_spectator);
 
     if (Shader* mob_shader = m_renderer_ptr->get_mob_shader()) {
         m_mobs.render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());

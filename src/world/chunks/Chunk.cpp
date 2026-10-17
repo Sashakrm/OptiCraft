@@ -16,6 +16,7 @@
 #include <cstring>
 #include <memory>
 #include <array>
+#include <map>
 
 namespace {
     std::atomic<uint64_t> g_mesh_version_counter{0};
@@ -981,7 +982,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                                        c[2] + (axis == 2 ? sign : 0));
                                         if (tab.cull_same[cur]) face_light = tab.light_coarse[face_light];
                                         const uint32_t ao = face_ao(c, axis, sign, ua, va);
-                                        // Ключ: id (биты 0..15) | meta (16..23) | свет (24..31) | AO (32..39).
+                                        // В маске храним id/meta как представителя для UV-резолва;
+                                        // соседние клетки с той же UV-областью могут слиться независимо от id.
                                         key = static_cast<uint64_t>(cur) |
                                               (static_cast<uint64_t>(meta) << 16) |
                                               (static_cast<uint64_t>(face_light) << 24) |
@@ -1008,13 +1010,30 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
                                 // Повёрнутая текстура (бревно на боку) не сливается: квад 1x1.
                                 int w = 1, h = 1;
+                                bool key_rotate = false;
+                                const Block_Properties& key_props = *props[key & 0xFFFFu];
+                                const glm::vec4& key_uv = key_props.uses_meta
+                                    ? key_props.resolve_face_uv(face, meta, key_rotate)
+                                    : key_props.get_uv(axis == 1 ? sign : 0);
+                                const auto same_surface = [&](uint64_t candidate) {
+                                    if (candidate == 0) return false;
+                                    const Block_Properties& candidate_props = *props[candidate & 0xFFFFu];
+                                    const uint8_t candidate_meta = static_cast<uint8_t>((candidate >> 16) & 0xFFu);
+                                    bool candidate_rotate = false;
+                                    const glm::vec4& candidate_uv = candidate_props.uses_meta
+                                        ? candidate_props.resolve_face_uv(face, candidate_meta, candidate_rotate)
+                                        : candidate_props.get_uv(axis == 1 ? sign : 0);
+                                    return key_rotate == candidate_rotate &&
+                                           key_uv.x == candidate_uv.x && key_uv.y == candidate_uv.y &&
+                                           key_uv.z == candidate_uv.z && key_uv.w == candidate_uv.w;
+                                };
                                 if (!rotate) {
                                     while (u + w < kN &&
-                                           S.mask[static_cast<size_t>(v) * kN + u + w] == key) ++w;
+                                           same_surface(S.mask[static_cast<size_t>(v) * kN + u + w])) ++w;
                                     bool grow = true;
                                     while (v + h < v_count && grow) {
                                         for (int i = 0; i < w; ++i) {
-                                            if (S.mask[static_cast<size_t>(v + h) * kN + u + i] != key) {
+                                            if (!same_surface(S.mask[static_cast<size_t>(v + h) * kN + u + i])) {
                                                 grow = false;
                                                 break;
                                             }
@@ -1332,6 +1351,8 @@ void Chunk::build_mesh() {
                                            lookup, light_lookup, *m_texture_atlas, false, meta_lookup);
     if (!same_connectivity(m_meshes, meshes)) g_connectivity_epoch.fetch_add(1, std::memory_order_relaxed);
     m_meshes = std::move(meshes);
+    m_unmerged_solid.clear();
+    m_unmerged_solid_counts.fill(0);
     m_is_mesh_dirty = false;
     m_mesh_version = ++g_mesh_version_counter;
 }
@@ -1339,9 +1360,275 @@ void Chunk::build_mesh() {
 void Chunk::apply_mesh(Chunk_Meshes meshes) {
     if (!same_connectivity(m_meshes, meshes)) g_connectivity_epoch.fetch_add(1, std::memory_order_relaxed);
     m_meshes = std::move(meshes);
+    m_unmerged_solid.clear();
+    m_unmerged_solid_counts.fill(0);
     m_is_mesh_dirty = false;
     m_mesh_version = ++g_mesh_version_counter;
 }
+
+bool Chunk::restore_unmerged_solid() {
+    if (m_unmerged_solid.empty()) return false;
+    if (!m_unmerged_solid.empty()) m_meshes.solid = m_unmerged_solid;
+    m_meshes.extends_pos_x_blocks = 0;
+    m_meshes.extends_pos_z_blocks = 0;
+    if (!m_unmerged_solid.empty()) {
+        size_t start = 0;
+        for (size_t i = 0; i < m_meshes.sections.size(); ++i) {
+            Chunk_Section_Range& section = m_meshes.sections[i];
+            section.solid_start = start;
+            section.solid_count = m_unmerged_solid_counts[i];
+            start += section.solid_count;
+            section.has_geometry = section.solid_count != 0 || section.flora_count != 0 || section.liquid_count != 0;
+        }
+    }
+    return true;
+}
+
+void Chunk::cache_unmerged_solid(
+    const std::array<size_t, Config::chunk_section_count>& section_counts) {
+    if (!m_unmerged_solid.empty() || m_meshes.solid.empty()) return;
+    m_unmerged_solid = m_meshes.solid;
+    m_unmerged_solid_counts = section_counts;
+}
+
+void Chunk::touch_mesh_version() {
+    m_mesh_version = ++g_mesh_version_counter;
+}
+
+namespace {
+    constexpr float kQuad_Epsilon = 1.0e-4f;
+
+    bool near_value(float a, float b) {
+        return std::abs(a - b) <= kQuad_Epsilon;
+    }
+
+    struct Solid_Quad {
+        std::array<Terrain_Vertex, 6> vertices{};
+        std::array<float, 3> lo{};
+        std::array<float, 3> hi{};
+        // d(local_u, local_v) / d(world_x, world_y, world_z)
+        std::array<std::array<float, 2>, 3> uv_slope{};
+        int normal_axis = -1;
+        int normal_sign = 0;
+        bool flat_attributes = false;
+    };
+
+    Solid_Quad describe_solid_quad(const Terrain_Vertex* vertices) {
+        Solid_Quad q;
+        std::copy_n(vertices, 6, q.vertices.begin());
+        q.lo = {vertices[0].x, vertices[0].y, vertices[0].z};
+        q.hi = q.lo;
+        for (int i = 1; i < 6; ++i) {
+            const float p[3] = {vertices[i].x, vertices[i].y, vertices[i].z};
+            for (int axis = 0; axis < 3; ++axis) {
+                q.lo[axis] = std::min(q.lo[axis], p[axis]);
+                q.hi[axis] = std::max(q.hi[axis], p[axis]);
+            }
+        }
+
+        const glm::vec3 p0(vertices[0].x, vertices[0].y, vertices[0].z);
+        const glm::vec3 p1(vertices[1].x, vertices[1].y, vertices[1].z);
+        const glm::vec3 p2(vertices[2].x, vertices[2].y, vertices[2].z);
+        const glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+        const glm::vec3 an = glm::abs(n);
+        if (an.x >= an.y && an.x >= an.z) q.normal_axis = 0;
+        else if (an.y >= an.z) q.normal_axis = 1;
+        else q.normal_axis = 2;
+        const float normal_component = q.normal_axis == 0 ? n.x : q.normal_axis == 1 ? n.y : n.z;
+        q.normal_sign = normal_component >= 0.0f ? 1 : -1;
+
+        for (int axis = 0; axis < 3; ++axis) {
+            const float extent = q.hi[axis] - q.lo[axis];
+            if (extent <= kQuad_Epsilon) continue;
+            float uv_lo[2] = {}, uv_hi[2] = {};
+            int count_lo = 0, count_hi = 0;
+            for (const Terrain_Vertex& v : q.vertices) {
+                const float p = axis == 0 ? v.x : axis == 1 ? v.y : v.z;
+                if (near_value(p, q.lo[axis])) {
+                    uv_lo[0] += v.local_u; uv_lo[1] += v.local_v; ++count_lo;
+                }
+                if (near_value(p, q.hi[axis])) {
+                    uv_hi[0] += v.local_u; uv_hi[1] += v.local_v; ++count_hi;
+                }
+            }
+            if (count_lo && count_hi) {
+                q.uv_slope[axis][0] = (uv_hi[0] / count_hi - uv_lo[0] / count_lo) / extent;
+                q.uv_slope[axis][1] = (uv_hi[1] / count_hi - uv_lo[1] / count_lo) / extent;
+            }
+        }
+
+        q.flat_attributes = true;
+        for (int i = 1; i < 6; ++i) {
+            const Terrain_Vertex& a = vertices[0];
+            const Terrain_Vertex& b = vertices[i];
+            q.flat_attributes = q.flat_attributes &&
+                near_value(a.rect_u_min, b.rect_u_min) && near_value(a.rect_v_min, b.rect_v_min) &&
+                near_value(a.rect_u_max, b.rect_u_max) && near_value(a.rect_v_max, b.rect_v_max) &&
+                near_value(a.light, b.light) && near_value(a.ao, b.ao) && near_value(a.ny, b.ny);
+        }
+        return q;
+    }
+
+    using Boundary_Quad_Key = std::array<float, 14>;
+
+    Boundary_Quad_Key boundary_quad_key(const Solid_Quad& q, int seam_axis) {
+        Boundary_Quad_Key key{};
+        size_t out = 0;
+        key[out++] = static_cast<float>(q.normal_axis);
+        key[out++] = static_cast<float>(q.normal_sign);
+        key[out++] = q.lo[q.normal_axis]; // the shared face plane
+        for (int axis = 0; axis < 3; ++axis) {
+            if (axis == seam_axis || axis == q.normal_axis) continue;
+            key[out++] = q.lo[axis];
+            key[out++] = q.hi[axis];
+        }
+        const Terrain_Vertex& v = q.vertices[0];
+        key[out++] = v.rect_u_min;
+        key[out++] = v.rect_v_min;
+        key[out++] = v.rect_u_max;
+        key[out++] = v.rect_v_max;
+        key[out++] = v.light;
+        key[out++] = v.ao;
+        key[out++] = v.ny;
+        return key;
+    }
+
+    void extend_quad_across_seam(Solid_Quad& a, const Solid_Quad& b, int seam_axis) {
+        const float old_edge = a.hi[seam_axis];
+        const float extension = b.hi[seam_axis] - b.lo[seam_axis];
+        for (Terrain_Vertex& v : a.vertices) {
+            float* p = seam_axis == 0 ? &v.x : seam_axis == 1 ? &v.y : &v.z;
+            if (!near_value(*p, old_edge)) continue;
+            *p += extension;
+            v.local_u += a.uv_slope[seam_axis][0] * extension;
+            v.local_v += a.uv_slope[seam_axis][1] * extension;
+        }
+        a.hi[seam_axis] += extension;
+    }
+
+    void append_section_quads(const Chunk_Meshes& mesh, size_t section_index,
+                              std::vector<std::array<Terrain_Vertex, 6>>& out) {
+        const Chunk_Section_Range& section = mesh.sections[section_index];
+        const size_t end = section.solid_start + section.solid_count;
+        for (size_t i = section.solid_start; i + 6 <= end; i += 6) {
+            std::array<Terrain_Vertex, 6> quad{};
+            std::copy_n(mesh.solid.data() + i, 6, quad.begin());
+            out.push_back(quad);
+        }
+    }
+
+    void append_quads(std::vector<Terrain_Vertex>& target,
+                      const std::vector<std::array<Terrain_Vertex, 6>>& quads) {
+        target.reserve(target.size() + quads.size() * 6);
+        for (const auto& quad : quads) target.insert(target.end(), quad.begin(), quad.end());
+    }
+}
+
+bool merge_chunk_boundary_solids(Chunk& lower, Chunk& upper, int axis) {
+    if ((axis != 0 && axis != 2) || lower.get_chunk_y() != upper.get_chunk_y()) return false;
+    if (axis == 0 && (upper.get_chunk_x() <= lower.get_chunk_x() ||
+                      upper.get_chunk_z() != lower.get_chunk_z())) return false;
+    if (axis == 2 && (upper.get_chunk_z() <= lower.get_chunk_z() ||
+                      upper.get_chunk_x() != lower.get_chunk_x())) return false;
+
+    Chunk_Meshes& a_mesh = lower.get_meshes_mutable();
+    Chunk_Meshes& b_mesh = upper.get_meshes_mutable();
+    if (a_mesh.solid_on_gpu || b_mesh.solid_on_gpu || a_mesh.solid.empty() || b_mesh.solid.empty()) return false;
+
+    std::array<size_t, Config::chunk_section_count> a_original_counts{};
+    std::array<size_t, Config::chunk_section_count> b_original_counts{};
+    for (size_t i = 0; i < a_mesh.sections.size(); ++i) {
+        a_original_counts[i] = a_mesh.sections[i].solid_count;
+        b_original_counts[i] = b_mesh.sections[i].solid_count;
+    }
+
+    const float boundary = static_cast<float>(
+        (axis == 0 ? upper.get_chunk_x() : upper.get_chunk_z()) * Config::chunk_size);
+    bool any_merged = false;
+    std::vector<Terrain_Vertex> new_a;
+    std::vector<Terrain_Vertex> new_b;
+
+    for (size_t section_index = 0; section_index < a_mesh.sections.size(); ++section_index) {
+        std::vector<std::array<Terrain_Vertex, 6>> a_quads, b_quads;
+        append_section_quads(a_mesh, section_index, a_quads);
+        append_section_quads(b_mesh, section_index, b_quads);
+        std::vector<bool> remove_b(b_quads.size(), false);
+
+        std::map<Boundary_Quad_Key, std::vector<size_t>> b_candidates;
+        for (size_t j = 0; j < b_quads.size(); ++j) {
+            const Solid_Quad q = describe_solid_quad(b_quads[j].data());
+            if (!q.flat_attributes || q.normal_axis == axis || !near_value(q.lo[axis], boundary)) continue;
+            b_candidates[boundary_quad_key(q, axis)].push_back(j);
+        }
+
+        for (auto& vertices : a_quads) {
+            Solid_Quad a = describe_solid_quad(vertices.data());
+            if (!a.flat_attributes || a.normal_axis == axis || !near_value(a.hi[axis], boundary)) continue;
+            const auto it = b_candidates.find(boundary_quad_key(a, axis));
+            if (it == b_candidates.end()) continue;
+
+            for (const size_t j : it->second) {
+                if (remove_b[j]) continue;
+                const Solid_Quad b = describe_solid_quad(b_quads[j].data());
+                if (!b.flat_attributes || !near_value(b.lo[axis], boundary) || b.hi[axis] <= boundary) continue;
+
+                bool same_uv_direction = true;
+                for (int uv_axis = 0; uv_axis < 3; ++uv_axis) {
+                    same_uv_direction = same_uv_direction &&
+                        near_value(a.uv_slope[uv_axis][0], b.uv_slope[uv_axis][0]) &&
+                        near_value(a.uv_slope[uv_axis][1], b.uv_slope[uv_axis][1]);
+                }
+                if (!same_uv_direction) continue;
+
+                extend_quad_across_seam(a, b, axis);
+                vertices = a.vertices;
+                remove_b[j] = true;
+                any_merged = true;
+                break;
+            }
+        }
+
+        const size_t a_start = new_a.size();
+        append_quads(new_a, a_quads);
+        a_mesh.sections[section_index].solid_start = a_start;
+        a_mesh.sections[section_index].solid_count = a_quads.size() * 6;
+
+        std::vector<std::array<Terrain_Vertex, 6>> kept_b;
+        kept_b.reserve(b_quads.size());
+        for (size_t j = 0; j < b_quads.size(); ++j) {
+            if (!remove_b[j]) kept_b.push_back(b_quads[j]);
+        }
+        const size_t b_start = new_b.size();
+        append_quads(new_b, kept_b);
+        b_mesh.sections[section_index].solid_start = b_start;
+        b_mesh.sections[section_index].solid_count = kept_b.size() * 6;
+    }
+
+    if (!any_merged) return false;
+    lower.cache_unmerged_solid(a_original_counts);
+    upper.cache_unmerged_solid(b_original_counts);
+    a_mesh.solid = std::move(new_a);
+    b_mesh.solid = std::move(new_b);
+    for (Chunk_Section_Range& section : a_mesh.sections) {
+        section.has_geometry = section.solid_count != 0 || section.flora_count != 0 || section.liquid_count != 0;
+    }
+    for (Chunk_Section_Range& section : b_mesh.sections) {
+        section.has_geometry = section.solid_count != 0 || section.flora_count != 0 || section.liquid_count != 0;
+    }
+    if (axis == 0) {
+        a_mesh.extends_pos_x_blocks = std::max(
+            a_mesh.extends_pos_x_blocks,
+            (upper.get_chunk_x() - lower.get_chunk_x()) * Config::chunk_size);
+    } else {
+        a_mesh.extends_pos_z_blocks = std::max(
+            a_mesh.extends_pos_z_blocks,
+            (upper.get_chunk_z() - lower.get_chunk_z()) * Config::chunk_size);
+    }
+    lower.touch_mesh_version();
+    upper.touch_mesh_version();
+    return true;
+}
+
 bool Chunk::is_empty() const {
     return !m_meshes.gpu_candidates && m_meshes.solid.empty() &&
            m_meshes.flora.empty() && m_meshes.liquid.empty();

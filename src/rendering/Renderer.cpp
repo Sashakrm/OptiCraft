@@ -2,6 +2,7 @@
 // Created by noktemor on 11.02.2026.
 //
 #include <cstddef>
+#include <cstdlib>
 #include "rendering/Renderer.h"
 #include "utils/logging/Logger.h"
 #include "utils/Config.h"
@@ -450,6 +451,12 @@ void Renderer::issue_occlusion_query(Section_Occlusion_State& state, const glm::
 }
 
 bool Renderer::initialize_gpu_mesher() {
+    // Диагностика: OPTICRAFT_CPU_MESH=1 выключает GPU-мешер, все чанки мешатся на CPU.
+    // Сравнение картинки с этим флагом и без него показывает, в каком пути лежит ошибка.
+    if (const char* forced = std::getenv("OPTICRAFT_CPU_MESH"); forced && forced[0] == '1') {
+        LOG_INFO("GPU meshing disabled by OPTICRAFT_CPU_MESH=1");
+        return false;
+    }
     if (!GLAD_GL_VERSION_4_3) {
         LOG_INFO("GPU meshing disabled: OpenGL 4.3 is not available");
         return false;
@@ -902,7 +909,8 @@ void Renderer::draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks
 void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
                             const glm::mat4& view,
                             const glm::mat4& projection,
-                            float ambient_intensity) {
+                            float ambient_intensity,
+                            bool spectator) {
     m_last_rendered_chunk_count = 0;
     m_last_rendered_triangle_count = 0;
     m_last_rendered_section_count = 0;
@@ -918,6 +926,8 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
 
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
 
     m_last_occluded_section_count = 0;
 
@@ -1009,12 +1019,12 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
                 camera_position.z >= section_min.z && camera_position.z <= section_max.z;
 
             Section_Occlusion_State& occ = gl_res.occlusion[section_index];
-            if (m_occlusion_enabled) {
+            if (m_occlusion_enabled && !spectator) {
                 poll_occlusion_result(occ);
                 if (camera_inside_section) occ.visible = true;
             }
 
-            if (!m_occlusion_enabled || occ.visible) {
+            if (spectator || !m_occlusion_enabled || occ.visible) {
                 draw_mesh_range(gl_res.solid_vao, section.solid_start, section.solid_count);
                 ++m_last_rendered_section_count;
                 any_section_drawn = true;
@@ -1065,7 +1075,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     //    issue_occlusion_query for why the bias is negative — push toward the camera, not
     //    away), not world-space units, so unlike a geometric grow alone it stays effective
     //    regardless of distance from the camera.
-    if (m_occlusion_enabled) {
+    if (m_occlusion_enabled && !spectator) {
     m_occlusion_shader_ptr->use();
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_FALSE);
@@ -1172,8 +1182,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         }
     }
 
-    // Отсечение обратных граней снова включается: для непрозрачной геометрии и
-    // для воды оно по-прежнему нужно.
+    // Наблюдатель может оказаться внутри сплошного блока: у поверхности блока
+    // обращённая внутрь сторона является обратной гранью. Оставляем её видимой,
+    // иначе при полёте сквозь блок камера видит сквозь его стенки.
     glEnable(GL_CULL_FACE);
 
     // Жидкость — отдельный шейдер (анимация волны на вершинах + мерцание/скролл течения
@@ -1213,6 +1224,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
 
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
 }
 

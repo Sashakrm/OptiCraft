@@ -30,55 +30,14 @@
   <component name="ChangeListManager">
     <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/atlases/blocks_main.atlas.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/atlases/blocks_main.atlas.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/blocks.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/blocks.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/lang/en.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/lang/en.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/lang/ru.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/lang/ru.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/mobs/пока-что мусор.zip" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/recipe.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/recipe.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/smelting.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/smelting.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/texture/texture_atlas.png" beforeDir="false" afterPath="$PROJECT_DIR$/assets/texture/texture_atlas.png" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/documentation/TECHNICAL_DOCUMENTATION.md" beforeDir="false" afterPath="$PROJECT_DIR$/documentation/TECHNICAL_DOCUMENTATION.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/commands/Command_System.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/Command_System.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/app/Application.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/app/Application.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/game/Game.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Game.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/animals/Horse.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/animals/Horse.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/animals/Horse.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/animals/Horse.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/animals/Hostile_Mob.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/animals/Hostile_Mob.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/hostile/Hostile_Mob.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/hostile/Hostile_Mob.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/hostile/Hostile_Mob.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/hostile/Hostile_Mob.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Inventory.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Inventory.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Inventory.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Inventory.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Player.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Player.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Player.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Player.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/hud/layouts/Panel_Layouts.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/hud/layouts/Panel_Layouts.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/hud/layouts/Panel_Layouts.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/hud/layouts/Panel_Layouts.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/mobs/Mobs_Update.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Mobs_Update.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/mobs/Mobs_Update.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Mobs_Update.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/Config.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/Config.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Types.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Types.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Types.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Types.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Container_Session.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Container_Session.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/dimensions/Dimension.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/dimensions/Dimension.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/dimensions/Dimension.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/dimensions/Dimension.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/generation/Tree_Generator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/Tree_Generator.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/World_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/World_File.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/World_File.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/World_File.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -117,61 +76,61 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="5.201477278922173E-15" />
-      <entry key="MS500" value="0.0013906740191377655" />
-      <entry key="S2" value="0.19311069874489428" />
-      <entry key="S5" value="0.5179913817800093" />
-      <entry key="S10" value="0.7197161814076499" />
-      <entry key="S30" value="0.8961631647606191" />
-      <entry key="S60" value="0.946658948492338" />
-      <entry key="M2" value="0.9729640016562594" />
-      <entry key="M5" value="0.9891419697460768" />
-      <entry key="M10" value="1.0093191730033846" />
-      <entry key="M15" value="1.3473667325155212" />
-      <entry key="M30" value="16.05181758461274" />
-      <entry key="H1" value="125.01971434556256" />
-      <entry key="H2" value="389.8929831419952" />
-      <entry key="H4" value="707.3329526336369" />
-      <entry key="D1" value="1177.7056336659432" />
-      <entry key="W1" value="1286.8129615438213" />
+      <entry key="MS100" value="1.368127902143067" />
+      <entry key="MS500" value="4.00141774424706" />
+      <entry key="S2" value="9.967359207209988" />
+      <entry key="S5" value="20.349395707018456" />
+      <entry key="S10" value="37.780808732464685" />
+      <entry key="S30" value="91.05584343033262" />
+      <entry key="S60" value="140.95100004673756" />
+      <entry key="M2" value="232.47207889054755" />
+      <entry key="M5" value="452.8292238619496" />
+      <entry key="M10" value="647.7061670929738" />
+      <entry key="M15" value="777.3611078746065" />
+      <entry key="M30" value="1111.8263059009646" />
+      <entry key="H1" value="1638.8909596512956" />
+      <entry key="H2" value="2295.354232797781" />
+      <entry key="H4" value="2985.250356020461" />
+      <entry key="D1" value="4102.1415922059605" />
+      <entry key="W1" value="4386.836341357959" />
     </decayedCancelled>
     <decayedSelected>
-      <entry key="MS100" value="1.0" />
-      <entry key="MS500" value="1.0" />
-      <entry key="S2" value="1.0" />
-      <entry key="S5" value="1.0" />
-      <entry key="S10" value="1.0" />
-      <entry key="S30" value="1.0" />
-      <entry key="S60" value="1.0" />
-      <entry key="M2" value="1.0" />
-      <entry key="M5" value="1.0000000000085716" />
-      <entry key="M10" value="1.000004513642977" />
-      <entry key="M15" value="1.0003783620589002" />
-      <entry key="M30" value="1.0328686232238693" />
-      <entry key="H1" value="1.3118107062789972" />
-      <entry key="H2" value="1.9653768803472622" />
-      <entry key="H4" value="2.700989388670213" />
-      <entry key="D1" value="3.7291165376733377" />
-      <entry key="W1" value="3.9597104307011217" />
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="1.472195721660473E-114" />
+      <entry key="S60" value="1.2133407277679474E-57" />
+      <entry key="M2" value="3.483304074823084E-29" />
+      <entry key="M5" value="4.1380578245549605E-12" />
+      <entry key="M10" value="2.0342308571141173E-6" />
+      <entry key="M15" value="1.6060650861669752E-4" />
+      <entry key="M30" value="0.013087132829415326" />
+      <entry key="H1" value="0.14766272678709186" />
+      <entry key="H2" value="0.6593950754727764" />
+      <entry key="H4" value="1.5644900528672014" />
+      <entry key="D1" value="3.4047164076129373" />
+      <entry key="W1" value="3.9085619273994094" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.5190160764693608E-12" />
-      <entry key="MS500" value="0.004332060771483555" />
-      <entry key="S2" value="0.30067339627879913" />
-      <entry key="S5" value="0.8674062895609725" />
-      <entry key="S10" value="1.2976051317761435" />
-      <entry key="S30" value="1.7255162809088311" />
-      <entry key="S60" value="1.8568982803813185" />
-      <entry key="M2" value="1.9269143730789913" />
-      <entry key="M5" value="1.9704333609585085" />
-      <entry key="M10" value="1.9999148229909502" />
-      <entry key="M15" value="2.3414370786940304" />
-      <entry key="M30" value="17.08118923793714" />
-      <entry key="H1" value="126.32858070289971" />
-      <entry key="H2" value="391.8555613134333" />
-      <entry key="H4" value="710.0318107490183" />
-      <entry key="D1" value="1181.4342261376985" />
-      <entry key="W1" value="1290.772591719332" />
+      <entry key="MS100" value="1.2775471203557502" />
+      <entry key="MS500" value="3.956444925051752" />
+      <entry key="S2" value="9.940295611983" />
+      <entry key="S5" value="20.32698884540036" />
+      <entry key="S10" value="37.759489564742765" />
+      <entry key="S30" value="91.03829611008672" />
+      <entry key="S60" value="140.93736832216925" />
+      <entry key="M2" value="232.46076963576593" />
+      <entry key="M5" value="452.8203204226229" />
+      <entry key="M10" value="647.6997594287175" />
+      <entry key="M15" value="777.3561082487951" />
+      <entry key="M30" value="1111.835572162184" />
+      <entry key="H1" value="1639.035379476497" />
+      <entry key="H2" value="2296.0106241187314" />
+      <entry key="H4" value="2986.812325121576" />
+      <entry key="D1" value="4105.545565913846" />
+      <entry key="W1" value="4390.74478485038" />
     </decayedShown>
   </component>
   <component name="ProjectApplicationVersion">

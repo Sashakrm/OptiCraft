@@ -7,8 +7,8 @@
 // Вход — упакованные каналы чанка (палитры + биты, см. pack_channel в Chunk.cpp). Выход — 8-байтные
 // записи квадов в пул (раскладка записи — в декодере terrain_gpu_vertex.glsl), по CAP записей на секцию.
 //
-// Ключ среза (как в CPU): id | meta<<8 | свет<<16 | AO<<24. AO — по два бита на угол грани (см. face_ao).
-// Квады с разным AO не сливаются: при слиянии AO постоянен вдоль направления слияния.
+// Ключ среза: UV-прямоугольник/поворот и атрибуты освещения/AO. Соседние блоки разных
+// типов с одной текстурой сливаются; освещение и AO берутся из первой клетки прямоугольника.
 layout(local_size_x = 64) in;
 
 // Заголовок чанка: kGpuHeaderStride = 17 uvec4 (см. Chunk.h). [0].x = слот пула; [1 + ch] = (палитра,
@@ -119,8 +119,8 @@ uint face_ao(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
     return code;
 }
 
-// Ключ слияния граней — 64 бита, как в CPU-мешере: id (0..15) | meta (16..23) | свет (24..31) |
-// AO (32..39). Храним парой uvec2: .x = id | meta<<16, .y = свет | AO<<8 (сравнение пары — побитовое).
+// Ключ грани: .x = индекс UV-прямоугольника | поворот<<15; .y = свет | AO<<8 | присутствие<<16.
+// Для слияния сравнивается только .x.
 uvec2 mask[1024];
 
 void main() {
@@ -177,10 +177,11 @@ void main() {
                     if ((fc & FLAG_USES_META) != 0u) {
                         meta = read_channel(hb, 1u, uint((c.y * 32 + c.z) * 32 + c.x));
                     }
+                    const uint material = rect_lut[(cur * 6u + face) * 256u + meta] & 0xFFFFu;
                     uint fl = light_at(hb, nc.x, nc.y, nc.z);
                     if (cull_same) fl = light_coarse[fl];
                     const uint ao = face_ao(hb, c, axis, dir, ua, va);
-                    key = uvec2(cur | (meta << 16u), fl | (ao << 8u));
+                    key = uvec2(material, fl | (ao << 8u) | (1u << 16u));
                     any_key = true;
                 }
             }
@@ -198,19 +199,17 @@ void main() {
                 ++u;
                 continue;
             }
-            const uint cur = key.x & 0xFFFFu;
-            const uint meta = (key.x >> 16u) & 0xFFu;
-            const uint lut = rect_lut[(cur * 6u + face) * 256u + meta];
+            const uint lut = key.x;
             // Повёрнутая текстура (бревно на боку) не сливается: квад 1x1.
             const bool rotate = (lut & 0x8000u) != 0u;
             int w = 1;
             int h = 1;
             if (!rotate) {
-                while (u + w < 32 && mask[v * 32 + u + w] == key) ++w;
+                while (u + w < 32 && mask[v * 32 + u + w].x == key.x) ++w;
                 bool grow = true;
                 while (v + h < v_count && grow) {
                     for (int i = 0; i < w; ++i) {
-                        if (mask[(v + h) * 32 + u + i] != key) {
+                        if (mask[(v + h) * 32 + u + i].x != key.x) {
                             grow = false;
                             break;
                         }

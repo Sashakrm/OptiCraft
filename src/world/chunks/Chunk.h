@@ -178,6 +178,10 @@ struct Chunk_Meshes {
     // gpu_candidates: в чанке есть жадно-мешаемый блок, то есть квады возможны.
     bool solid_on_gpu = false;
     bool gpu_candidates = false;
+    // CPU-квады этого меша могут немного выходить через положительную границу чанка,
+    // когда они объединены с квадами соседнего чанка.
+    int extends_pos_x_blocks = 0;
+    int extends_pos_z_blocks = 0;
     // Полезная нагрузка для видеокарты (палитры и битово упакованные значения каналов).
     // mutable: Renderer забирает её при загрузке в GPU и очищает, поэтому после отправки
     // она не держится в RAM.
@@ -515,6 +519,10 @@ private:
     const Texture_Atlas* m_texture_atlas = nullptr;
 
     Chunk_Meshes m_meshes;
+    // Исходная CPU-геометрия до межчанкового объединения. Нужна, чтобы пересобирать
+    // швы после изменения/загрузки соседа и не объединять один квад повторно.
+    std::vector<Terrain_Vertex> m_unmerged_solid;
+    std::array<size_t, Config::chunk_section_count> m_unmerged_solid_counts{};
     bool m_is_mesh_dirty = true;
     // Растёт при каждой пометке грязности (см. mark_mesh_dirty): задача пересборки запоминает его
     // на моменте снимка, и если к её применению он вырос, правка легла уже после снимка.
@@ -542,6 +550,9 @@ public:
     void recalculate_metadata();
     void build_mesh();
     void apply_mesh(Chunk_Meshes meshes);
+    bool restore_unmerged_solid();
+    void cache_unmerged_solid(const std::array<size_t, Config::chunk_section_count>& section_counts);
+    void touch_mesh_version();
 
     Block_Types get_block(int x, int y, int z) const;
     void set_block(int x, int y, int z, Block_Types type);
@@ -567,6 +578,7 @@ public:
     int get_chunk_y() const { return m_chunk_y; }
     int get_chunk_z() const { return m_chunk_z; }
     const Chunk_Meshes& get_meshes() const { return m_meshes; }
+    Chunk_Meshes& get_meshes_mutable() { return m_meshes; }
     uint64_t get_mesh_version() const { return m_mesh_version; }
     bool is_mesh_dirty() const { return m_is_mesh_dirty; }
     bool is_modified() const { return m_is_modified; }
@@ -588,5 +600,9 @@ public:
 
     glm::vec3 get_world_position(int local_x, int local_y, int local_z) const;
 };
+
+// Сливает совместимые CPU-квады двух чанков по общей вертикальной плоскости.
+// axis: 0 — чанки соседствуют по X, 2 — по Z. Геометрия хранится у lower.
+bool merge_chunk_boundary_solids(Chunk& lower, Chunk& upper, int axis);
 
 #endif // OPTICRAFT_CHUNK_H

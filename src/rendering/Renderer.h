@@ -205,7 +205,8 @@ public:
     void render_chunks(const std::vector<Renderable_Chunk>& chunks,
                        const glm::mat4& view,
                        const glm::mat4& projection,
-                       float ambient_intensity);
+                       float ambient_intensity,
+                       bool spectator = false);
 
     // Рисует солнце и луну как billboard-диски в небе (процедурный шейдер, без текстуры —
     // см. assets/shaders/sky_object_*.glsl). Вызывать ДО render_chunks — рисуется без записи

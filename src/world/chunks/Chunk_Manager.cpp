@@ -552,11 +552,13 @@ bool Chunk_Manager::save_chunk_to_disk(const Chunk& chunk) const {
 }
 
 void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
+    bool removed = false;
     if (Chunk* existing = m_chunks.find(cx, cy, cz)) {
         save_chunk_to_disk(*existing);
         m_unloaded_since_last_query.push_back({cx, cy, cz});
         m_chunks.erase(cx, cy, cz);
         ++m_chunk_set_epoch;
+        removed = true;
     }
     m_requested_chunks.erase(cx, cy, cz);
     m_cpu_only_positions.erase(cx, cy, cz);
@@ -565,6 +567,7 @@ void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
     // enqueue_mesh_rebuild решит, что для него уже что-то летит, и молча пропустит постановку задачи.
     m_pending_mesh_rebuilds.erase(cx, cy, cz);
     m_mesh_rebuild_requeue.erase(cx, cy, cz);
+    if (removed) rebuild_cross_chunk_greedy_meshes({glm::ivec3(cx, cy, cz)});
 }
 
 void Chunk_Manager::enqueue_chunk_load(int cx, int cy, int cz) {
@@ -978,6 +981,7 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
     const size_t mesh_cap = capture_active() ? capture_max_finished_meshes_per_frame
                                              : max_finished_meshes_per_frame;
     size_t processed_meshes = 0;
+    std::vector<glm::ivec3> changed_chunks;
     while (!completed.empty() && processed_meshes < mesh_cap) {
         Mesh_Result result = std::move(completed.front());
         completed.pop();
@@ -1008,6 +1012,7 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
         // счётчика такая правка терялась бы, и меш оставался устаревшим.
         const bool dirtied_after_snapshot = chunk->get_dirty_epoch() != result.dirty_epoch;
         chunk->apply_mesh(std::move(result.meshes));
+        changed_chunks.push_back(result.position);
 
         // Блок поменялся ещё раз, пока эта пересборка считалась в фоне — снимок, с которым
         // она стартовала, уже устарел. Ставим ещё одну задачу со свежими данными, чтобы
@@ -1024,6 +1029,134 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
             completed.pop();
         }
     }
+
+    if (!changed_chunks.empty()) rebuild_cross_chunk_greedy_meshes(changed_chunks);
+}
+
+void Chunk_Manager::rebuild_cross_chunk_greedy_meshes(const std::vector<glm::ivec3>& changed_chunks) {
+    if (capture_active()) return;
+    std::vector<glm::ivec3> affected;
+    std::vector<glm::ivec3> chain_owners;
+    const auto add_if_loaded = [&](const glm::ivec3& p) {
+        if (!get_chunk(p.x, p.y, p.z)) return;
+        if (std::find(affected.begin(), affected.end(), p) == affected.end()) affected.push_back(p);
+    };
+    for (const glm::ivec3& p : changed_chunks) {
+        add_if_loaded(p);
+        add_if_loaded(p + glm::ivec3(-1, 0, 0));
+        add_if_loaded(p + glm::ivec3(1, 0, 0));
+        add_if_loaded(p + glm::ivec3(0, 0, -1));
+        add_if_loaded(p + glm::ivec3(0, 0, 1));
+
+        // GPU-меши не содержат CPU-квадов, поэтому не могут быть владельцами
+        // межчанкового CPU-объединения. Не сканируем весь мир для таких результатов.
+        const Chunk* changed_chunk = get_chunk(p.x, p.y, p.z);
+        if (changed_chunk && changed_chunk->get_meshes().solid_on_gpu) continue;
+
+        // Если ранее собранный общий квад уже протягивался через эту позицию,
+        // включаем в пересборку и его владельца вместе с промежуточными чанками.
+        m_chunks.for_each([&](const glm::ivec3& owner_pos, const std::unique_ptr<Chunk>& owner) {
+            const Chunk_Meshes& mesh = owner->get_meshes();
+            if (owner_pos.y != p.y) return;
+            if (owner_pos.z == p.z && owner_pos.x < p.x &&
+                mesh.extends_pos_x_blocks >= (p.x - owner_pos.x) * Config::chunk_size) {
+                if (std::find(chain_owners.begin(), chain_owners.end(), owner_pos) == chain_owners.end()) {
+                    chain_owners.push_back(owner_pos);
+                }
+                for (int x = owner_pos.x; x < p.x; ++x) add_if_loaded({x, p.y, p.z});
+            }
+            if (owner_pos.x == p.x && owner_pos.z < p.z &&
+                mesh.extends_pos_z_blocks >= (p.z - owner_pos.z) * Config::chunk_size) {
+                if (std::find(chain_owners.begin(), chain_owners.end(), owner_pos) == chain_owners.end()) {
+                    chain_owners.push_back(owner_pos);
+                }
+                for (int z = owner_pos.z; z < p.z; ++z) add_if_loaded({p.x, p.y, z});
+            }
+        });
+    }
+    if (affected.empty()) return;
+
+    // Пересобираем только локальное окружение, чтобы подгрузка одного чанка не заставляла
+    // заново копировать геометрию всего мира.
+    for (const glm::ivec3& p : affected) {
+        if (Chunk* chunk = get_chunk(p.x, p.y, p.z)) {
+            // Не инвалидируем GPU-кеш чанка на каждое появление соседа. Версия
+            // меняется только если у чанка действительно был межчанковый CPU-меш.
+            if (chunk->restore_unmerged_solid()) chunk->touch_mesh_version();
+        }
+    }
+
+    std::sort(affected.begin(), affected.end(), [](const glm::ivec3& a, const glm::ivec3& b) {
+        if (a.y != b.y) return a.y < b.y;
+        if (a.z != b.z) return a.z < b.z;
+        return a.x < b.x;
+    });
+    std::vector<glm::ivec3> cpu_remesh;
+    const auto request_cpu_once = [&](const glm::ivec3& position) {
+        if (std::find(cpu_remesh.begin(), cpu_remesh.end(), position) == cpu_remesh.end()) {
+            cpu_remesh.push_back(position);
+        }
+    };
+    const auto merge_or_request_cpu = [&](Chunk* lower, const glm::ivec3& lower_pos,
+                                          Chunk* upper, const glm::ivec3& upper_pos, int axis) {
+        if (!lower || !upper) return;
+        if (lower->get_meshes().solid_on_gpu || upper->get_meshes().solid_on_gpu) {
+            // Межчанковое совпадение квада пока обрабатывается CPU-мешером. GPU
+            // mesh pass не имеет общего списка quad-кандидатов соседних слотов.
+            if (lower->get_meshes().solid_on_gpu &&
+                !m_cpu_only_positions.contains(lower_pos.x, lower_pos.y, lower_pos.z)) {
+                request_cpu_once(lower_pos);
+            }
+            if (upper->get_meshes().solid_on_gpu &&
+                !m_cpu_only_positions.contains(upper_pos.x, upper_pos.y, upper_pos.z)) {
+                request_cpu_once(upper_pos);
+            }
+            return;
+        }
+        merge_chunk_boundary_solids(*lower, *upper, axis);
+    };
+
+    // Новые/изменённые меши стыкуем с ближайшими соседями по положительным X и Z.
+    for (const glm::ivec3& owner_pos : affected) {
+        Chunk* x_owner = get_chunk(owner_pos.x, owner_pos.y, owner_pos.z);
+        const glm::ivec3 x_pos = owner_pos + glm::ivec3(1, 0, 0);
+        merge_or_request_cpu(x_owner, owner_pos, get_chunk(x_pos.x, x_pos.y, x_pos.z), x_pos, 0);
+        const glm::ivec3 z_pos = owner_pos + glm::ivec3(0, 0, 1);
+        merge_or_request_cpu(x_owner, owner_pos, get_chunk(z_pos.x, z_pos.y, z_pos.z), z_pos, 2);
+    }
+
+    // В этот же кадр продолжаем свежие слияния по цепочке, если очередной чанк
+    // уже был готов одновременно с первым соседом.
+    for (const glm::ivec3& p : affected) {
+        const Chunk* chunk = get_chunk(p.x, p.y, p.z);
+        if (!chunk) continue;
+        const Chunk_Meshes& mesh = chunk->get_meshes();
+        if ((mesh.extends_pos_x_blocks > 0 || mesh.extends_pos_z_blocks > 0) &&
+            std::find(chain_owners.begin(), chain_owners.end(), p) == chain_owners.end()) {
+            chain_owners.push_back(p);
+        }
+    }
+
+    // Если старый общий квад уже проходил через этот чанк, пробуем продолжить его
+    // через всю непрерывную цепочку. Это позволяет получить один квад на длинной стене,
+    // а не останавливать жадное слияние на каждой второй границе чанка.
+    for (const glm::ivec3& owner_pos : chain_owners) {
+        Chunk* owner = get_chunk(owner_pos.x, owner_pos.y, owner_pos.z);
+        if (!owner) continue;
+        for (int x = owner_pos.x + 1;; ++x) {
+            const glm::ivec3 upper_pos{x, owner_pos.y, owner_pos.z};
+            Chunk* upper = get_chunk(upper_pos.x, upper_pos.y, upper_pos.z);
+            if (!upper) break;
+            merge_or_request_cpu(owner, owner_pos, upper, upper_pos, 0);
+        }
+        for (int z = owner_pos.z + 1;; ++z) {
+            const glm::ivec3 upper_pos{owner_pos.x, owner_pos.y, z};
+            Chunk* upper = get_chunk(upper_pos.x, upper_pos.y, upper_pos.z);
+            if (!upper) break;
+            merge_or_request_cpu(owner, owner_pos, upper, upper_pos, 2);
+        }
+    }
+    if (!cpu_remesh.empty()) request_cpu_remesh(cpu_remesh);
 }
 
 void Chunk_Manager::rebuild_dirty_chunks() {
@@ -1923,7 +2056,8 @@ bool is_reached(const Reach_Scratch& s, const glm::ivec3& key, int section) {
 std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     const Frustum* frustum,
     const glm::vec3* camera_position,
-    int flora_render_distance_chunks
+    int flora_render_distance_chunks,
+    bool spectator
 ) const {
     std::vector<Renderable_Chunk> result;
 
@@ -1952,7 +2086,9 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     }
     // Достижимость от камеры; состояние обхода переиспользуется между кадрами (см. Reach_Scratch).
     static thread_local Reach_Scratch reach;
-    const bool reach_enabled = camera_position && !eye_in_solid &&
+    // В режиме наблюдателя камера проходит сквозь стены, поэтому геометрия за
+    // непрозрачными секциями тоже должна оставаться видимой.
+    const bool reach_enabled = !spectator && camera_position && !eye_in_solid &&
         build_section_reach(loaded, *camera_position, m_chunk_set_epoch, this, reach);
 
     for (const auto& [key, chunk] : loaded) {
@@ -1980,10 +2116,15 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
             if (!section.has_geometry) continue;
 
             const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
-            const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
+            const glm::vec3 section_max(
+                footprint_max.x + static_cast<float>(meshes.extends_pos_x_blocks),
+                section.max_y,
+                footprint_max.z + static_cast<float>(meshes.extends_pos_z_blocks));
             const bool in_frustum = !frustum || frustum->intersects_aabb(section_min, section_max);
             const bool reached = !reach_enabled || is_reached(reach, key, static_cast<int>(section_index));
-            const bool visible = in_frustum && reached;
+            // Сначала секция неактивна; включаем её, если она попадает во фрустум.
+            // Для спектатора обход связности выключен, но проверка поля зрения остаётся.
+            const bool visible = in_frustum && (spectator || reached);
             renderable.section_visible[section_index] = visible;
             has_visible_section = has_visible_section || visible;
         }
