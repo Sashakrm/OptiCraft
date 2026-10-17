@@ -22,6 +22,11 @@ public:
     // вперёд на произвольный интервал вне обычного хода часов.
     void advance(float seconds);
 
+    // Заморозка часов: пока включена, update() не двигает время (измерения с Time_Mode::Fixed).
+    // Прямая установка через set_normalized_time по-прежнему работает.
+    void set_frozen(bool frozen) { m_frozen = frozen; }
+    bool is_frozen() const { return m_frozen; }
+
     // Прямая установка времени суток (команда /time set). t в [0,1): 0 — рассвет, 0.25 —
     // полдень, 0.5 — закат, 0.75 — полночь. Значения вне [0,1) заворачиваются по модулю.
     void set_normalized_time(float t);
@@ -48,6 +53,7 @@ public:
 private:
     float m_full_cycle_seconds;
     float m_time_seconds = 0.0f; // [0, m_full_cycle_seconds)
+    bool m_frozen = false;
 
     // sin(elevation_angle) направления на солнце — вынесено отдельно, чтобы не пересчитывать
     // синус трижды в get_sky_color/get_ambient_intensity/get_sun_direction за один кадр.

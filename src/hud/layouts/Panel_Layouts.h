@@ -30,6 +30,8 @@ namespace Panel_Layouts {
         constexpr int k_inventory_armor_base = 300;   // 300..303 — слоты брони (шлем, нагрудник, поножи, ботинки)
         constexpr int k_inventory_armor_count = 4;
         constexpr int k_container_output = -2;        // результат верстака / выход печи в сессии
+        constexpr int k_creative_palette_base = 400;  // 400..426 — палитра Creative (27 слотов текущей страницы)
+        constexpr int k_creative_palette_count = 27;
     }
 
     // Слоты игрока: 3 ряда хранилища (если показано) и ряд хотбара. id = id_offset + индекс

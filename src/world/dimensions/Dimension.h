@@ -23,6 +23,9 @@ enum class Dimension_Id : uint8_t {
     Overworld = 0,
     Flat_Test,     // плоский мир со слоями — пример режима Flat, годится для тестов построек
     Void_Test,     // пустота — пример режима Void
+    Superflat,     // супер-плоский мир (как в Minecraft): слои из Dimension.cpp, без декораций
+    Single_Biome,  // обычный рельеф, но весь мир одного выбранного биома, без пещер
+    Single_Islands,// то же, но земли нет: только парящие острова над пустотой
     Count
 };
 
@@ -39,6 +42,13 @@ struct Flat_Layer {
     int thickness = 1;
 };
 
+// Как идёт время суток в измерении: Cycle — свои часы (день и ночь сменяются), Fixed — время
+// заморожено на fixed_time. Цикл принадлежит измерению, а не миру целиком.
+enum class Time_Mode : uint8_t {
+    Cycle = 0,
+    Fixed
+};
+
 struct Dimension_Info {
     Dimension_Id id = Dimension_Id::Overworld;
     const char* name = "overworld";        // ключ для world.json и имён файлов
@@ -49,6 +59,17 @@ struct Dimension_Info {
     bool decorations = true;               // деревья, трава, цветы (decorate_column)
     bool has_sky_light = true;             // нет неба (пещерное измерение) — false
     bool sky_islands = true;               // парящие острова (только Noise)
+    // Noise-режим: пещеры (false — их нет вовсе) и наличие земли под островами
+    // (ground = false — под парящими островами только пустота, без рельефа и воды).
+    bool caves = true;
+    bool ground = true;
+    // Весь мир одного биома. Сам биом задаётся не здесь, а в мире (World_Settings::biome) и
+    // передаётся в World_Generator::set_biome — поэтому одно измерение годится для любого биома.
+    bool single_biome = false;
+
+    // Время суток измерения. Для Fixed — отметка [0,1) (0.25 — полдень), которая не меняется.
+    Time_Mode time_mode = Time_Mode::Cycle;
+    float fixed_time = 0.25f;
 
     // Flat: слои и нижняя отметка. Void: spawn_height — куда ставить игрока.
     std::vector<Flat_Layer> flat_layers;

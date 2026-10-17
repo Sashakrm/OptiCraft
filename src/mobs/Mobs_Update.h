@@ -59,6 +59,7 @@ struct Mob_Player_View {
     float eye_height = 1.62f;
     bool alive = true;
     bool sneaking = false;      // крадущегося игрока враги видят вдвое хуже
+    bool night = false;         // ночь: пауки нападают на игрока только ночью
     float horizontal_speed = 0.0f; // блоков/с: от скорости зависит урон удара по мобу
 };
 
@@ -135,6 +136,7 @@ public:
     int summon_horses(int count, const glm::vec3& around);       // /summon horse
     int summon_zombies(int count, const glm::vec3& around);      // /summon zombie
     int summon_skeletons(int count, const glm::vec3& around);    // /summon skeleton
+    int summon_spiders(int count, const glm::vec3& around);      // /summon spider
     // /breed: сразу «влюбляет» взрослых животных вида (pig|cow|sheep|horse). Возвращает число затронутых.
     int breed_all(const std::string& species);
 
@@ -168,7 +170,7 @@ private:
     // и мясо можно было бы фармить бесконечно. Индексы — static_cast<int>(Passive_Kind/Hostile_Kind).
     float m_pig_respawn_cooldown = 0.0f;
     std::array<float, 2> m_passive_respawn_cooldown{0.0f, 0.0f};
-    std::array<float, 2> m_hostile_respawn_cooldown{0.0f, 0.0f};
+    std::array<float, 3> m_hostile_respawn_cooldown{0.0f, 0.0f, 0.0f};
     float m_horse_respawn_cooldown = 0.0f;
     float m_attack_cooldown = 0.0f;
 

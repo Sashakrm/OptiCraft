@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <array>
 #include <glm/glm.hpp>
+#include <vector>
 
 using Block_ID = uint16_t;
 
@@ -19,9 +20,9 @@ enum class Block_Types : Block_ID {
     Air = 0,
     Grass = 1,
     Dirt = 2,
-    Stone = 3,
+    Cobblestone = 3,        // булыжник: выпадает из камня, в печи даёт камень
     Sand = 4,
-    Oak_Wood = 5,
+    Stone = 5,
     Oak_Leaf = 6,
     Water = 7,
     // 8 зарезервирован (см. "reserved_block_ids" в assets/blocks.json) под будущий персистентный ID.
@@ -74,6 +75,7 @@ enum class Block_Types : Block_ID {
     Raw_Porkchop = 53,
     Cooked_Porkchop = 54,
     Charcoal = 55,
+    Oak_Log = 56,           // целый ствол дуба (раньше было "Oak Wood" с id 5)
 
     // Земледелие. Стадии роста — отдельные блоки (так проще рисовать флору и хранить в чанках).
     Farmland = 59,          // грядка (сухая)
@@ -107,10 +109,14 @@ enum class Block_Types : Block_ID {
 
 // Максимальная ёмкость реестра блоков: данные из blocks.json могут занимать любые id в этом
 // диапазоне, включая id, для которых нет именованной константы в Block_Types.
-inline constexpr Block_ID k_max_block_types = 256;
+// Block_ID — uint16_t, поэтому различных id не может быть больше 65536. Фиксированные таблицы
+// по id (флаги свойств, плоские кэши) рассчитаны на весь диапазон; таблицы, растущие с числом
+// блоков (свойства, GPU-LUT), — по Block_Registry::id_capacity().
+inline constexpr size_t k_max_block_types = 65536;
 
 // Вид инструмента. Для БЛОКА поле effective_tool говорит, каким инструментом он копается быстрее.
-enum class Tool_Type : uint8_t { None = 0, Pickaxe, Axe, Shovel, Sword, Hoe };
+// Weapon — оружие, которое ничего не копает (нож, копьё, булава, трезубец...): blocks.json "tool": "weapon".
+enum class Tool_Type : uint8_t { None = 0, Pickaxe, Axe, Shovel, Sword, Hoe, Weapon };
 
 // Слот брони игрока. None — предмет не броня. Для блока/предмета поле armor_slot из blocks.json.
 enum class Armor_Slot : uint8_t { None = 0, Head, Chest, Legs, Feet };
@@ -238,9 +244,16 @@ struct Block_Properties {
     int tool_tier = 0;                 // 1 дерево, 2 камень, 3 железо, 4 алмаз
     float tool_speed = 1.0f;           // множитель скорости добычи "своих" блоков
     float attack_damage = 0.0f;        // урон по мобам (0 = как кулак)
+    float attack_cooldown = -1.0f;     // секунд между ударами по мобам (<0 = кулак, Config::player_attack_cooldown)
+    float speed_damage_scale = 1.0f;   // во сколько раз бонус урона от скорости игрока больше/меньше обычного
     // Импульс игрока при использовании предмета (ПКМ): блоков/с в направлении взгляда. 0 = нет.
     // Из blocks.json: "impulse_speed". Расход прочности — как у инструмента.
     float impulse_speed = 0.0f;
+    // Импульс, когда игрок в жидкости (blocks.json: "impulse_speed_water"). < 0 — как impulse_speed.
+    // Копьё: сильный на суше и слабый в воде; трезубец наоборот.
+    float impulse_speed_water = -1.0f;
+    // Пауза между использованиями импульса, секунды ("impulse_cooldown"). < 0 — Config::tool_impulse_cooldown.
+    float impulse_cooldown = -1.0f;
     // Броня: слот, в который предмет надевается, и сколько очков защиты даёт (blocks.json: armor_slot, armor_points).
     Armor_Slot armor_slot = Armor_Slot::None;
     int armor_points = 0;
@@ -273,8 +286,9 @@ struct Block_Properties {
 
 class Block_Registry {
 private:
-    std::array<Block_Properties, k_max_block_types> m_properties;
-    std::array<bool, k_max_block_types> m_reserved{};
+    // Растёт по мере регистрации блоков (см. set_properties): размер = максимальный id + 1.
+    std::vector<Block_Properties> m_properties;
+    std::vector<bool> m_reserved;
     Block_ID m_registered_block_count = 0;
 
     // Плоские таблицы "id -> нужный нам один байт", построенные один раз в конструкторе
@@ -309,6 +323,10 @@ public:
     const Block_Properties& get_properties(Block_ID id) const;
     Block_ID get_block_id(const std::string& name) const;
     bool is_reserved(Block_ID id) const;
+    // Блок с таким id описан в blocks.json (имя не пустое).
+    bool is_known(Block_ID id) const { return id < m_properties.size() && !m_properties[id].name.empty(); }
+    // Сколько id сейчас покрыто свойствами: все id >= этого значения — неизвестные (как Air).
+    size_t id_capacity() const { return m_properties.size(); }
 
     // Индекс — Block_ID напрямую (0..255), БЕЗ проверки границ: Chunk_Block_Grid хранит id
     // блока как uint8_t, так что значение, прочитанное из чанка, всегда влезает в [0,255] —

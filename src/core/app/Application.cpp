@@ -13,9 +13,11 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <vector>
+#include "world/generation/World_Generator.h"
 
 namespace {
     int hovered_widget(Game& game, const Hud_Screen& screen) {
@@ -235,14 +237,18 @@ namespace {
             if (game.is_key_pressed(GLFW_KEY_ENTER) || game.is_key_pressed(GLFW_KEY_KP_ENTER)) { create(); return; }
             if (!left_clicked(game)) return;
 
-            switch (hovered_widget(game, build())) {
-                case 0: focus(0); break;
-                case 1: focus(1); break;
-                case 2: m_survival = !m_survival; break;
-                case 3: m_islands = !m_islands; break;
-                case 4: create(); break;
-                case 5: m_application.request_pop(); break;
-                default: break;
+            const std::vector<Action> actions = layout();
+            const int hovered = hovered_widget(game, build());
+            if (hovered < 0 || hovered >= static_cast<int>(actions.size())) return;
+
+            switch (actions[static_cast<size_t>(hovered)]) {
+                case Action::Name: focus(0); break;
+                case Action::Seed: focus(1); break;
+                case Action::Mode: m_survival = !m_survival; break;
+                case Action::Type: m_type_index = (m_type_index + 1) % k_type_count; break;
+                case Action::Biome: cycle_biome(); break;
+                case Action::Create: create(); break;
+                case Action::Cancel: m_application.request_pop(); break;
             }
         }
 
@@ -255,11 +261,48 @@ namespace {
         }
 
     private:
+        // Что делает каждая кнопка экрана; порядок совпадает с виджетами в build().
+        enum class Action { Name, Seed, Mode, Type, Biome, Create, Cancel };
+
+        // Типы мира в порядке, в котором кнопка «Тип мира» их перебирает. Первое поле — имя
+        // измерения (Dimension.cpp), второе — ключ перевода.
+        struct World_Type_Choice {
+            const char* dimension;
+            const char* label_key;
+            bool single_biome;     // показывать ли кнопку биома
+        };
+        static constexpr size_t k_type_count = 6;
+        static constexpr std::array<World_Type_Choice, k_type_count> k_types = {{
+            {"overworld",      "world_type.normal",        false},
+            {"superflat",      "world_type.superflat",     false},
+            {"single_biome",   "world_type.single_biome",  true},
+            {"single_islands", "world_type.single_islands", true},
+            {"flat_test",      "world_type.flat_test",     false},
+            {"void_test",      "world_type.void_test",     false},
+        }};
+
         std::string m_name;
         std::string m_seed;
         int m_focus = 0;
         bool m_survival = false;
-        bool m_islands = false;
+        size_t m_type_index = 0;
+        size_t m_biome_index = 0;
+
+        const World_Type_Choice& current_type() const { return k_types[m_type_index]; }
+
+        // Кнопка биома есть только у миров с одним биомом; остальные кнопки всегда на месте.
+        std::vector<Action> layout() const {
+            std::vector<Action> actions = {Action::Name, Action::Seed, Action::Mode, Action::Type};
+            if (current_type().single_biome) actions.push_back(Action::Biome);
+            actions.push_back(Action::Create);
+            actions.push_back(Action::Cancel);
+            return actions;
+        }
+
+        void cycle_biome() {
+            const auto& biomes = selectable_single_biomes();
+            m_biome_index = (m_biome_index + 1) % biomes.size();
+        }
 
         void focus(int index) {
             m_focus = index;
@@ -271,8 +314,9 @@ namespace {
         void create() {
             Game& game = m_application.get_game();
             std::string error;
+            const std::string biome = biome_name(selectable_single_biomes()[m_biome_index]);
             if (game.create_world(m_name, m_seed, m_survival ? Game_Mode::Survival : Game_Mode::Creative,
-                                  m_islands ? "Islands" : "Classic", error)) {
+                                  "Classic", current_type().dimension, biome, error)) {
                 game.end_text_input();
                 m_application.request_replace_all(Game_State_Id::Loading);
             }
@@ -281,14 +325,19 @@ namespace {
         Hud_Screen build() const {
             Hud_Screen screen;
             screen.title = tr("create.title");
-            screen.widgets = {
-                Hud_Widget::field(tr("create.world_name"), m_name, tr("create.world_name_default"), m_focus == 0),
-                Hud_Widget::field(tr("create.seed"), m_seed, "", m_focus == 1),
-                Hud_Widget::button(tr("create.game_mode", {tr(m_survival ? "mode.survival" : "mode.creative")})),
-                Hud_Widget::button(tr("create.world_type", {tr(m_islands ? "world_type.islands" : "world_type.classic")})),
-                Hud_Widget::button(tr("worlds.create")),
-                Hud_Widget::button(tr("common.cancel")),
-            };
+            screen.widgets.push_back(Hud_Widget::field(tr("create.world_name"), m_name,
+                                                       tr("create.world_name_default"), m_focus == 0));
+            screen.widgets.push_back(Hud_Widget::field(tr("create.seed"), m_seed, "", m_focus == 1));
+            screen.widgets.push_back(Hud_Widget::button(
+                tr("create.game_mode", {tr(m_survival ? "mode.survival" : "mode.creative")})));
+            screen.widgets.push_back(Hud_Widget::button(
+                tr("create.world_type", {tr(current_type().label_key)})));
+            if (current_type().single_biome) {
+                screen.widgets.push_back(Hud_Widget::button(
+                    tr("create.biome", {biome_name(selectable_single_biomes()[m_biome_index])})));
+            }
+            screen.widgets.push_back(Hud_Widget::button(tr("worlds.create")));
+            screen.widgets.push_back(Hud_Widget::button(tr("common.cancel")));
             return screen;
         }
     };
@@ -678,7 +727,7 @@ void Application::initialize() {
         std::string error;
         const bool survival = std::string(autostart) == "survival";
         if (m_game.create_world("AutoTest", "123", survival ? Game_Mode::Survival : Game_Mode::Creative,
-                                "Classic", error)) {
+                                "Classic", "overworld", "Plains", error)) {
             request_replace_all(Game_State_Id::Loading);
         }
     }

@@ -46,6 +46,10 @@ enum class Biome_Id : uint8_t {
 };
 
 const char* biome_name(Biome_Id id);
+// Биом по имени из biome_name(); неизвестное имя → Plains.
+Biome_Id biome_from_name(const std::string& name);
+// Биомы, которые можно выбрать для мира из одного биома (наземные, без воды и подземных).
+const std::vector<Biome_Id>& selectable_single_biomes();
 
 struct World_Sample {
     // Шесть климатических параметров BiomeTree.
@@ -88,6 +92,13 @@ public:
     Dimension_Id get_dimension_id() const { return m_dimension->id; }
     const Dimension_Info& get_dimension() const { return *m_dimension; }
     void set_dimension(Dimension_Id dimension) { m_dimension = &get_dimension_info(dimension); }
+    // Биом для измерений с single_biome (остальные его игнорируют).
+    void set_biome(Biome_Id biome) { m_biome = biome; }
+    Biome_Id get_biome() const { return m_biome; }
+    // Точка появления игрока: для обычного рельефа — сама колонка (x, z) и её высота.
+    // Для измерения без земли — ближайший парящий остров к (x, z); x и z при этом меняются.
+    // Возвращает Y верхнего блока, на котором стоять (0 — островов не нашлось).
+    int find_spawn_surface(int& x, int& z) const;
     // Ключ хранения чанков этого измерения (для Chunk_Manager::set_world_storage).
     std::string get_storage_key() const { return m_dimension->storage_key(m_generation_folder); }
     static constexpr int sea_level() { return 63; }
@@ -182,6 +193,7 @@ private:
     const Dimension_Info* m_dimension;
     uint32_t m_seed;
     int m_water_level;
+    Biome_Id m_biome = Biome_Id::Plains;
     // Эпоха кэшей: у каждого нового генератора она своя, поэтому thread_local кэши
     // прошлого мира (другой сид/пресет) автоматически считаются промахом.
     uint32_t m_cache_epoch = 0;

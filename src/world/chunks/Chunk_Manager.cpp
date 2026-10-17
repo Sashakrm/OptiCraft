@@ -323,6 +323,9 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
         Mesh_Job mesh_job;
         bool has_generation_job = false;
         bool has_mesh_job = false;
+        const World_Generator* generator = nullptr;
+        World_File world_file;
+        std::string generation_folder;
         {
             std::unique_lock<std::mutex> lock(m_job_mutex);
             m_job_available.wait(lock, [this, mesh_dedicated] {
@@ -345,11 +348,16 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             } else if (!mesh_dedicated && !m_pending_jobs.empty()) {
                 job = m_pending_jobs.top();
                 m_pending_jobs.pop();
-                has_generation_job = true;
+                // Задача от прошлого мира (до clear/смены мира) не должна ни генерироваться, ни писаться.
+                has_generation_job = job.generation_id == m_generation_id;
             }
-        }
 
-        const World_Generator* generator = m_world_generator;
+            // Снимок состояния мира берётся под тем же мьютексом, что и задача: главный поток может
+            // сменить мир (clear/set_world_storage), и воркер не должен записать чанк в чужой регион.
+            generator = m_world_generator;
+            world_file = m_world_file;
+            generation_folder = m_generation_folder;
+        }
 
         if (has_generation_job) {
             if (!generator) {
@@ -364,14 +372,23 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             // Логи убраны намеренно: это тысячи std::endl (каждый со сбросом
             // потока) из нескольких воркеров сразу — и лишняя работа, и точка
             // конкуренции на std::cout при массовой загрузке мира.
-            if (m_world_file.load_chunk(job.position.x, job.position.y, job.position.z,
-                                        m_generation_folder,
-                                        chunk->get_blocks_mutable())) {
+            if (world_file.load_chunk(job.position.x, job.position.y, job.position.z,
+                                      generation_folder,
+                                      chunk->get_blocks_mutable())) {
                 chunk->recalculate_metadata();
                 // Чанк только что прочитан с диска — он уже сохранён.
                 chunk->clear_modified();
             } else {
                 chunk->generate_blocks();
+                // Каждый сгенерированный чанк сразу пишется на диск. При быстром перемещении
+                // (игрок проходит десятки блоков в секунду) повторная генерация дороже чтения,
+                // а чанк, который уже лежит на диске, при следующей загрузке читается без генерации.
+                // Чанк ещё не передан главному потоку, поэтому запись из воркера безопасна.
+                if (!world_file.save_chunk(job.position.x, job.position.y, job.position.z,
+                                           generation_folder, chunk->get_blocks())) {
+                    LOG_WARN("Cannot save generated chunk " + std::to_string(job.position.x) + " " +
+                             std::to_string(job.position.y) + " " + std::to_string(job.position.z));
+                }
             }
             std::lock_guard<std::mutex> lock(m_completed_mutex);
             m_completed_jobs.push({job.position, job.generation_id, std::move(chunk)});
@@ -566,16 +583,40 @@ void Chunk_Manager::enqueue_chunk_load(int cx, int cy, int cz) {
     // Так пользователь видит законченный, стоящий на земле мир вокруг себя быстрее — даже
     // если весь остальной столбец (все 8 чанков по Y, см. load_around) всё равно рано или
     // поздно догрузится следом.
-    const int dx = cx - m_player_chunk.x;
-    const int dz = cz - m_player_chunk.y;
-    const int dy = cy - m_player_chunk_y;
-    const int priority = dx * dx + dz * dz + dy * dy * 4;
+    const int priority = chunk_job_priority(cx, cy, cz);
 
     {
         std::lock_guard<std::mutex> lock(m_job_mutex);
         m_pending_jobs.push({{cx, cy, cz}, m_generation_id, priority});
     }
     m_job_available.notify_one();
+}
+
+int Chunk_Manager::chunk_job_priority(int cx, int cy, int cz) const {
+    const int dx = cx - m_player_chunk.x;
+    const int dz = cz - m_player_chunk.y;
+    const int dy = cy - m_player_chunk_y;
+    return dx * dx + dz * dz + dy * dy * 4;
+}
+
+void Chunk_Manager::reprioritize_pending_jobs() {
+    std::lock_guard<std::mutex> lock(m_job_mutex);
+    std::vector<Chunk_Job> jobs;
+    jobs.reserve(m_pending_jobs.size());
+    while (!m_pending_jobs.empty()) {
+        jobs.push_back(m_pending_jobs.top());
+        m_pending_jobs.pop();
+    }
+    for (Chunk_Job& job : jobs) {
+        const glm::ivec3& p = job.position;
+        if (!is_chunk_wanted(p)) {
+            // Игрок ушёл, чанк больше не нужен: задача снимается, а не генерируется впустую.
+            m_requested_chunks.erase(p.x, p.y, p.z);
+            continue;
+        }
+        job.priority = chunk_job_priority(p.x, p.y, p.z);
+        m_pending_jobs.push(job);
+    }
 }
 
 void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
@@ -629,7 +670,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
                 for (int y = 0; y < Config::chunk_height; ++y) {
                     for (int z = 0; z < Config::chunk_size; ++z) {
                         const size_t idx = static_cast<size_t>(y) * Config::chunk_size + z;
-                        block_face.data[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(x, y, z)));
+                        block_face.data[idx] = static_cast<Block_ID>((neighbor->get_block(x, y, z)));
                         block_face.meta[idx] = neighbor->get_meta(x, y, z);
                         light_face.data[idx] = neighbor->get_packed_light(x, y, z);
                     }
@@ -639,7 +680,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
                 for (int z = 0; z < Config::chunk_size; ++z) {
                     for (int x = 0; x < Config::chunk_size; ++x) {
                         const size_t idx = static_cast<size_t>(z) * Config::chunk_size + x;
-                        block_face.data[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(x, y, z)));
+                        block_face.data[idx] = static_cast<Block_ID>((neighbor->get_block(x, y, z)));
                         block_face.meta[idx] = neighbor->get_meta(x, y, z);
                         light_face.data[idx] = neighbor->get_packed_light(x, y, z);
                     }
@@ -649,7 +690,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
                 for (int y = 0; y < Config::chunk_height; ++y) {
                     for (int x = 0; x < Config::chunk_size; ++x) {
                         const size_t idx = static_cast<size_t>(y) * Config::chunk_size + x;
-                        block_face.data[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(x, y, z)));
+                        block_face.data[idx] = static_cast<Block_ID>((neighbor->get_block(x, y, z)));
                         block_face.meta[idx] = neighbor->get_meta(x, y, z);
                         light_face.data[idx] = neighbor->get_packed_light(x, y, z);
                     }
@@ -676,7 +717,7 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
             continue;
         }
         if (const Chunk* neighbor = get_chunk(npos.x, npos.y, npos.z)) {
-            job.ring_blocks[idx] = static_cast<uint8_t>(static_cast<Block_ID>(neighbor->get_block(
+            job.ring_blocks[idx] = static_cast<Block_ID>((neighbor->get_block(
                 x - ox * Config::chunk_size, y - oy * Config::chunk_height, z - oz * Config::chunk_size)));
             job.ring_valid[idx] = true;
         }
@@ -788,6 +829,9 @@ void Chunk_Manager::update_player_position(float player_x, float player_y, float
     m_player_chunk = {player_cx, player_cz};
     m_player_chunk_y = player_cy;
 
+    // Очередь пересортировывается по новой позиции до постановки новых задач: ближайшие к игроку
+    // чанки всегда идут первыми, а дальние задачи, оставшиеся позади, снимаются.
+    reprioritize_pending_jobs();
     unload_distant(player_cx, player_cz, m_load_radius + 1);
     load_around(player_cx, player_cz);
     rebuild_dirty_chunks();

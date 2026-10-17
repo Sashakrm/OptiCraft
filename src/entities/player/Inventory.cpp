@@ -13,22 +13,18 @@ Inventory::Inventory() {
     // Block_Types::Count: блок, добавленный только в blocks.json (без нового имени в enum),
     // тоже появится в полном инвентаре без пересборки движка. Проверка на пустое имя отсекает
     // незанятые слоты, так что лишних итераций по факту не видно нигде, кроме старта игры.
-    for (Block_ID id = 1; id < k_max_block_types; ++id) {
+    for (size_t raw_id = 1; raw_id < Block_Registry::get_instance().id_capacity(); ++raw_id) {
+        const Block_ID id = static_cast<Block_ID>(raw_id);
         if (Block_Registry::get_instance().is_reserved(id)) continue;
         if (get_block_props(id).name.empty()) continue; // пропуск незанятых/зарезервированных id
         if (!get_block_props(id).show_in_creative) continue;
         m_all_blocks.push_back(static_cast<Block_Types>(id));
     }
 
-    // Creative-хотбар как в Minecraft creative: изначально заполняется первыми k_hotbar_size
-    // блоками реестра, а дальше игрок сам решает, что в нём лежит (см. pick_grid_slot).
-    const size_t initial_count = std::min(k_hotbar_size, m_all_blocks.size());
-    m_creative_hotbar.assign(m_all_blocks.begin(), m_all_blocks.begin() + static_cast<long>(initial_count));
-    m_creative_hotbar.resize(k_hotbar_size, Block_Types::Air);
-
-    // Survival начинается пустым — и хотбар, и основная сетка наполняются по мере добычи.
-    m_survival_hotbar.assign(k_hotbar_size, Item_Stack{});
-    m_survival_storage.assign(k_survival_storage_size, Item_Stack{});
+    // Инвентарь начинается пустым в обоих режимах: хотбар и хранилище наполняются
+    // добычей либо предметами, взятыми из палитры Creative.
+    m_hotbar.assign(k_hotbar_size, Item_Stack{});
+    m_storage.assign(k_storage_size, Item_Stack{});
 }
 
 void Inventory::select_next() {
@@ -45,12 +41,8 @@ void Inventory::select_index(size_t index) {
 }
 
 Item_Stack Inventory::get_hotbar_slot(size_t index) const {
-    if (m_mode == Game_Mode::Creative) {
-        if (index >= m_creative_hotbar.size()) return {};
-        return { m_creative_hotbar[index], 0 }; // count=0 — HUD не рисует число (запас бесконечен)
-    }
-    if (index >= m_survival_hotbar.size()) return {};
-    return m_survival_hotbar[index];
+    if (index >= m_hotbar.size()) return {};
+    return m_hotbar[index];
 }
 
 // --- Панель 9 x 4 ----------------------------------------------------------
@@ -86,44 +78,66 @@ Item_Stack Inventory::get_panel_slot(size_t index) const {
     if (index >= k_panel_hotbar_start) {
         return get_hotbar_slot(index - k_panel_hotbar_start);
     }
+    if (index >= m_storage.size()) return {};
+    return m_storage[index];
+}
 
-    if (m_mode == Game_Mode::Creative) {
-        const Block_Types block = creative_block_at(index);
-        // count = 0 — HUD не рисует число: запас в Creative бесконечен.
-        return block == Block_Types::Air ? Item_Stack{} : Item_Stack{ block, 0 };
+Item_Stack Inventory::get_palette_slot(size_t index) const {
+    if (m_mode != Game_Mode::Creative || index >= k_palette_slots) return {};
+    const Block_Types block = creative_block_at(index);
+    // count = 0 — HUD не рисует число: палитра бесконечна.
+    return block == Block_Types::Air ? Item_Stack{} : Item_Stack{ block, 0 };
+}
+
+void Inventory::place_infinite(Item_Stack& slot, bool right) {
+    const Block_Types type = m_carried.type;
+    if (slot.is_empty()) {
+        slot = Item_Stack{ type, 0, 0 };
+    } else if (slot.type != type || slot.damage != 0) {
+        // Занятый слот другого предмета: забираем его на курсор, ничего не теряя.
+        m_carried = slot;
+        slot = Item_Stack{};
+        m_carried_infinite = false;
+        return;
     }
+    const int max_stack = max_stack_for(type);
+    if (right) {
+        if (slot.count < max_stack) slot.count += 1;
+    } else {
+        slot.count = max_stack;
+    }
+}
 
-    if (index >= m_survival_storage.size()) return {};
-    return m_survival_storage[index];
+void Inventory::click_palette_slot(size_t index, bool right) {
+    if (m_mode != Game_Mode::Creative || index >= k_palette_slots) return;
+    // Реальный стак с курсора сначала пытаемся вернуть в инвентарь, иначе он пропадёт.
+    if (!m_carried.is_empty() && !m_carried_infinite) {
+        const int added = try_add_stack(m_carried);
+        m_carried.count -= added;
+        if (m_carried.count > 0) return;
+        m_carried = Item_Stack{};
+    }
+    const Block_Types block = creative_block_at(index);
+    if (block == Block_Types::Air) {
+        m_carried = Item_Stack{};
+        m_carried_infinite = false;
+        return;
+    }
+    m_carried = Item_Stack{ block, right ? 1 : max_stack_for(block) };
+    m_carried_infinite = true;
 }
 
 void Inventory::click_panel_slot(size_t index) {
     if (index >= k_panel_slot_count) return;
 
     const bool is_hotbar_slot = index >= k_panel_hotbar_start;
-    const size_t hotbar_index = is_hotbar_slot ? index - k_panel_hotbar_start : 0;
-
-    if (m_mode == Game_Mode::Creative) {
-        if (!is_hotbar_slot) {
-            // Верхние строки Creative — бесконечный список блоков. Клик по ним
-            // всегда берёт новую копию блока на курсор (или очищает курсор, если
-            // кликнули по пустому слоту в конце последней страницы).
-            const Block_Types block = creative_block_at(index);
-            m_carried = (block == Block_Types::Air) ? Item_Stack{} : Item_Stack{ block, 1 };
-            return;
-        }
-
-        // Клик по хотбару: рука с блоком кладёт его в слот, пустая — очищает слот.
-        m_creative_hotbar[hotbar_index] = m_carried.is_empty()
-                                        ? Block_Types::Air : m_carried.type;
+    Item_Stack& slot = is_hotbar_slot ? m_hotbar[index - k_panel_hotbar_start]
+                                      : m_storage[index];
+    if (m_carried_infinite) {
+        place_infinite(slot, false);
         return;
     }
-
-    // Survival: обычный обмен "слот <-> курсор". Одна и та же ветка обслуживает
-    // и хранилище, и хотбар, поэтому блок можно положить в любой из 36 слотов.
-    Item_Stack& slot = is_hotbar_slot ? m_survival_hotbar[hotbar_index]
-                                      : m_survival_storage[index];
-
+    // Обычный обмен "слот <-> курсор" — одинаков для хранилища и хотбара в обоих режимах.
     left_click_stack(slot, m_carried);
 }
 
@@ -169,13 +183,13 @@ void Inventory::right_click_stack(Item_Stack& slot, Item_Stack& carried) {
 
 void Inventory::right_click_panel_slot(size_t index) {
     if (index >= k_panel_slot_count) return;
-    if (m_mode == Game_Mode::Creative) {
-        click_panel_slot(index);
+    const bool is_hotbar_slot = index >= k_panel_hotbar_start;
+    Item_Stack& slot = is_hotbar_slot ? m_hotbar[index - k_panel_hotbar_start]
+                                      : m_storage[index];
+    if (m_carried_infinite) {
+        place_infinite(slot, true);
         return;
     }
-    const bool is_hotbar_slot = index >= k_panel_hotbar_start;
-    Item_Stack& slot = is_hotbar_slot ? m_survival_hotbar[index - k_panel_hotbar_start]
-                                      : m_survival_storage[index];
     right_click_stack(slot, m_carried);
 }
 
@@ -268,12 +282,13 @@ void Inventory::drop_carried_into_inventory() {
         m_carried = Item_Stack{};
         return;
     }
-    // В Creative курсор — просто копия блока, возвращать её некуда и незачем.
-    if (m_mode == Game_Mode::Creative) {
+    // Копия из бесконечной палитры возвращать некуда: просто отпускаем.
+    if (m_carried_infinite) {
         m_carried = Item_Stack{};
+        m_carried_infinite = false;
         return;
     }
-    // В Survival стак нельзя терять при закрытии панели: раскладываем обратно.
+    // Реальный стак нельзя терять при закрытии панели: раскладываем обратно.
     try_add_stack(m_carried);
     m_carried = Item_Stack{};
 }
@@ -346,7 +361,7 @@ Item_Stack Inventory::get_selected_stack() const {
 
 bool Inventory::damage_selected_tool(int amount) {
     if (m_mode != Game_Mode::Survival) return false;
-    Item_Stack& slot = m_survival_hotbar[static_cast<size_t>(m_selected_index)];
+    Item_Stack& slot = m_hotbar[static_cast<size_t>(m_selected_index)];
     if (slot.is_empty()) return false;
     const int max_durability = get_block_props(slot.type).max_durability;
     if (max_durability <= 0) return false;
@@ -360,7 +375,7 @@ bool Inventory::damage_selected_tool(int amount) {
 
 bool Inventory::consume_selected(int count) {
     if (m_mode != Game_Mode::Survival) return false;
-    Item_Stack& slot = m_survival_hotbar[static_cast<size_t>(m_selected_index)];
+    Item_Stack& slot = m_hotbar[static_cast<size_t>(m_selected_index)];
     if (slot.is_empty() || slot.count < count) return false;
     slot.count -= count;
     if (slot.count <= 0) slot = Item_Stack{};
@@ -375,10 +390,10 @@ int Inventory::try_add_stack(const Item_Stack& stack) {
     int remaining = amount;
     // Сначала пытаемся доложить в уже существующие стаки (хотбар приоритетнее, как в
     // Minecraft), и только потом — в пустые слоты.
-    merge_into(m_survival_hotbar, type, remaining);
-    merge_into(m_survival_storage, type, remaining);
-    fill_empty(m_survival_hotbar, type, remaining, stack.damage);
-    fill_empty(m_survival_storage, type, remaining, stack.damage);
+    merge_into(m_hotbar, type, remaining);
+    merge_into(m_storage, type, remaining);
+    fill_empty(m_hotbar, type, remaining, stack.damage);
+    fill_empty(m_storage, type, remaining, stack.damage);
 
     return amount - remaining;
 }
@@ -393,8 +408,8 @@ bool Inventory::add_resource(Block_Types type, int amount) {
 bool Inventory::has_resource(Block_Types type, int amount) const {
     if (amount <= 0) return true;
     int total = 0;
-    for (const Item_Stack& s : m_survival_hotbar) if (s.type == type) total += s.count;
-    for (const Item_Stack& s : m_survival_storage) if (s.type == type) total += s.count;
+    for (const Item_Stack& s : m_hotbar) if (s.type == type) total += s.count;
+    for (const Item_Stack& s : m_storage) if (s.type == type) total += s.count;
     return total >= amount;
 }
 
@@ -403,26 +418,23 @@ bool Inventory::remove_resource(Block_Types type, int amount) {
     if (!has_resource(type, amount)) return false;
 
     int remaining = amount;
-    consume_from(m_survival_hotbar, type, remaining);
-    consume_from(m_survival_storage, type, remaining);
+    consume_from(m_hotbar, type, remaining);
+    consume_from(m_storage, type, remaining);
     return true;
 }
 
 std::string Inventory::serialize() const {
     std::ostringstream out;
     out << "sel " << m_selected_index << "\n";
-    for (size_t i = 0; i < m_creative_hotbar.size(); ++i) {
-        out << "c " << i << " " << static_cast<int>(m_creative_hotbar[i]) << "\n";
+    for (size_t i = 0; i < m_hotbar.size(); ++i) {
+        if (m_hotbar[i].is_empty()) continue;
+        out << "h " << i << " " << static_cast<int>(m_hotbar[i].type) << " " << m_hotbar[i].count << "\n";
+        if (m_hotbar[i].damage > 0) out << "hd " << i << " " << m_hotbar[i].damage << "\n";
     }
-    for (size_t i = 0; i < m_survival_hotbar.size(); ++i) {
-        if (m_survival_hotbar[i].is_empty()) continue;
-        out << "h " << i << " " << static_cast<int>(m_survival_hotbar[i].type) << " " << m_survival_hotbar[i].count << "\n";
-        if (m_survival_hotbar[i].damage > 0) out << "hd " << i << " " << m_survival_hotbar[i].damage << "\n";
-    }
-    for (size_t i = 0; i < m_survival_storage.size(); ++i) {
-        if (m_survival_storage[i].is_empty()) continue;
-        out << "s " << i << " " << static_cast<int>(m_survival_storage[i].type) << " " << m_survival_storage[i].count << "\n";
-        if (m_survival_storage[i].damage > 0) out << "sd " << i << " " << m_survival_storage[i].damage << "\n";
+    for (size_t i = 0; i < m_storage.size(); ++i) {
+        if (m_storage[i].is_empty()) continue;
+        out << "s " << i << " " << static_cast<int>(m_storage[i].type) << " " << m_storage[i].count << "\n";
+        if (m_storage[i].damage > 0) out << "sd " << i << " " << m_storage[i].damage << "\n";
     }
     for (size_t i = 0; i < m_armor.size(); ++i) {
         if (m_armor[i].is_empty()) continue;
@@ -439,14 +451,9 @@ void Inventory::deserialize(const std::string& text) {
         if (tag == "sel") {
             int v = 0; in >> v;
             if (v >= 0 && v < static_cast<int>(k_hotbar_size)) m_selected_index = v;
-        } else if (tag == "c") {
-            size_t i = 0; int id = 0; in >> i >> id;
-            if (i < m_creative_hotbar.size() && id >= 0 && id < static_cast<int>(k_max_block_types)) {
-                m_creative_hotbar[i] = static_cast<Block_Types>(id);
-            }
         } else if (tag == "h" || tag == "s") {
             size_t i = 0; int id = 0, count = 0; in >> i >> id >> count;
-            std::vector<Item_Stack>& list = tag == "h" ? m_survival_hotbar : m_survival_storage;
+            std::vector<Item_Stack>& list = tag == "h" ? m_hotbar : m_storage;
             if (i < list.size() && id > 0 && id < static_cast<int>(k_max_block_types) && count > 0) {
                 list[i] = Item_Stack{static_cast<Block_Types>(id), std::min(count, max_stack_for(static_cast<Block_Types>(id)))};
             }
@@ -461,7 +468,7 @@ void Inventory::deserialize(const std::string& text) {
             if (i < m_armor.size() && !m_armor[i].is_empty()) m_armor[i].damage = std::max(0, dmg);
         } else if (tag == "hd" || tag == "sd") {
             size_t i = 0; int dmg = 0; in >> i >> dmg;
-            std::vector<Item_Stack>& list = tag == "hd" ? m_survival_hotbar : m_survival_storage;
+            std::vector<Item_Stack>& list = tag == "hd" ? m_hotbar : m_storage;
             if (i < list.size() && !list[i].is_empty()) list[i].damage = std::max(0, dmg);
         } else {
             std::string rest; std::getline(in, rest);
@@ -470,16 +477,16 @@ void Inventory::deserialize(const std::string& text) {
 }
 
 Item_Stack* Inventory::get_panel_slot_mutable(size_t index) {
-    if (m_mode != Game_Mode::Survival || index >= k_panel_slot_count) return nullptr;
-    return index >= k_panel_hotbar_start ? &m_survival_hotbar[index - k_panel_hotbar_start]
-                                         : &m_survival_storage[index];
+    if (index >= k_panel_slot_count) return nullptr;
+    return index >= k_panel_hotbar_start ? &m_hotbar[index - k_panel_hotbar_start]
+                                         : &m_storage[index];
 }
 
 void Inventory::quick_move_panel(size_t index) {
     Item_Stack* slot = get_panel_slot_mutable(index);
     if (!slot || slot->is_empty()) return;
     // Из хранилища — в хотбар, из хотбара — в хранилище.
-    std::vector<Item_Stack>& target = index >= k_panel_hotbar_start ? m_survival_storage : m_survival_hotbar;
+    std::vector<Item_Stack>& target = index >= k_panel_hotbar_start ? m_storage : m_hotbar;
     int remaining = slot->count;
     merge_into(target, slot->type, remaining);
     fill_empty(target, slot->type, remaining, slot->damage);

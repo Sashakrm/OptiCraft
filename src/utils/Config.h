@@ -207,6 +207,26 @@ namespace Config {
     constexpr float skeleton_death_seconds = 0.8f;
     // После убийства враждебного моба новый появляется не раньше, чем через это время.
     constexpr float hostile_respawn_delay = 20.0f;
+    // Паук. Модель assets/mobs/spider.glb: клипы Idle, Walk и (необязательно) Attack.
+    // Днём и ночью дерётся с лошадьми; на игрока нападает только ночью (см. night_start_normalized).
+    constexpr int min_spider_count = 2;
+    constexpr float spider_spawn_radius_min = 16.0f;
+    constexpr float spider_spawn_radius_max = 28.0f;
+    constexpr float spider_walk_speed = 1.2f;
+    constexpr float spider_run_speed = 3.0f;
+    constexpr float spider_detect_range = 16.0f;
+    constexpr float spider_width = 0.9f;
+    constexpr float spider_height = 0.8f;
+    constexpr float spider_max_health = 16.0f;
+    constexpr float spider_attack_damage = 2.0f;         // HP за удар (по игроку и по лошади)
+    constexpr float spider_attack_reach = 1.4f;
+    constexpr float spider_attack_cooldown = 1.0f;
+    constexpr float spider_invulnerable_seconds = 0.4f;
+    constexpr float spider_death_seconds = 0.8f;
+    // Ночь начинается, когда нормализованное время суток >= этого значения (0.5 — закат, 0 — рассвет).
+    constexpr float night_start_normalized = 0.5f;
+    // Лошадь замечает паука и бежит к нему на этом расстоянии (блоков).
+    constexpr float horse_hunt_range = 12.0f;
 
     // --- Бой -----------------------------------------------------------------------------
     constexpr float player_attack_reach = 3.5f;
@@ -367,9 +387,13 @@ namespace Config {
     // Инструмент с полем "impulse_speed" в blocks.json (ПКМ): не раньше, чем через это время.
     constexpr float tool_impulse_cooldown = 0.6f;
     // Урон удара растёт от скорости игрока: + melee_speed_bonus_per_speed за каждый блок/с
-    // сверх ходьбы; потолок бонуса — melee_speed_bonus_max (как множитель урона, 0.5 = +50%).
+    // сверх ходьбы (множитель урона; у каждого инструмента свой "speed_damage_scale" в blocks.json).
+    // Верхнего предела нет.
     constexpr float melee_speed_bonus_per_speed = 0.12f;
-    constexpr float melee_speed_bonus_max = 1.5f;
+    // Урон мобов по игроку растёт так же, но от скорости игрока сверх ходьбы (см. Hostile_Mob).
+    constexpr float mob_speed_bonus_per_speed = 0.1f;
+    // Абсолютный потолок горизонтальной скорости игрока (блоков/с), включая импульсы инструментов.
+    constexpr float player_max_speed = 50.0f;
 
     // --- Броня (Survival) -------------------------------------------------------------------
     // Каждое очко защиты снижает урон от мобов на (1/25), но не больше чем на 20 очков (80%).

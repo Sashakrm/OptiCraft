@@ -17,6 +17,7 @@ Day_Night_Cycle::Day_Night_Cycle(float full_cycle_seconds)
 {}
 
 void Day_Night_Cycle::update(float delta_time) {
+    if (m_frozen) return;
     advance(delta_time);
 }
 

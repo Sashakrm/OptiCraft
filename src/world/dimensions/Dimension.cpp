@@ -53,9 +53,50 @@ namespace {
         empty.name = "void_test";
         empty.display_name = "Void test";
         empty.terrain = Terrain_Mode::Void;
+        empty.time_mode = Time_Mode::Fixed;   // в пустоте времени суток нет: вечный полдень
+        empty.fixed_time = 0.25f;
         empty.decorations = false;
         empty.sky_islands = false;
         empty.spawn_height = 64;
+
+        // Супер-плоский: как в Minecraft — низ уходит под мир, сверху: камень, земля, трава.
+        auto& superflat = table[static_cast<size_t>(Dimension_Id::Superflat)];
+        superflat.id = Dimension_Id::Superflat;
+        superflat.name = "superflat";
+        superflat.display_name = "Superflat";
+        superflat.terrain = Terrain_Mode::Flat;
+        superflat.decorations = false;
+        superflat.sky_islands = false;
+        superflat.flat_base_y = Config::world_min_y;
+        superflat.flat_layers = {
+            {Block_Types::Deep_Stone, 0 - Config::world_min_y},       // до Y = -1
+            {Block_Types::Stone, 3},                                  // Y 0..2
+            {Block_Types::Dirt, 2},                                   // Y 3..4
+            {Block_Types::Grass, 1},                                  // Y 5
+        };
+        superflat.spawn_height = superflat.flat_top_y() + 1;
+
+        // Один биом: обычный рельеф и декорации, но без пещер и без островов.
+        auto& single = table[static_cast<size_t>(Dimension_Id::Single_Biome)];
+        single.id = Dimension_Id::Single_Biome;
+        single.name = "single_biome";
+        single.display_name = "Single biome";
+        single.terrain = Terrain_Mode::Noise;
+        single.caves = false;
+        single.sky_islands = false;
+        single.single_biome = true;
+
+        // То же, но без земли: только парящие острова над пустотой.
+        auto& islands = table[static_cast<size_t>(Dimension_Id::Single_Islands)];
+        islands.id = Dimension_Id::Single_Islands;
+        islands.name = "single_islands";
+        islands.display_name = "Floating islands";
+        islands.terrain = Terrain_Mode::Noise;
+        islands.caves = false;
+        islands.ground = false;
+        islands.decorations = false;
+        islands.sky_islands = true;
+        islands.single_biome = true;
 
         return table;
     }

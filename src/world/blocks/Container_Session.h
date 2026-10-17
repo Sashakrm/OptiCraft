@@ -31,13 +31,11 @@ public:
     }
 
     // Стак на курсоре не должен потеряться, если экран закрыли, пока в руке что-то
-    // было — в Survival раскладываем обратно по инвентарю (как Inventory::drop_carried_
-    // into_inventory), в Creative просто отпускаем (там это лишняя копия).
+    // было — раскладываем обратно по инвентарю (одинаково в обоих режимах; стак
+    // сохраняет прочность инструмента, поэтому через try_add_stack).
     void close(Inventory& inventory) {
         if (!m_carried.is_empty()) {
-            if (inventory.get_mode() == Game_Mode::Survival) {
-                inventory.add_resource(m_carried.type, m_carried.count);
-            }
+            inventory.try_add_stack(m_carried);
             m_carried = Item_Stack{};
         }
         m_entity = nullptr;
@@ -110,22 +108,8 @@ public:
         if (paired) index -= paired_count;
 
         // Дальше — слоты игрока: полная панель 0..35 (27 хранилище + 9 хотбар),
-        // тот же индекс, что у Inventory::click_panel_slot.
+        // тот же индекс, что у Inventory::click_panel_slot. Инвентарь один для обоих режимов.
         if (index >= Inventory::k_panel_slot_count) return;
-
-        if (inventory.get_mode() == Game_Mode::Creative) {
-            // В Creative показывается только хотбар (см. Game::build_container_panel).
-            if (index < Inventory::k_panel_hotbar_start) return;
-            index -= Inventory::k_panel_hotbar_start;
-            // Бесконечный запас: пустая рука берёт 1 шт. текущего блока слота, занятая
-            // просто освобождается — относить блок обратно в Creative бессмысленно
-            // (симметрично тому, как уже ведёт себя хотбарная строка в самой E-панели).
-            const Item_Stack hotbar_slot = inventory.get_hotbar_slot(index);
-            m_carried = (m_carried.is_empty() && !hotbar_slot.is_empty())
-                       ? Item_Stack{hotbar_slot.type, 1}
-                       : Item_Stack{};
-            return;
-        }
 
         inventory.set_carried_stack(m_carried);
         if (right) inventory.right_click_panel_slot(index);
@@ -134,10 +118,10 @@ public:
         inventory.set_carried_stack(Item_Stack{});
     }
 
-    // Shift+ЛКМ (только Survival): из контейнера — в сумку игрока, из сумки — в контейнер.
+    // Shift+ЛКМ: из контейнера — в сумку игрока, из сумки — в контейнер (оба режима).
     // index — как в click_slot.
     void quick_move(size_t index, Inventory& inventory, Block_Entity* paired = nullptr) {
-        if (!m_entity || inventory.get_mode() != Game_Mode::Survival) return;
+        if (!m_entity) return;
 
         if (has_output_slot() && index == get_output_slot_index()) {
             for (int guard = 0; guard < 64; ++guard) {

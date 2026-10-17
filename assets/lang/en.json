@@ -7,8 +7,6 @@
 
   "mode.survival": "Survival",
   "mode.creative": "Creative",
-  "world_type.classic": "Classic",
-  "world_type.islands": "Islands",
 
   "menu.subtitle": "Voxel Sandbox",
   "menu.singleplayer": "Singleplayer",
@@ -29,6 +27,13 @@
   "create.seed": "Seed (leave blank for random)",
   "create.game_mode": "Game Mode: {0}",
   "create.world_type": "World Type: {0}",
+  "world_type.normal": "Normal",
+  "world_type.superflat": "Superflat",
+  "world_type.single_biome": "Single biome",
+  "world_type.single_islands": "Floating islands",
+  "world_type.flat_test": "Flat test",
+  "world_type.void_test": "Void test",
+  "create.biome": "Biome: {0}",
 
   "pause.title": "Game Menu",
   "pause.back": "Back to Game",

@@ -8,9 +8,12 @@ namespace Panel_Layouts {
 
     namespace {
         // --- инвентарь: Creative ---
-        constexpr float k_creative_height = 122.0f;
-        constexpr float k_creative_storage_y = 18.0f;
-        constexpr float k_creative_hotbar_y = 98.0f;
+        // Сверху палитра блоков (3 ряда по 9), под ней листалка страниц, ниже — тот же
+        // хранилище + хотбар, что и в Survival: предметы из палитры попадают в них.
+        constexpr float k_creative_height = 166.0f;
+        constexpr float k_creative_palette_y = 18.0f;
+        constexpr float k_creative_storage_y = 84.0f;
+        constexpr float k_creative_hotbar_y = 142.0f;
         constexpr glm::vec2 k_creative_page_prev{8.0f, 76.0f};
         constexpr glm::vec2 k_creative_page_next{154.0f, 76.0f};
         constexpr glm::vec2 k_creative_page_text{88.0f, 79.0f};
@@ -87,6 +90,11 @@ namespace Panel_Layouts {
             layout.page_next_pos = k_creative_page_next;
             layout.page_text = tr("panel.page", {std::to_string(current_page + 1), std::to_string(page_count)});
             layout.page_text_pos = k_creative_page_text;
+        }
+        for (int i = 0; i < Panel_Slot_Ids::k_creative_palette_count; ++i) {
+            layout.slots.push_back({{k_panel_margin + k_slot_pitch * static_cast<float>(i % k_slots_per_row),
+                                     k_creative_palette_y + k_slot_pitch * static_cast<float>(i / k_slots_per_row)},
+                                    Panel_Slot_Ids::k_creative_palette_base + i, false});
         }
         append_player_slots(layout, k_panel_margin, k_creative_storage_y, k_creative_hotbar_y, true, 0, hotbar_start);
         return layout;

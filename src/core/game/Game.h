@@ -102,6 +102,7 @@ private:
     // возвращается при смерти в Survival (см. update_gameplay).
     glm::vec3 m_spawn_position{8.0f, 0.0f, 8.0f};
     Game_Mode m_game_mode = Game_Mode::Creative;
+    bool m_spectator = false; // Creative без коллизий полёта (F1: третья ступень)
     // Реальное время (20 минут по умолчанию — см. Config), а не игровые тики: пользователь
     // явно попросил именно длительность в реальных минутах, не привязанную к TPS/FPS.
     Day_Night_Cycle m_day_night_cycle;
@@ -167,8 +168,11 @@ public:
     };
     std::vector<World_Info> list_worlds() const;
     // Создаёт мир в новой папке и сразу загружает. seed_text пустой — случайный сид.
+    // dimension — имя измерения (Dimension.h: overworld, superflat, single_biome, ...),
+    // biome — имя биома (biome_name) для измерений single_biome*; для остальных игнорируется.
     bool create_world(const std::string& name, const std::string& seed_text, Game_Mode mode,
-                      const std::string& generation_folder, std::string& error);
+                      const std::string& generation_folder, const std::string& dimension,
+                      const std::string& biome, std::string& error);
     bool load_world(const std::string& dir);
     void save_world();                 // настройки, позиция игрока, изменённые чанки
     void close_world();                // сохранить и выгрузить (выход в меню)
@@ -213,7 +217,13 @@ public:
     // Режим игры (Creative/Survival) — переключается из меню настроек.
     Game_Mode get_game_mode() const { return m_game_mode; }
     std::string get_game_mode_name() const;
+    bool is_spectator() const { return m_spectator; }
+    // Выставляет режим: Survival (без полёта), Creative (полёт с коллизиями) или наблюдатель
+    // (spectator=true — Creative с полётом сквозь блоки).
+    void apply_game_mode(Game_Mode mode, bool spectator);
     void toggle_game_mode();
+    // F1: Survival → Creative → наблюдатель → Survival.
+    void cycle_game_mode();
 
     // --- Настройки (меню) ------------------------------------------------------
     int get_render_distance() const { return m_render_distance; }
@@ -285,6 +295,7 @@ public:
     int summon_sheep(int count) { return m_mobs.summon_sheep(count, get_player_position()); }
     int summon_zombies(int count) { return m_mobs.summon_zombies(count, get_player_position()); }
     int summon_skeletons(int count) { return m_mobs.summon_skeletons(count, get_player_position()); }
+    int summon_spiders(int count) { return m_mobs.summon_spiders(count, get_player_position()); }
     // Команда /breed: сразу «влюбляет» всех взрослых животных вида (pig|cow|horse).
     int breed_all(const std::string& species) { return m_mobs.breed_all(species); }
     bool is_riding_horse() const { return m_mobs.is_riding(); }

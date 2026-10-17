@@ -14,6 +14,7 @@
       "w": 16,
       "h": 16
     },
+    "cobblestone": {"x": 96, "y": 16, "w": 16, "h": 16},
     "dirt": {
       "x": 32,
       "y": 0,
@@ -695,6 +696,114 @@
     "armor_iron_boots": {
       "x": 48,
       "y": 64,
+      "w": 16,
+      "h": 16
+    },
+    "tool_wooden_knife": {
+      "x": 672,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_stone_knife": {
+      "x": 688,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_iron_knife": {
+      "x": 704,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_diamond_knife": {
+      "x": 720,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_wooden_spear": {
+      "x": 736,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_stone_spear": {
+      "x": 752,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_iron_spear": {
+      "x": 768,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_diamond_spear": {
+      "x": 784,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_stone_mace": {
+      "x": 800,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_iron_mace": {
+      "x": 816,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_diamond_mace": {
+      "x": 832,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_stone_battle_axe": {
+      "x": 848,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_iron_battle_axe": {
+      "x": 864,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_diamond_battle_axe": {
+      "x": 880,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_iron_rapier": {
+      "x": 896,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_diamond_rapier": {
+      "x": 912,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_iron_trident": {
+      "x": 928,
+      "y": 32,
+      "w": 16,
+      "h": 16
+    },
+    "tool_diamond_trident": {
+      "x": 944,
+      "y": 32,
       "w": 16,
       "h": 16
     }

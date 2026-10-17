@@ -1,14 +1,14 @@
 {
   "smelting": [
     {
-      "input": "Raw Porkchop",
-      "output": "Cooked Porkchop",
+      "input": "Cobblestone",
+      "output": "Stone",
       "count": 1,
       "time": 10
     },
     {
-      "input": "Oak Wood",
-      "output": "Charcoal",
+      "input": "Raw Porkchop",
+      "output": "Cooked Porkchop",
       "count": 1,
       "time": 10
     },
@@ -77,10 +77,6 @@
     {
       "item": "Charcoal",
       "burn_time": 80
-    },
-    {
-      "item": "Oak Wood",
-      "burn_time": 15
     },
     {
       "item": "Oak Log",

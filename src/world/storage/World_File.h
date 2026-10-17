@@ -15,6 +15,7 @@ struct World_Settings {
     std::string generation_folder{"Classic"};
     std::uint32_t seed{Config::seed};
     std::string dimension{"overworld"};  // имя из Dimension.h (get_dimension_info)
+    std::string biome{"Plains"};         // имя биома (biome_name), для измерения single_biome*
     std::string game_mode{"creative"};   // "creative" | "survival"
     std::string last_played;             // "YYYY-MM-DD HH:MM", для списка миров
     bool has_player_position{false};

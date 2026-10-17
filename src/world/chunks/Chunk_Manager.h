@@ -241,6 +241,11 @@ private:
 
     void unload_chunk(int cx, int cy, int cz);
     void enqueue_chunk_load(int cx, int cy, int cz);
+    // Приоритет задачи генерации: квадрат расстояния до игрока, вертикаль весит в 4 раза сильнее.
+    int chunk_job_priority(int cx, int cy, int cz) const;
+    // Пересчёт приоритетов всех задач в очереди после смены чанка игроком; задачи вне окна загрузки
+    // снимаются (их запись в m_requested_chunks тоже чистится, чтобы чанк можно было поставить снова).
+    void reprioritize_pending_jobs();
     bool save_chunk_to_disk(const Chunk& chunk) const;
     void enqueue_mesh_rebuild(int cx, int cy, int cz);
     bool is_chunk_wanted(const glm::ivec3& position) const;

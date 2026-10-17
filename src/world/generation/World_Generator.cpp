@@ -82,6 +82,26 @@ const char* biome_name(Biome_Id id) {
     return index < static_cast<size_t>(Biome_Id::Count) ? kBiomeNames[index] : "Plains";
 }
 
+Biome_Id biome_from_name(const std::string& name) {
+    for (size_t i = 0; i < static_cast<size_t>(Biome_Id::Count); ++i) {
+        const Biome_Id id = static_cast<Biome_Id>(i);
+        if (name == biome_name(id)) return id;
+    }
+    return Biome_Id::Plains;
+}
+
+const std::vector<Biome_Id>& selectable_single_biomes() {
+    // Наземные биомы с собственным поверхностным слоем. Океан, пляж, мелководье и болото
+    // зависят от высоты над морем, поэтому в «один биом» не выбираются.
+    static const std::vector<Biome_Id> list = {
+        Biome_Id::Plains, Biome_Id::Forest, Biome_Id::Birch_Forest, Biome_Id::Taiga,
+        Biome_Id::Jungle, Biome_Id::Savanna, Biome_Id::Desert, Biome_Id::Stone_Desert,
+        Biome_Id::Steppe, Biome_Id::Tundra, Biome_Id::Ice_Fields, Biome_Id::Plateau,
+        Biome_Id::Mountains, Biome_Id::High_Mountains,
+    };
+    return list;
+}
+
 // ---------------------------------------------------------------------------
 //  Потоковые кэши
 // ---------------------------------------------------------------------------
@@ -1024,7 +1044,9 @@ bool World_Generator::sky_island_block(int world_x, int world_y, int world_z) co
                 best_distance = distance;
                 cluster.center_x = cx;
                 cluster.center_z = cz;
-                cluster.anchor_valid = sky_anchor_valid(cx, cz);
+                // В мире без земли острова ставятся в каждой ячейке (якорь не нужен), иначе
+                // в обычном мире острова редки, а океанские (центр ниже Y=200) вовсе не видны.
+                cluster.anchor_valid = !m_dimension->ground || sky_anchor_valid(cx, cz);
                 cluster.main_radius = 80 + static_cast<int>((h >> 16) % 96u);
 
                 const double c = split_signed_noise(
@@ -1033,7 +1055,11 @@ bool World_Generator::sky_island_block(int world_x, int world_y, int world_z) co
                     fbm2(m_erosion, cx, cz, 4, 0.0018, 2.0, 0.5));
                 const double peak = raw_surface_height(cx, cz, c, erosion);
 
-                if (c < -0.19) {
+                if (!m_dimension->ground) {
+                    // Низ самого большого острова уходит до центр-66 и до центр-15 для малых;
+                    // поднимаем центр так, чтобы нижние блоки не обрезались по границе Y=200.
+                    cluster.center_y = 290 + static_cast<int>((h >> 24) % 61u);   // 290..350
+                } else if (c < -0.19) {
                     cluster.center_y = kSeaLevel + 70 +
                                        static_cast<int>((h >> 24) % 9u) - 4;
                 } else {
@@ -1149,6 +1175,7 @@ void World_Generator::register_default_biomes() {
 // притягивался к морю при C < 0.06, из-за чего между ними оставалась сухая
 // плоская полка, а сам "Beach" оказывался под водой.
 Biome_Id World_Generator::surface_biome_for_column(const Column& column) const {
+    if (m_dimension->single_biome) return m_biome;
     const double h = column.surface_height;
 
     if (h < kSeaLevel - 16.0) return Biome_Id::Ocean;
@@ -1212,6 +1239,7 @@ Biome_Id World_Generator::surface_biome_for_column(const Column& column) const {
 Biome_Id World_Generator::biome_at(const Column& column, int world_y,
                                    double cave_density,
                                    const Cave_Flags& flags) const {
+    if (m_dimension->single_biome) return m_biome;
     if (world_y > 200 && column.humidity > 0.70 && column.continentalness < 0.60)
         return Biome_Id::Sky;
 
@@ -1336,6 +1364,9 @@ Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int 
 Block_Types World_Generator::block_in_column(const Column& column,
                                              int world_x, int world_y,
                                              int world_z, Cave_Field* field) const {
+    // Измерение без земли (только острова): ни рельефа, ни воды, ни пещер.
+    if (!m_dimension->ground) return Block_Types::Air;
+
     const int height = column.height;
 
     // Над поверхностью. Вода наливается ВЕЗДЕ, где пусто и ниже уровня моря —
@@ -1346,7 +1377,7 @@ Block_Types World_Generator::block_in_column(const Column& column,
     }
 
     // Пещеры. Верхние 4 блока не выгрызаются, поэтому поверхность не дырявая.
-    if (world_y < height - 4) {
+    if (m_dimension->caves && world_y < height - 4) {
         // Под дном водоёма оставляем более толстую крышу, чтобы пещера не
         // вскрывала океан и не осушала его.
         const bool underwater = column.surface_height < kSeaLevel + 1.0;
@@ -1373,6 +1404,39 @@ Block_Types World_Generator::block_in_column(const Column& column,
 // ---------------------------------------------------------------------------
 //  Публичный API
 // ---------------------------------------------------------------------------
+int World_Generator::find_spawn_surface(int& x, int& z) const {
+    if (m_dimension->ground) return get_height(x, z);
+
+    // Земли нет: ищем ближайший остров по квадратным кольцам вокруг (x, z), с шагом 8 блоков.
+    // Поиск один раз при создании мира, поэтому стоимость (сотни тысяч вызовов острова
+    // в худшем случае) не влияет на игру.
+    constexpr int kRadius = 256;
+    constexpr int kStep = 8;
+    const int origin_x = x;
+    const int origin_z = z;
+    for (int ring = 0; ring <= kRadius; ring += kStep) {
+        for (int dz = -ring; dz <= ring; dz += kStep) {
+            for (int dx = -ring; dx <= ring; dx += kStep) {
+                if (std::max(std::abs(dx), std::abs(dz)) != ring) continue;
+                const int cx = origin_x + dx;
+                const int cz = origin_z + dz;
+                for (int y = 200; y <= Config::world_max_y - 1; ++y) {
+                    if (sky_island_block(cx, y, cz) && !sky_island_block(cx, y + 1, cz)) {
+                        x = cx;
+                        z = cz;
+                        return y;
+                    }
+                }
+            }
+        }
+    }
+    // Островов в радиусе 256 нет (редкий сид): возвращаем запасную высоту над (x, z). Здесь
+    // игрок упадёт в пустоту, поэтому в таком мире нужна команда /tp к любому острову.
+    x = origin_x;
+    z = origin_z;
+    return 220;
+}
+
 int World_Generator::get_height(int world_x, int world_z) const {
     switch (m_dimension->terrain) {
         case Terrain_Mode::Flat: return m_dimension->flat_top_y();
@@ -1392,7 +1456,7 @@ Block_Types World_Generator::get_block(int world_x, int world_y, int world_z) co
         case Terrain_Mode::Noise: break;
     }
 
-    if (world_y >= 200 && sky_island_block(world_x, world_y, world_z)) {
+    if (world_y >= 200 && m_dimension->sky_islands && sky_island_block(world_x, world_y, world_z)) {
         const bool exposed_top = !sky_island_block(world_x, world_y + 1, world_z);
         return exposed_top ? Block_Types::Grass : Block_Types::Cloud_Stone;
     }
@@ -1447,7 +1511,7 @@ std::string World_Generator::get_biome_name(int world_x, int world_y, int world_
 }
 
 bool World_Generator::cave_at(int world_x, int world_y, int world_z) const {
-    if (m_dimension->terrain != Terrain_Mode::Noise) return false;
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->caves) return false;
     const Column column = column_at(world_x, world_z);
     return world_y < column.surface_height - 4.0 &&
            cave_density_at(world_x, world_y, world_z, column.surface_height) > kCaveThreshold;
@@ -1474,7 +1538,7 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
     // Генерируем в плоский буфер и один раз строим палитру (assign_flat): запись в палитровую
     // сетку воксель за вокселем (set) на порядки медленнее. thread_local — генерация идёт в
     // воркерах, буфер переиспользуется без аллокаций.
-    thread_local std::vector<uint8_t> flat;
+    thread_local std::vector<Block_ID> flat;
     flat.assign(Chunk_Block_Grid::voxel_count, 0);   // 0 = Air
 
     // Не-шумовые режимы (Flat/Void): слои одинаковы по всему чанку, шумы не нужны.
@@ -1487,7 +1551,7 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                 if (block == Block_Types::Air) continue;
                 const size_t row = static_cast<size_t>(y) * Config::chunk_size * Config::chunk_size;
                 std::fill_n(flat.begin() + row, Config::chunk_size * Config::chunk_size,
-                            static_cast<uint8_t>(static_cast<Block_ID>(block)));
+                            static_cast<Block_ID>((block)));
             }
         }
         blocks.assign_flat(flat.data());
@@ -1495,8 +1559,13 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
     }
 
     // Парящие острова живут только выше Y=200 — для всех остальных чанков этот
-    // дорогой путь не выполняется вовсе.
-    const bool sky_range = end_y >= 200;
+    // дорогой путь не выполняется вовсе. Если в измерении нет ни островов, ни земли
+    // (Single_Islands), чанк ниже Y=200 пуст и дальше считать нечего.
+    const bool sky_range = m_dimension->sky_islands && end_y >= 200;
+    if (!m_dimension->ground && !sky_range) {
+        blocks.assign_flat(flat.data());
+        return;
+    }
 
     // Окно с запасом под декорации (они заходят за границы чанка): ленивое, как и прежде.
     begin_cave_window(start_x, start_y, start_z);
@@ -1533,6 +1602,7 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                 Block_Types block;
                 if (sky_range && world_y >= 200 &&
                     sky_island_block(world_x, world_y, world_z)) {
+                    // Остров: верхний блок — трава, нижние — облачный камень.
                     block = sky_island_block(world_x, world_y + 1, world_z)
                           ? Block_Types::Cloud_Stone : Block_Types::Grass;
                 } else {
@@ -1543,7 +1613,7 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                     const size_t index = (static_cast<size_t>(world_y - start_y) * Config::chunk_size +
                                           static_cast<size_t>(z)) * Config::chunk_size +
                                          static_cast<size_t>(x);
-                    flat[index] = static_cast<uint8_t>(static_cast<Block_ID>(block));
+                    flat[index] = static_cast<Block_ID>((block));
                 }
             }
         }
@@ -1558,6 +1628,10 @@ bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chun
         case Terrain_Mode::Void: return true;
         case Terrain_Mode::Flat: return start_y > m_dimension->flat_top_y();
         case Terrain_Mode::Noise: break;
+    }
+    // Без земли внизу остаются только парящие острова: вне их высоты чанк пуст.
+    if (!m_dimension->ground) {
+        return !(m_dimension->sky_islands && start_y + Config::chunk_height - 1 >= 200);
     }
     if (start_y <= kSeaLevel) return false;      // может быть вода
     if (start_y + Config::chunk_height - 1 >= 200) return false;  // парящие острова
@@ -1586,6 +1660,8 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations) return;
     const Column column = column_at(world_x, world_z);
     const int terrain_height = column.height;
+
+    if (!m_dimension->ground) return;   // на островах декораций нет: деревья стояли бы в пустоте
 
     if (terrain_height < Config::world_min_y + 1 ||
         terrain_height > Config::world_max_y - 20)

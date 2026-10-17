@@ -26,7 +26,7 @@
 
 class Chunk_Manager;
 
-enum class Hostile_Kind { Zombie, Skeleton };
+enum class Hostile_Kind { Zombie, Skeleton, Spider };
 
 struct Hostile_Stats {
     const char* label;
@@ -56,6 +56,21 @@ struct Hostile_Context {
     glm::vec3 player_position{0.0f};  // ноги игрока
     bool player_alive = true;
     bool player_seen = false;         // видит ли этот враг игрока прямо сейчас (дистанция и луч)
+    float player_speed = 0.0f;        // горизонтальная скорость игрока, блоков/с: от неё растёт урон удара
+    // false — игрока в этот момент не трогать (паук днём). Враги с обычной логикой — всегда true.
+    bool player_targetable = true;
+    // Добыча — лошадь (паук её бьёт). Если valid, враг гонится за ней, а не за игроком.
+    bool prey_valid = false;
+    glm::vec3 prey_position{0.0f};    // центр лошади
+    glm::vec3 prey_min{0.0f};         // хитбокс лошади
+    glm::vec3 prey_max{0.0f};
+};
+
+// Что враг сделал за тик: удар по игроку (урон до брони) и/или удар по лошади.
+struct Hostile_Result {
+    int player_damage = 0;
+    bool hit_horse = false;
+    float horse_damage = 0.0f;
 };
 
 class Hostile_Mob {
@@ -68,7 +83,7 @@ public:
     bool load_model();
 
     // Возвращает урон, который враг нанёс игроку в этом тике (0 — не ударил).
-    int update(float delta_time, const Chunk_Manager& chunk_manager, const Hostile_Context& context);
+    Hostile_Result update(float delta_time, const Chunk_Manager& chunk_manager, const Hostile_Context& context);
     void render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient_intensity) const;
 
     // Тревога от товарища: видел игрока другой враг рядом — этот тоже идёт к нему.

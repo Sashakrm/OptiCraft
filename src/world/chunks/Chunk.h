@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include "world/dimensions/Dimension.h"
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -201,24 +202,26 @@ class Texture_Atlas;
 //   3..4                    2                 8 КБ
 //   5..16                   4                16 КБ
 //   17..256                 8                32 КБ   (как было раньше у ВСЕХ чанков)
+//   257..65536              16               64 КБ   (палитра переполнилась — ширина растёт сама)
 //
 // Ширины подобраны степенями двойки, чтобы чтение воксела сводилось к сдвигам и маскам без
 // деления — get() вызывается в самых горячих циклах (мешинг, освещение).
-// Id блока по-прежнему один байт (реестр ограничен 256 id, см. k_max_block_types).
+// Палитра хранит полноценные Block_ID (uint16): ограничения на число видов блоков нет,
+// кроме самого пространства id (k_max_block_types).
 class Chunk_Block_Grid {
 public:
     static constexpr size_t voxel_count = static_cast<size_t>(Config::chunk_size) *
                                            Config::chunk_height * Config::chunk_size;
 
 private:
-    std::vector<uint8_t> m_palette;   // номер в палитре -> id блока (всегда минимум 1 запись)
+    std::vector<Block_ID> m_palette;  // номер в палитре -> id блока (всегда минимум 1 запись)
     std::vector<uint16_t> m_counts;   // сколько вокселей использует каждая запись палитры
     std::vector<uint64_t> m_words;    // упакованные номера; пусто, когда m_bits == 0
-    uint8_t m_bits = 0;               // 0, 1, 2, 4 или 8
+    uint8_t m_bits = 0;               // 0, 1, 2, 4, 8 или 16
     uint8_t m_log_bits = 0;           // log2(m_bits)
     uint8_t m_word_shift = 0;         // log2(вокселей в 64-битном слове)
     uint8_t m_slot_mask = 0;          // (вокселей в слове) - 1
-    uint8_t m_value_mask = 0;         // (1 << m_bits) - 1
+    uint32_t m_value_mask = 0;        // (1 << m_bits) - 1
 
     // Метаданные блока (см. Block_Meta в Block_Types.h): ориентация бревна, сторона, куда
     // смотрит печь, флаг "активен". Хранятся РЕДКО — почти все блоки мира имеют meta = 0, —
@@ -234,7 +237,7 @@ private:
 
     static constexpr uint8_t bits_for_palette(size_t palette_size) {
         return palette_size <= 1 ? 0 : palette_size <= 2 ? 1 : palette_size <= 4 ? 2
-             : palette_size <= 16 ? 4 : 8;
+             : palette_size <= 16 ? 4 : palette_size <= 256 ? 8 : 16;
     }
     static constexpr size_t capacity_for_bits(uint8_t bits) {
         return bits == 0 ? 1 : (static_cast<size_t>(1) << bits);
@@ -242,22 +245,22 @@ private:
 
     void apply_bits(uint8_t bits);
     // Перепаковывает номера под новую ширину (remap — необязательная таблица старый -> новый номер).
-    void repack(uint8_t new_bits, const uint8_t* remap = nullptr);
+    void repack(uint8_t new_bits, const uint16_t* remap = nullptr);
 
-    uint8_t index_at(size_t i) const {
+    uint16_t index_at(size_t i) const {
         if (m_bits == 0) return 0;
         const uint64_t word = m_words[i >> m_word_shift];
         const unsigned offset = (static_cast<unsigned>(i) & m_slot_mask) << m_log_bits;
-        return static_cast<uint8_t>((word >> offset) & m_value_mask);
+        return static_cast<uint16_t>((word >> offset) & m_value_mask);
     }
-    void write_index(size_t i, uint8_t palette_index) {
+    void write_index(size_t i, uint16_t palette_index) {
         uint64_t& word = m_words[i >> m_word_shift];
         const unsigned offset = (static_cast<unsigned>(i) & m_slot_mask) << m_log_bits;
         word = (word & ~(static_cast<uint64_t>(m_value_mask) << offset)) |
                (static_cast<uint64_t>(palette_index) << offset);
     }
     // Номер записи палитры для id блока; добавляет запись (при необходимости расширяя битность).
-    uint8_t palette_index_for(uint8_t block_id);
+    uint16_t palette_index_for(Block_ID block_id);
 
 public:
     Chunk_Block_Grid() { m_palette.assign(1, 0); m_counts.assign(1, static_cast<uint16_t>(voxel_count)); }
@@ -271,10 +274,10 @@ public:
     void set(int x, int y, int z, Block_Types type) {
         const size_t i = index(x, y, z);
         if (!m_meta.empty()) m_meta.erase(static_cast<uint16_t>(i));
-        const uint8_t id = static_cast<uint8_t>(static_cast<Block_ID>(type));
-        const uint8_t old_index = index_at(i);
+        const Block_ID id = static_cast<Block_ID>(type);
+        const uint16_t old_index = index_at(i);
         if (m_palette[old_index] == id) return;
-        const uint8_t new_index = palette_index_for(id);   // может перепаковать m_words
+        const uint16_t new_index = palette_index_for(id);   // может перепаковать m_words
         // old_index не меняется при перепаковке "на месте" (записи не переупорядочиваются)
         --m_counts[old_index];
         ++m_counts[new_index];
@@ -282,7 +285,7 @@ public:
     }
 
     void fill(Block_Types type) {
-        m_palette.assign(1, static_cast<uint8_t>(static_cast<Block_ID>(type)));
+        m_palette.assign(1, static_cast<Block_ID>(type));
         m_counts.assign(1, static_cast<uint16_t>(voxel_count));
         m_words.clear();
         m_words.shrink_to_fit();
@@ -292,8 +295,8 @@ public:
 
     // Загрузка/сохранение целиком "плоским" массивом id (voxel_count байт, порядок y,z,x).
     // Строит палитру за один проход — намного быстрее, чем voxel_count вызовов set().
-    void assign_flat(const uint8_t* flat);
-    void unpack(uint8_t* out) const;
+    void assign_flat(const Block_ID* flat);
+    void unpack(Block_ID* out) const;
     // Выкидывает записи палитры, которые больше никто не использует, и ужимает битность.
     // Зовётся после генерации и перед сохранением: set() только добавляет записи.
     void compact();
@@ -324,11 +327,11 @@ public:
     // Сколько записей в палитре и сколько байт реально занимают данные чанка (для отладки/F3).
     size_t palette_size() const { return m_palette.size(); }
     size_t memory_bytes() const {
-        return m_words.size() * sizeof(uint64_t) + m_palette.size() +
+        return m_words.size() * sizeof(uint64_t) + m_palette.size() * sizeof(Block_ID) +
                m_counts.size() * sizeof(uint16_t) +
                m_meta.size() * (sizeof(uint16_t) + sizeof(uint8_t));
     }
-    constexpr size_t size_bytes() const { return voxel_count; }  // размер распакованного вида
+    constexpr size_t size_bytes() const { return voxel_count * sizeof(Block_ID); }  // размер распакованного вида
 };
 
 // Each voxel stores BOTH Minecraft-style block light and sky light in one byte:
@@ -431,7 +434,7 @@ using Chunk_Neighbor_Lookup = std::function<Block_Types(int world_x, int world_y
 // bytes for blocks or 32*32 bytes for light (one packed block+sky byte per voxel,
 // same convention as Chunk_Light_Grid).
 struct Chunk_Block_Face {
-    std::array<uint8_t, static_cast<size_t>(Config::chunk_size) * Config::chunk_height> data{};
+    std::array<Block_ID, static_cast<size_t>(Config::chunk_size) * Config::chunk_height> data{};
     // Метаданные блоков той же грани: нужны мешеру, чтобы знать уровень жидкости у соседа.
     std::array<uint8_t, static_cast<size_t>(Config::chunk_size) * Config::chunk_height> meta{};
 
@@ -486,7 +489,7 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
 struct Gpu_Mesh_Tables {
     // Бит 0: жадно-мешаемый блок; бит 1: прозрачный; бит 2: uses_meta; бит 3: cull_same;
     // бит 4: непрозрачный кубический блок (закрывает AO соседних углов).
-    std::array<uint32_t, static_cast<size_t>(k_max_block_types)> flags{};
+    std::vector<uint32_t> flags;   // по id до Block_Registry::id_capacity()
     // Упакованный свет (sky<<4 | block) -> огрублённый, для cull_same-блоков.
     std::array<uint32_t, 256> light_coarse{};
 };
@@ -507,6 +510,7 @@ private:
     std::array<int, Config::chunk_height> m_layer_block_count{};
 
     const World_Generator* m_world_generator = nullptr;
+    Dimension_Id m_dimension = Dimension_Id::Overworld;
     const Chunk_Manager* m_chunk_manager = nullptr;
     const Texture_Atlas* m_texture_atlas = nullptr;
 
@@ -527,6 +531,9 @@ private:
 
 public:
     Chunk(int chunk_x, int chunk_y, int chunk_z, const World_Generator& generator);
+    // Измерение, которому принадлежит чанк: задаётся генератором при создании и определяет
+    // ключ хранения (region-файлы разных измерений не смешиваются).
+    Dimension_Id get_dimension_id() const { return m_dimension; }
 
     void set_chunk_manager(const Chunk_Manager* manager) { m_chunk_manager = manager; }
     void set_texture_atlas(const Texture_Atlas* atlas) { m_texture_atlas = atlas; }

@@ -196,7 +196,7 @@ void Game::handle_gameplay_input() {
     }
 
     if (m_input_ptr->is_key_pressed(GLFW_KEY_F1) && !m_mobs.is_riding()) {
-        m_player_ptr->toggle_flying();
+        cycle_game_mode();
     }
 
     if (m_input_ptr->is_key_pressed(GLFW_KEY_F3)) {
@@ -459,13 +459,16 @@ std::vector<Game::World_Info> Game::list_worlds() const {
 }
 
 bool Game::create_world(const std::string& name, const std::string& seed_text, Game_Mode mode,
-                        const std::string& generation_folder, std::string& error) {
+                        const std::string& generation_folder, const std::string& dimension,
+                        const std::string& biome, std::string& error) {
     std::string clean = trim(name);
     if (clean.empty()) clean = tr("create.world_name_default");
 
     World_Settings st;
     st.name = clean;
     st.generation_folder = generation_folder;
+    st.dimension = dimension;
+    st.biome = biome;
     st.seed = seed_from_text(trim(seed_text));
     st.game_mode = mode == Game_Mode::Survival ? "survival" : "creative";
     st.last_played = now_string();
@@ -504,14 +507,17 @@ void Game::teardown_world() {
 void Game::save_world() {
     if (!m_chunk_manager_ptr || !m_player_ptr) return;
     m_world_settings.generation_folder = m_generation_folder;
-    m_world_settings.game_mode = m_game_mode == Game_Mode::Survival ? "survival" : "creative";
+    m_world_settings.game_mode = m_game_mode == Game_Mode::Survival ? "survival" : (m_spectator ? "spectator" : "creative");
     m_world_settings.last_played = now_string();
     const glm::vec3 p = m_player_ptr->get_position();
     m_world_settings.has_player_position = true;
     m_world_settings.player_x = p.x;
     m_world_settings.player_y = p.y;
     m_world_settings.player_z = p.z;
-    m_world_settings.day_time = m_day_night_cycle.get_normalized_time();
+    // Замороженное (Fixed) время не пишем: оно не принадлежит миру и не должно затирать сохранённое.
+    if (!m_day_night_cycle.is_frozen()) {
+        m_world_settings.day_time = m_day_night_cycle.get_normalized_time();
+    }
     m_world_file.save(m_world_settings);
     m_chunk_manager_ptr->save_all();
     if (m_inventory_ptr) {
@@ -556,6 +562,7 @@ bool Game::load_world(const std::string& dir) {
     m_world_settings = st;
     m_generation_folder = st.generation_folder;
     m_game_mode = st.game_mode == "survival" ? Game_Mode::Survival : Game_Mode::Creative;
+    m_spectator = st.game_mode == "spectator";
 
     glm::vec3 saved(st.player_x, st.player_y, st.player_z);
     setup_world_objects(st.has_player_position ? &saved : nullptr);
@@ -568,6 +575,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>(m_render_distance);
     m_world_generator = std::make_unique<World_Generator>(m_generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
+    m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
     m_block_interaction_ptr = std::make_unique<Block_Interaction>();
     m_crops_ptr = std::make_unique<Crop_Manager>();
     m_block_interaction_ptr->set_crop_manager(m_crops_ptr.get());
@@ -592,19 +600,30 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     }
     m_player_ptr->set_fall_damage_enabled(m_game_mode == Game_Mode::Survival);
     m_player_ptr->set_hunger_enabled(m_game_mode == Game_Mode::Survival);
+    m_player_ptr->set_flying(m_game_mode != Game_Mode::Survival);
+    m_player_ptr->set_noclip(m_spectator);
     m_dropped_items_ptr = std::make_unique<Dropped_Item_Manager>();
     m_container_session = Container_Session{};
     m_open_container_paired = nullptr;
     m_chat_log.clear();
     m_mobs.reset_timers();
     m_tick.reset();
-    m_day_night_cycle.set_normalized_time(m_world_settings.day_time);
+    // Цикл принадлежит измерению: там, где время не идёт (Fixed), оно заморожено на своей отметке,
+    // иначе — идёт и восстанавливается из world.json.
+    {
+        const Dimension_Info& dim = get_dimension_info(dimension_from_name(m_world_settings.dimension));
+        const bool fixed = dim.time_mode == Time_Mode::Fixed;
+        m_day_night_cycle.set_frozen(fixed);
+        m_day_night_cycle.set_normalized_time(fixed ? dim.fixed_time : m_world_settings.day_time);
+    }
 
-    const int spawn_x = 8;
-    const int spawn_z = 8;
+    // Точка появления: в обычных измерениях — колонка (8, 8); в мире без земли — ближайший остров.
+    int spawn_x = 8;
+    int spawn_z = 8;
+    const int spawn_surface = m_world_generator->find_spawn_surface(spawn_x, spawn_z);
     m_spawn_position = glm::vec3(
         static_cast<float>(spawn_x),
-        static_cast<float>(m_world_generator->get_height(spawn_x, spawn_z) + 2),
+        static_cast<float>(spawn_surface + 2),
         static_cast<float>(spawn_z));
     const glm::vec3 start = saved_position ? *saved_position : m_spawn_position;
     m_player_ptr->set_position(start);
@@ -741,8 +760,10 @@ Game::Panel_View Game::build_inventory_panel() const {
             v.slots.push_back(make_hud_slot(m_inventory_ptr->peek_craft_output()));
         } else if (slot.id >= k_inventory_armor_base && slot.id < k_inventory_armor_base + k_inventory_armor_count) {
             v.slots.push_back(make_hud_slot(m_inventory_ptr->get_armor_slot(static_cast<size_t>(slot.id - k_inventory_armor_base))));
+        } else if (slot.id >= k_creative_palette_base && slot.id < k_creative_palette_base + k_creative_palette_count) {
+            v.slots.push_back(make_hud_slot(m_inventory_ptr->get_palette_slot(static_cast<size_t>(slot.id - k_creative_palette_base)), true));
         } else {
-            v.slots.push_back(make_hud_slot(m_inventory_ptr->get_panel_slot(static_cast<size_t>(slot.id)), creative));
+            v.slots.push_back(make_hud_slot(m_inventory_ptr->get_panel_slot(static_cast<size_t>(slot.id))));
         }
     }
     return v;
@@ -756,9 +777,9 @@ void Game::draw_inventory_overlay() {
     const int hovered = Hud::get_panel_slot_at(w, h, v.layout, cursor.x, cursor.y);
 
     const Item_Stack carried = m_inventory_ptr->get_carried_stack();
-    const Hud_Inventory_Slot carried_slot = make_hud_slot(carried, m_game_mode == Game_Mode::Creative);
+    const Hud_Inventory_Slot carried_slot = make_hud_slot(carried, m_inventory_ptr->carried_is_infinite());
     m_hud_ptr->draw_panel_screen(w, h, m_renderer_ptr->get_texture_atlas(), v.layout, v.slots, hovered,
-                                 carried.is_empty() && m_game_mode != Game_Mode::Creative ? nullptr : &carried_slot,
+                                 carried.is_empty() ? nullptr : &carried_slot,
                                  cursor.x, cursor.y, v.title);
     if (v.layout.preview_model) draw_inventory_model_preview(v.layout);
 }
@@ -804,7 +825,11 @@ void Game::inventory_click(bool right) {
         return slot_id >= k_inventory_craft_base && slot_id < k_inventory_craft_base + k_inventory_craft_count;
     };
     const bool shift = !right && (m_input_ptr->is_key_held(GLFW_KEY_LEFT_SHIFT) || m_input_ptr->is_key_held(GLFW_KEY_RIGHT_SHIFT));
-    if (shift && m_game_mode == Game_Mode::Survival) {
+    if (id >= k_creative_palette_base && id < k_creative_palette_base + k_creative_palette_count) {
+        m_inventory_ptr->click_palette_slot(static_cast<size_t>(id - k_creative_palette_base), right);
+        return;
+    }
+    if (shift) {
         if (id >= 0 && id < static_cast<int>(Inventory::k_panel_slot_count)) m_inventory_ptr->quick_move_panel(static_cast<size_t>(id));
         else if (is_craft_grid_id(id)) m_inventory_ptr->quick_move_craft_slot(static_cast<size_t>(id - k_inventory_craft_base));
         else if (id == k_inventory_craft_output) m_inventory_ptr->quick_craft_output();
@@ -836,7 +861,6 @@ void Game::on_inventory_closed() {
 
 Game::Panel_View Game::build_container_panel() const {
     Panel_View v;
-    const bool creative = m_game_mode == Game_Mode::Creative;
     const size_t own = m_container_session.get_container_slot_count();
     const size_t paired = m_open_container_paired ? m_open_container_paired->slots.size() : 0;
     const size_t content_count = own + paired;
@@ -845,11 +869,11 @@ Game::Panel_View Game::build_container_panel() const {
     switch (m_container_session.get_type()) {
     case Block_Entity_Type::Chest:
         v.title = tr(paired > 0 ? "panel.large_chest" : "panel.chest");
-        v.layout = Panel_Layouts::chest(content_count, !creative, offset, k_hotbar_start);
+        v.layout = Panel_Layouts::chest(content_count, true, offset, k_hotbar_start);
         break;
     case Block_Entity_Type::Crafting_Table:
         v.title = tr("panel.crafting");
-        v.layout = Panel_Layouts::crafting_table(own, !creative, offset, k_hotbar_start);
+        v.layout = Panel_Layouts::crafting_table(own, true, offset, k_hotbar_start);
         break;
     case Block_Entity_Type::Furnace: {
         v.title = tr("panel.furnace");
@@ -862,7 +886,7 @@ Game::Panel_View Game::build_container_panel() const {
             const Smelting_Recipe* recipe = in.is_empty() ? nullptr : Smelting_Registry::get_instance().find(in.type);
             if (recipe && recipe->time_seconds > 0.0f) arrow = std::clamp(furnace->cook_progress / recipe->time_seconds, 0.0f, 1.0f);
         }
-        v.layout = Panel_Layouts::furnace(own, flame, arrow, !creative, offset, k_hotbar_start);
+        v.layout = Panel_Layouts::furnace(own, flame, arrow, true, offset, k_hotbar_start);
         break;
     }
     case Block_Entity_Type::None:
@@ -877,7 +901,7 @@ Game::Panel_View Game::build_container_panel() const {
             v.slots.push_back(k < own ? make_hud_slot(m_container_session.get_container_slot(k))
                                       : make_hud_slot(m_open_container_paired->slots[k - own]));
         } else {
-            v.slots.push_back(make_hud_slot(m_inventory_ptr->get_panel_slot(static_cast<size_t>(slot.id - offset)), creative));
+            v.slots.push_back(make_hud_slot(m_inventory_ptr->get_panel_slot(static_cast<size_t>(slot.id - offset))));
         }
     }
     return v;
@@ -932,8 +956,8 @@ bool Game::is_camera_underwater() const {
 
 void Game::reload_world(const std::string& generation_folder) {
     const glm::vec3 player_pos = m_player_ptr->get_position();
-    const int spawn_x = static_cast<int>(std::floor(player_pos.x));
-    const int spawn_z = static_cast<int>(std::floor(player_pos.z));
+    int spawn_x = static_cast<int>(std::floor(player_pos.x));
+    int spawn_z = static_cast<int>(std::floor(player_pos.z));
 
     m_chunk_manager_ptr->clear();
     // Предметы лежали в старом мире (другой пресет генерации) — в новом им делать нечего.
@@ -944,6 +968,7 @@ void Game::reload_world(const std::string& generation_folder) {
     m_chunk_manager_ptr.reset();
     m_world_generator = std::make_unique<World_Generator>(generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
+    m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>();
     // Пересоздание менеджера не должно сбрасывать дальность прорисовки к значению
     // по умолчанию — иначе выбранная в настройках дальность терялась при смене
@@ -953,7 +978,8 @@ void Game::reload_world(const std::string& generation_folder) {
     m_chunk_manager_ptr->set_texture_atlas(m_renderer_ptr->get_texture_atlas());
     m_chunk_manager_ptr->set_world_storage(m_world_file, m_world_generator->get_storage_key());
 
-    const int spawn_y = m_world_generator->get_height(spawn_x, spawn_z) + 2;
+    // Игрок остаётся в своей колонке; в мире без земли find_spawn_surface сдвинет его к ближайшему острову.
+    const int spawn_y = m_world_generator->find_spawn_surface(spawn_x, spawn_z) + 2;
     m_player_ptr->set_position(glm::vec3(
         static_cast<float>(spawn_x),
         static_cast<float>(spawn_y),
@@ -1023,6 +1049,7 @@ Mob_Player_View Game::mob_view() const {
     view.alive = m_player_ptr->is_alive();
     view.sneaking = m_player_ptr->is_crouching();
     view.horizontal_speed = m_player_ptr->get_horizontal_speed();
+    view.night = m_day_night_cycle.get_normalized_time() >= Config::night_start_normalized;
     return view;
 }
 
@@ -1176,10 +1203,13 @@ void Game::handle_tool_impulse(float delta_time) {
 
     const Item_Stack held = m_inventory_ptr->get_selected_stack();
     if (held.is_empty()) return;
-    const float speed = get_block_props(held.type).impulse_speed;
+    const Block_Properties& props = get_block_props(held.type);
+    // В жидкости берём impulse_speed_water, если он задан (копьё слабо тянет в воде, трезубец сильно).
+    const float speed = (m_player_ptr->is_in_liquid() && props.impulse_speed_water >= 0.0f)
+        ? props.impulse_speed_water : props.impulse_speed;
     if (speed <= 0.0f) return;
 
-    m_tool_impulse_cooldown = Config::tool_impulse_cooldown;
+    m_tool_impulse_cooldown = props.impulse_cooldown >= 0.0f ? props.impulse_cooldown : Config::tool_impulse_cooldown;
     m_player_ptr->apply_impulse(m_camera_ptr->get_front(), speed);
     m_player_ptr->add_exhaustion(Config::exhaustion_attack);
     m_inventory_ptr->damage_selected_tool(1);
@@ -1254,9 +1284,8 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     // а не только когда show_gameplay_hud (это относится к прицелу/подсветке блока).
     {
         std::vector<Hud_Inventory_Slot> hotbar;
-        const bool creative = m_game_mode == Game_Mode::Creative;
         for (size_t i = 0; i < m_inventory_ptr->get_hotbar_slot_count(); ++i) {
-            hotbar.push_back(make_hud_slot(m_inventory_ptr->get_hotbar_slot(i), creative));
+            hotbar.push_back(make_hud_slot(m_inventory_ptr->get_hotbar_slot(i)));
         }
         m_hud_ptr->draw_hotbar(
             m_window_ptr->get_width(),
@@ -1477,19 +1506,40 @@ void Game::toggle_generation_folder() {
 }
 
 std::string Game::get_game_mode_name() const {
+    if (m_spectator) return "SPECTATOR";
     return m_game_mode == Game_Mode::Survival ? "SURVIVAL" : "CREATIVE";
 }
 
-void Game::toggle_game_mode() {
-    m_game_mode = (m_game_mode == Game_Mode::Creative) ? Game_Mode::Survival : Game_Mode::Creative;
+void Game::apply_game_mode(Game_Mode mode, bool spectator) {
+    const bool survival = mode == Game_Mode::Survival;
+    m_game_mode = mode;
+    m_spectator = !survival && spectator;   // наблюдатель — это Creative с полётом сквозь блоки
     m_inventory_ptr->set_mode(m_game_mode);
-    m_mobs.set_hostiles_enabled(m_game_mode == Game_Mode::Survival);
-    m_player_ptr->set_fall_damage_enabled(m_game_mode == Game_Mode::Survival);
-    m_player_ptr->set_hunger_enabled(m_game_mode == Game_Mode::Survival);
+    m_mobs.set_hostiles_enabled(survival);
+    m_player_ptr->set_fall_damage_enabled(survival);
+    m_player_ptr->set_hunger_enabled(survival);
+    // Полёт привязан к Creative: в Survival его нет, в Creative — с коллизиями, в наблюдателе — сквозь блоки.
+    m_player_ptr->set_flying(!survival);
+    m_player_ptr->set_noclip(m_spectator);
     m_block_interaction_ptr->cancel_actions();
-    if (m_game_mode == Game_Mode::Survival) {
+    if (survival) {
         // Чтобы не словить "долг" урона за падение, случившееся ещё в Creative/полёте.
         m_player_ptr->reset_fall_tracking();
+    }
+}
+
+void Game::toggle_game_mode() {
+    apply_game_mode(m_game_mode == Game_Mode::Creative ? Game_Mode::Survival : Game_Mode::Creative, false);
+}
+
+void Game::cycle_game_mode() {
+    // F1: Survival → Creative (полёт с коллизиями) → наблюдатель (полёт без коллизий) → Survival.
+    if (m_game_mode == Game_Mode::Survival) {
+        apply_game_mode(Game_Mode::Creative, false);
+    } else if (!m_spectator) {
+        apply_game_mode(Game_Mode::Creative, true);
+    } else {
+        apply_game_mode(Game_Mode::Survival, false);
     }
 }
 
@@ -1736,11 +1786,10 @@ void Game::kill_player() {
 }
 
 void Game::set_game_mode(Game_Mode mode) {
-    if (m_game_mode != mode) toggle_game_mode();
+    if (m_game_mode != mode || m_spectator) apply_game_mode(mode, false);
 }
 
 int Game::give_item(Block_Types type, int count) {
-    if (m_game_mode != Game_Mode::Survival) return 0;
     return m_inventory_ptr->try_add(type, count);
 }
 

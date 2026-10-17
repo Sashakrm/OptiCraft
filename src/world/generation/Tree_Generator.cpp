@@ -50,11 +50,11 @@ void Tree_Generator::place_oak_tree(int x, int y, int z, Block_Setter setter, Fa
     std::uniform_int_distribution<int> hdist(5, 8);
     const int h = hdist(rng);
 
-    for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Oak_Wood);
+    for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Oak_Log);
 
-    branch(setter, x, y + h - 2, z,  1,  0, 2, Block_Types::Oak_Wood);
-    branch(setter, x, y + h - 3, z, -1,  1, 2, Block_Types::Oak_Wood);
-    branch(setter, x, y + h - 2, z,  0, -1, 2, Block_Types::Oak_Wood);
+    branch(setter, x, y + h - 2, z,  1,  0, 2, Block_Types::Oak_Log);
+    branch(setter, x, y + h - 3, z, -1,  1, 2, Block_Types::Oak_Log);
+    branch(setter, x, y + h - 2, z,  0, -1, 2, Block_Types::Oak_Log);
 
     disk(setter, x, y + h, z, 2, Block_Types::Oak_Leaf);
     disk(setter, x + 1, y + h - 1, z, 2, Block_Types::Oak_Leaf);
@@ -149,7 +149,7 @@ void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, F
     int cx = x;
     for (int i = 1; i <= h; ++i) {
         if (i == h / 3 || i == (2 * h) / 3) cx += bend;
-        setter(cx, y + i, z, Block_Types::Oak_Wood);
+        setter(cx, y + i, z, Block_Types::Oak_Log);
     }
 
     const int top_y = y + h + 1;

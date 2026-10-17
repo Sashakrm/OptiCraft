@@ -112,7 +112,7 @@ void Mobs_Update::reset_timers() {
     m_attack_cooldown = 0.0f;
     m_pig_respawn_cooldown = 0.0f;
     m_passive_respawn_cooldown = {0.0f, 0.0f};
-    m_hostile_respawn_cooldown = {0.0f, 0.0f};
+    m_hostile_respawn_cooldown = {0.0f, 0.0f, 0.0f};
     m_horse_respawn_cooldown = 0.0f;
 }
 
@@ -167,25 +167,28 @@ Mob_Result Mobs_Update::update_tick(float dt, const Mob_Player_View& player, Chu
 // --- Враги -----------------------------------------------------------------------------------
 
 void Mobs_Update::update_hostiles(float dt, const Mob_Player_View& player, Chunk_Manager& chunks, Mob_Result& result) {
-    for (Hostile_Kind kind : {Hostile_Kind::Zombie, Hostile_Kind::Skeleton}) {
+    for (Hostile_Kind kind : {Hostile_Kind::Zombie, Hostile_Kind::Skeleton, Hostile_Kind::Spider}) {
         const int i = index_of(kind);
         m_hostile_respawn_cooldown[i] = std::max(0.0f, m_hostile_respawn_cooldown[i] - dt);
         if (m_hostiles_enabled) spawn_missing_hostiles(kind, player.position, chunks);
     }
     if (m_hostiles.empty()) return;
+
     // 1) Кто видит игрока: дистанция (вдвое меньше, если он крадётся) и луч через блоки.
+    //    Пауки игрока видят только ночью.
     const glm::vec3 player_eye = player.position + glm::vec3(0.0f, player.eye_height, 0.0f);
     std::vector<bool> seen(m_hostiles.size(), false);
     for (size_t i = 0; i < m_hostiles.size(); ++i) {
         const Hostile_Mob& hostile = *m_hostiles[i];
         if (hostile.is_dying() || !player.alive) continue;
+        if (hostile.kind() == Hostile_Kind::Spider && !player.night) continue;
         const float range = hostile.stats().detect_range * (player.sneaking ? 0.5f : 1.0f);
         const glm::vec3 d = player.position - hostile.get_position();
         const float horizontal = glm::length(glm::vec2(d.x, d.z));
         if (horizontal > range || std::abs(d.y) > range * 0.5f) continue;
         seen[i] = has_line_of_sight(chunks, hostile.get_eye(), player_eye);
     }
-    // 2) Тревога: увидевший игрок поднимает врагов рядом — они тоже идут к нему (толпой).
+    // 2) Тревога: увидевший игрока поднимает врагов рядом — они тоже идут к нему (толпой).
     for (size_t i = 0; i < m_hostiles.size(); ++i) {
         if (!seen[i]) continue;
         const glm::vec3 from = m_hostiles[i]->get_position();
@@ -198,18 +201,51 @@ void Mobs_Update::update_hostiles(float dt, const Mob_Player_View& player, Chunk
         }
     }
 
-        // 3) Обновление: погоня, удар в упор, блуждание.
-        Hostile_Context context;
-        context.player_position = player.position;
-        context.player_alive = player.alive;
-        for (size_t i = 0; i < m_hostiles.size(); ++i) {
-                context.player_seen = seen[i];
-                result.player_damage += m_hostiles[i]->update(dt, chunks, context);
+    // 3) Добыча пауков: ближайшая живая лошадь в радиусе обнаружения паука.
+    std::vector<Horse*> spider_prey(m_hostiles.size(), nullptr);
+    for (size_t i = 0; i < m_hostiles.size(); ++i) {
+        const Hostile_Mob& hostile = *m_hostiles[i];
+        if (hostile.is_dying() || hostile.kind() != Hostile_Kind::Spider) continue;
+        float best = hostile.stats().detect_range;
+        for (const auto& horse : m_horses) {
+            if (horse->is_dying()) continue;
+            const glm::vec3 d = horse->get_position() - hostile.get_position();
+            const float dist = glm::length(glm::vec2(d.x, d.z));
+            if (dist <= best) {
+                best = dist;
+                spider_prey[i] = horse.get();
             }
+        }
+    }
 
-        m_hostiles.erase(std::remove_if(m_hostiles.begin(), m_hostiles.end(),
-                             [](const std::unique_ptr<Hostile_Mob>& hostile) { return hostile->is_removable(); }),
-                         m_hostiles.end());
+    // 4) Обновление: погоня, удар в упор, блуждание. Удар по лошади — отдельно от удара по игроку.
+    Hostile_Context context;
+    context.player_position = player.position;
+    context.player_alive = player.alive;
+    context.player_speed = player.horizontal_speed;
+    for (size_t i = 0; i < m_hostiles.size(); ++i) {
+        Hostile_Mob& hostile = *m_hostiles[i];
+        context.player_seen = seen[i];
+        context.player_targetable = hostile.kind() != Hostile_Kind::Spider || player.night;
+        Horse* prey = spider_prey[i];
+        context.prey_valid = prey != nullptr;
+        if (prey) {
+            context.prey_min = prey->get_hitbox_min();
+            context.prey_max = prey->get_hitbox_max();
+            context.prey_position = 0.5f * (context.prey_min + context.prey_max);
+        }
+        const Hostile_Result r = hostile.update(dt, chunks, context);
+        result.player_damage += r.player_damage;
+        if (r.hit_horse && prey && !prey->is_dying()) {
+            if (prey->take_damage(r.horse_damage, hostile.get_position())) {
+                m_horse_respawn_cooldown = Config::horse_respawn_delay;
+            }
+        }
+    }
+
+    m_hostiles.erase(std::remove_if(m_hostiles.begin(), m_hostiles.end(),
+                         [](const std::unique_ptr<Hostile_Mob>& hostile) { return hostile->is_removable(); }),
+                     m_hostiles.end());
 }
 
 // --- По кадрам: лошади и езда (КОМПРОМИСС) ---------------------------------------------------
@@ -244,8 +280,32 @@ Mob_Result Mobs_Update::update_frame(float dt, const Mob_Player_View& player, co
     const Horse_Ride_Input ride = m_ride_input;
     m_ride_input.sprint_toggle = false;
 
+    // Лошади бьют пауков, которые рядом (и без всадника). Удар применяется здесь же.
     for (auto& horse : m_horses) {
-        horse->update(dt, chunks, context, horse.get() == m_ridden_horse ? ride : no_input);
+        Horse_Context horse_context = context;
+        Hostile_Mob* prey = nullptr;
+        if (!horse->is_dying()) {
+            float best = Config::horse_hunt_range;
+            for (const auto& hostile : m_hostiles) {
+                if (hostile->is_dying() || hostile->kind() != Hostile_Kind::Spider) continue;
+                const glm::vec3 d = hostile->get_position() - horse->get_position();
+                const float dist = glm::length(glm::vec2(d.x, d.z));
+                if (dist <= best) {
+                    best = dist;
+                    prey = hostile.get();
+                }
+            }
+        }
+        if (prey) {
+            horse_context.prey_valid = true;
+            horse_context.prey_min = prey->get_hitbox_min();
+            horse_context.prey_max = prey->get_hitbox_max();
+        }
+        horse->update(dt, chunks, horse_context, horse.get() == m_ridden_horse ? ride : no_input);
+        const Horse_Attack_Result hit = horse->consume_attack();
+        if (hit.hit && prey && !prey->is_dying() && prey->take_damage(hit.damage, horse->get_position())) {
+            m_hostile_respawn_cooldown[index_of(Hostile_Kind::Spider)] = Config::hostile_respawn_delay;
+        }
     }
 
     if (m_ridden_horse) {
@@ -409,18 +469,22 @@ Mob_Result Mobs_Update::interact(const Mob_Interact_Input& input, Dropped_Item_M
 
     // --- Удар (ЛКМ) -------------------------------------------------------------------------
     if (input.left_click && m_attack_cooldown <= 0.0f) {
-        m_attack_cooldown = Config::player_attack_cooldown;
+        // Оружие/инструмент в руке задаёт свою перезарядку и свой коэффициент скорости; кулак — по Config.
+        const Block_Properties* held_props = nullptr;
+        if (survival && !input.held_stack.is_empty()) held_props = &get_block_props(input.held_stack.type);
+        const bool armed = held_props && held_props->attack_damage > 0.0f;
+
+        m_attack_cooldown = (armed && held_props->attack_cooldown >= 0.0f)
+            ? held_props->attack_cooldown : Config::player_attack_cooldown;
         result.exhaustion += Config::exhaustion_attack;
 
         // Урон: в Creative — с одного удара; в Survival — кулак или оружие/инструмент в руке.
         float damage = Config::player_fist_damage;
-        if (survival && !input.held_stack.is_empty()) {
-            damage = std::max(damage, get_block_props(input.held_stack.type).attack_damage);
-        }
-        // Скорость игрока добавляет урону: бегущий ударит сильнее (потолок — melee_speed_bonus_max).
-        const float speed_bonus = std::min(Config::melee_speed_bonus_max,
-                                           input.player.horizontal_speed * Config::melee_speed_bonus_per_speed);
-        damage *= 1.0f + speed_bonus;
+        if (armed) damage = std::max(damage, held_props->attack_damage);
+        // Скорость игрока добавляет урону сверх ходьбы; потолка нет. Коэффициент — у оружия.
+        const float speed_scale = armed ? held_props->speed_damage_scale : 1.0f;
+        const float over_walk = std::max(0.0f, input.player.horizontal_speed - Config::player_move_speed);
+        damage *= 1.0f + over_walk * Config::melee_speed_bonus_per_speed * speed_scale;
 
         static std::mt19937 s_drop_rng(std::random_device{}());
         const auto roll = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(s_drop_rng); };
@@ -500,7 +564,7 @@ int Mobs_Update::kill_all() {
         if (hostile->kill()) ++killed_hostiles;
     }
     if (killed_hostiles > 0) {
-        m_hostile_respawn_cooldown = {Config::hostile_respawn_delay, Config::hostile_respawn_delay};
+        m_hostile_respawn_cooldown = {Config::hostile_respawn_delay, Config::hostile_respawn_delay, Config::hostile_respawn_delay};
     }
     return killed + killed_horses + killed_passive + killed_hostiles;
 }
@@ -573,6 +637,10 @@ int Mobs_Update::summon_zombies(int count, const glm::vec3& around) {
 
 int Mobs_Update::summon_skeletons(int count, const glm::vec3& around) {
     return summon_hostile(Hostile_Kind::Skeleton, count, around);
+}
+
+int Mobs_Update::summon_spiders(int count, const glm::vec3& around) {
+    return summon_hostile(Hostile_Kind::Spider, count, around);
 }
 
 int Mobs_Update::summon_horses(int count, const glm::vec3& around) {
@@ -702,7 +770,7 @@ void Mobs_Update::spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& pla
     }
     if (ground_y == -1000000) return; // незагруженный чанк или нет подходящей поверхности — в другой раз
 
-    static int s_counter[2] = {0, 0};
+    static int s_counter[3] = {0, 0, 0};
     auto hostile = std::make_unique<Hostile_Mob>(kind,
         std::string(st.label) + " #" + std::to_string(++s_counter[index]),
         glm::vec3(spawn_x, static_cast<float>(ground_y) + 1.0f, spawn_z));

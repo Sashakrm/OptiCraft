@@ -146,7 +146,7 @@ Block_Registry::Block_Registry() {
 }
 
 void Block_Registry::build_fast_tables() {
-    for (size_t id = 0; id < k_max_block_types; ++id) {
+    for (size_t id = 0; id < m_properties.size(); ++id) {
         // Не заданная явно взрывоустойчивость выводится из твёрдости (как у большинства блоков
         // в Minecraft: ~5 x hardness), жидкости гасят взрыв почти полностью.
         Block_Properties& props = m_properties[id];
@@ -173,7 +173,7 @@ const Block_Properties& Block_Registry::get_properties(Block_Types type) const {
 }
 
 const Block_Properties& Block_Registry::get_properties(Block_ID id) const {
-    if (id >= static_cast<Block_ID>(m_properties.size())) {
+    if (static_cast<size_t>(id) >= m_properties.size()) {
         return m_properties[static_cast<size_t>(Block_Types::Air)];
     }
 
@@ -200,7 +200,7 @@ void Block_Registry::load_defaults() {
         Block_Mesh_Type::Solid, Block_Mesh_Style::Block, Block_State::Gas,
         glm::vec4(0.0f), glm::vec4(0.0f), glm::vec4(0.0f)
     };
-    m_properties.fill(unassigned);
+    m_properties.assign(1, unassigned);
 
     set_properties(static_cast<Block_ID>(Block_Types::Air), {
         "Air", false, true, false, false, 0.0f,
@@ -220,6 +220,12 @@ void Block_Registry::load_defaults() {
         glm::vec4(0.0f), glm::vec4(0.0f), glm::vec4(0.0f)
     });
 
+    set_properties(static_cast<Block_ID>(Block_Types::Cobblestone), {
+        "Cobblestone", true, false, true, false, 2.0f,
+        Block_Mesh_Type::Solid, Block_Mesh_Style::Block, Block_State::Solid,
+        glm::vec4(0.0f), glm::vec4(0.0f), glm::vec4(0.0f)
+    });
+
     set_properties(static_cast<Block_ID>(Block_Types::Stone), {
         "Stone", true, false, true, false, 2.0f,
         Block_Mesh_Type::Solid, Block_Mesh_Style::Block, Block_State::Solid,
@@ -228,12 +234,6 @@ void Block_Registry::load_defaults() {
 
     set_properties(static_cast<Block_ID>(Block_Types::Sand), {
         "Sand", true, false, true, false, 1.0f,
-        Block_Mesh_Type::Solid, Block_Mesh_Style::Block, Block_State::Solid,
-        glm::vec4(0.0f), glm::vec4(0.0f), glm::vec4(0.0f)
-    });
-
-    set_properties(static_cast<Block_ID>(Block_Types::Oak_Wood), {
-        "Oak Wood", true, false, true, false, 2.0f,
         Block_Mesh_Type::Solid, Block_Mesh_Style::Block, Block_State::Solid,
         glm::vec4(0.0f), glm::vec4(0.0f), glm::vec4(0.0f)
     });
@@ -285,8 +285,10 @@ void Block_Registry::load_from_file(const std::string& path) {
                     continue;
                 }
                 const int reserved_id = read_int(entry, -1);
-                if (reserved_id >= 0 && reserved_id < static_cast<int>(m_reserved.size())) {
-                    m_reserved[static_cast<size_t>(reserved_id)] = true;
+                if (reserved_id >= 0 && reserved_id < static_cast<int>(k_max_block_types)) {
+                    const size_t slot = static_cast<size_t>(reserved_id);
+                    if (slot >= m_reserved.size()) m_reserved.resize(slot + 1, false);
+                    m_reserved[slot] = true;
                 }
             }
         }
@@ -377,8 +379,20 @@ void Block_Registry::load_from_file(const std::string& path) {
             if (const auto* v = entry.find("attack_damage")) {
                 properties.attack_damage = std::max(0.0f, read_float(*v, 0.0f));
             }
+            if (const auto* v = entry.find("attack_cooldown")) {
+                properties.attack_cooldown = std::max(0.0f, read_float(*v, -1.0f));
+            }
+            if (const auto* v = entry.find("speed_damage_scale")) {
+                properties.speed_damage_scale = std::max(0.0f, read_float(*v, 1.0f));
+            }
             if (const auto* v = entry.find("impulse_speed")) {
                 properties.impulse_speed = std::max(0.0f, read_float(*v, 0.0f));
+            }
+            if (const auto* v = entry.find("impulse_speed_water")) {
+                properties.impulse_speed_water = std::max(0.0f, read_float(*v, 0.0f));
+            }
+            if (const auto* v = entry.find("impulse_cooldown")) {
+                properties.impulse_cooldown = std::max(0.0f, read_float(*v, 0.0f));
             }
             if (const auto* v = entry.find("armor_points")) {
                 properties.armor_points = std::max(0, read_int(*v, 0));
@@ -405,6 +419,7 @@ void Block_Registry::load_from_file(const std::string& path) {
                     else if (n == "shovel") result = Tool_Type::Shovel;
                     else if (n == "sword") result = Tool_Type::Sword;
                     else if (n == "hoe") result = Tool_Type::Hoe;
+                    else if (n == "weapon") result = Tool_Type::Weapon;
                 }
                 return result;
             };
@@ -513,7 +528,13 @@ void Block_Registry::load_from_file(const std::string& path) {
 
 void Block_Registry::set_properties(Block_ID id, const Block_Properties& properties) {
     if (id >= m_properties.size()) {
-        return;
+        // Новый id за пределами текущего диапазона: расширяем реестр пустыми (неизвестными) записями.
+        const Block_Properties unassigned = {
+            "", false, true, false, false, 0.0f,
+            Block_Mesh_Type::Solid, Block_Mesh_Style::Block, Block_State::Gas,
+            glm::vec4(0.0f), glm::vec4(0.0f), glm::vec4(0.0f)
+        };
+        m_properties.resize(static_cast<size_t>(id) + 1, unassigned);
     }
 
     if (m_properties[id].name.empty() && !properties.name.empty()) {

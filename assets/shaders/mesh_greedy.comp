@@ -19,7 +19,8 @@ layout(std430, binding = 2) writeonly buffer Quads { uvec2 quads[]; };
 layout(std430, binding = 3) buffer Counts { uint counts[]; };
 // (id * 6 + грань) * 256 + метаданные -> индекс прямоугольника UV | поворот << 15.
 layout(std430, binding = 4) readonly buffer Lut { uint rect_lut[]; };
-layout(std430, binding = 5) readonly buffer Tables { uint block_flags[256]; uint light_coarse[256]; };
+// Таблицы правил: сначала light_coarse (256 слов), за ними block_flags — по id, длина по числу блоков.
+layout(std430, binding = 5) readonly buffer Tables { uint light_coarse[256]; uint block_flags[]; };
 
 uniform int u_chunk_count;
 uniform int u_quad_cap;
@@ -118,7 +119,9 @@ uint face_ao(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
     return code;
 }
 
-uint mask[1024];
+// Ключ слияния граней — 64 бита, как в CPU-мешере: id (0..15) | meta (16..23) | свет (24..31) |
+// AO (32..39). Храним парой uvec2: .x = id | meta<<16, .y = свет | AO<<8 (сравнение пары — побитовое).
+uvec2 mask[1024];
 
 void main() {
     const uint g = gl_GlobalInvocationID.x;
@@ -152,7 +155,7 @@ void main() {
     const int v_count = (va == 1) ? 8 : 32;
     const uint face = uint(axis) * 2u + (pos ? 0u : 1u);
 
-    // Маска ключей среза (как в CPU): id | meta<<8 | свет<<16 | AO<<24. Ключ 0 — граней нет
+    // Маска ключей среза (как в CPU, см. mask выше). Ключ 0 — граней нет
     // (у любого жадно-мешаемого блока id не равен нулю).
     bool any_key = false;
     for (int v = 0; v < v_count; ++v) {
@@ -161,7 +164,7 @@ void main() {
             c[axis] = s;
             c[ua] = u;
             c[va] = v_base + v;
-            uint key = 0u;
+            uvec2 key = uvec2(0u);
             const uint cur = block_at(hb, c.x, c.y, c.z);
             const uint fc = block_flags[cur];
             if ((fc & FLAG_GREEDY) != 0u) {
@@ -177,7 +180,7 @@ void main() {
                     uint fl = light_at(hb, nc.x, nc.y, nc.z);
                     if (cull_same) fl = light_coarse[fl];
                     const uint ao = face_ao(hb, c, axis, dir, ua, va);
-                    key = cur | (meta << 8u) | (fl << 16u) | (ao << 24u);
+                    key = uvec2(cur | (meta << 16u), fl | (ao << 8u));
                     any_key = true;
                 }
             }
@@ -190,13 +193,13 @@ void main() {
     for (int v = 0; v < v_count; ++v) {
         int u = 0;
         while (u < 32) {
-            const uint key = mask[v * 32 + u];
-            if (key == 0u) {
+            const uvec2 key = mask[v * 32 + u];
+            if (key == uvec2(0u)) {
                 ++u;
                 continue;
             }
-            const uint cur = key & 0xFFu;
-            const uint meta = (key >> 8u) & 0xFFu;
+            const uint cur = key.x & 0xFFFFu;
+            const uint meta = (key.x >> 16u) & 0xFFu;
             const uint lut = rect_lut[(cur * 6u + face) * 256u + meta];
             // Повёрнутая текстура (бревно на боку) не сливается: квад 1x1.
             const bool rotate = (lut & 0x8000u) != 0u;
@@ -217,7 +220,7 @@ void main() {
             }
             for (int dv = 0; dv < h; ++dv) {
                 for (int du = 0; du < w; ++du) {
-                    mask[(v + dv) * 32 + u + du] = 0u;
+                    mask[(v + dv) * 32 + u + du] = uvec2(0u);
                 }
             }
 
@@ -226,8 +229,8 @@ void main() {
             o[ua] = u;
             o[va] = v_base + v;
             const uint rect = lut & 0x7FFFu;
-            const uint light = (key >> 16u) & 0xFFu;
-            const uint ao = (key >> 24u) & 0xFFu;
+            const uint light = key.y & 0xFFu;
+            const uint ao = (key.y >> 8u) & 0xFFu;
             const uint w0 = uint(o.x) | (uint(o.y) << 5u) | (uint(o.z) << 10u) |
                             (uint(axis) << 15u) | ((pos ? 1u : 0u) << 17u) |
                             (uint(w - 1) << 18u) | (uint(h - 1) << 23u) |

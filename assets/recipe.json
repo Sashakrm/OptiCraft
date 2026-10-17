@@ -8,7 +8,6 @@
       "Acacia Planks"
     ],
     "logs": [
-      "Oak Wood",
       "Oak Log",
       "Birch Log",
       "Spruce Log",
@@ -18,20 +17,6 @@
     ]
   },
   "recipes": [
-    {
-      "name": "planks_from_oak_wood",
-      "type": "shapeless",
-      "ingredients": [
-        {
-          "item": "Oak Wood",
-          "count": 1
-        }
-      ],
-      "output": {
-        "item": "Oak Planks",
-        "count": 4
-      }
-    },
     {
       "name": "planks_from_oak_log",
       "type": "shapeless",
@@ -651,6 +636,410 @@
       },
       "output": {
         "item": "Diamond Hoe",
+        "count": 1
+      }
+    },
+    {
+      "name": "wooden_knife",
+      "type": "shaped",
+      "pattern": [
+        "M",
+        "S"
+      ],
+      "key": {
+        "M": "#planks",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Wooden Knife",
+        "count": 1
+      }
+    },
+    {
+      "name": "stone_knife",
+      "type": "shaped",
+      "pattern": [
+        "M",
+        "S"
+      ],
+      "key": {
+        "M": "Stone",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Stone Knife",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_knife",
+      "type": "shaped",
+      "pattern": [
+        "M",
+        "S"
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Knife",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_knife",
+      "type": "shaped",
+      "pattern": [
+        "M",
+        "S"
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Knife",
+        "count": 1
+      }
+    },
+    {
+      "name": "wooden_spear",
+      "type": "shaped",
+      "pattern": [
+        "  M",
+        " S ",
+        "S  "
+      ],
+      "key": {
+        "M": "#planks",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Wooden Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "wooden_spear_mirrored",
+      "type": "shaped",
+      "pattern": [
+        "M  ",
+        " S ",
+        "  S"
+      ],
+      "key": {
+        "M": "#planks",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Wooden Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "stone_spear",
+      "type": "shaped",
+      "pattern": [
+        "  M",
+        " S ",
+        "S  "
+      ],
+      "key": {
+        "M": "Stone",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Stone Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "stone_spear_mirrored",
+      "type": "shaped",
+      "pattern": [
+        "M  ",
+        " S ",
+        "  S"
+      ],
+      "key": {
+        "M": "Stone",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Stone Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_spear",
+      "type": "shaped",
+      "pattern": [
+        "  M",
+        " S ",
+        "S  "
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_spear_mirrored",
+      "type": "shaped",
+      "pattern": [
+        "M  ",
+        " S ",
+        "  S"
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_spear",
+      "type": "shaped",
+      "pattern": [
+        "  M",
+        " S ",
+        "S  "
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_spear_mirrored",
+      "type": "shaped",
+      "pattern": [
+        "M  ",
+        " S ",
+        "  S"
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Spear",
+        "count": 1
+      }
+    },
+    {
+      "name": "stone_mace",
+      "type": "shaped",
+      "pattern": [
+        " M ",
+        "MMM",
+        " S "
+      ],
+      "key": {
+        "M": "Stone",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Stone Mace",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_mace",
+      "type": "shaped",
+      "pattern": [
+        " M ",
+        "MMM",
+        " S "
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Mace",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_mace",
+      "type": "shaped",
+      "pattern": [
+        " M ",
+        "MMM",
+        " S "
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Mace",
+        "count": 1
+      }
+    },
+    {
+      "name": "stone_battle_axe",
+      "type": "shaped",
+      "pattern": [
+        "MMM",
+        "MSM",
+        " S "
+      ],
+      "key": {
+        "M": "Stone",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Stone Battle Axe",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_battle_axe",
+      "type": "shaped",
+      "pattern": [
+        "MMM",
+        "MSM",
+        " S "
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Battle Axe",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_battle_axe",
+      "type": "shaped",
+      "pattern": [
+        "MMM",
+        "MSM",
+        " S "
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Battle Axe",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_rapier",
+      "type": "shaped",
+      "pattern": [
+        "  M",
+        " M ",
+        "S  "
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Rapier",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_rapier_mirrored",
+      "type": "shaped",
+      "pattern": [
+        "M  ",
+        " M ",
+        "  S"
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Rapier",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_rapier",
+      "type": "shaped",
+      "pattern": [
+        "  M",
+        " M ",
+        "S  "
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Rapier",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_rapier_mirrored",
+      "type": "shaped",
+      "pattern": [
+        "M  ",
+        " M ",
+        "  S"
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Rapier",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_trident",
+      "type": "shaped",
+      "pattern": [
+        "M M",
+        "MSM",
+        " S "
+      ],
+      "key": {
+        "M": "Iron Ingot",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Iron Trident",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_trident",
+      "type": "shaped",
+      "pattern": [
+        "M M",
+        "MSM",
+        " S "
+      ],
+      "key": {
+        "M": "Diamond",
+        "S": "Stick"
+      },
+      "output": {
+        "item": "Diamond Trident",
         "count": 1
       }
     }

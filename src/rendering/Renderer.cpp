@@ -476,7 +476,9 @@ bool Renderer::initialize_gpu_mesher() {
 
     // Таблица правил и UV строится теми же resolve_face_uv/get_uv, что и CPU-мешер, поэтому
     // совпадение с CPU не зависит от того, что видеокарта "знает" о блоках сама.
-    std::vector<uint32_t> lut(static_cast<size_t>(k_max_block_types) * 6 * 256, 0u);
+    // LUT растёт с реально зарегистрированными id (а не с потолком 65536): 6 граней x 256 meta на id.
+    const size_t id_count = Block_Registry::get_instance().id_capacity();
+    std::vector<uint32_t> lut(id_count * 6 * 256, 0u);
     std::vector<glm::vec4> rects;
     std::map<std::array<float, 4>, uint32_t> rect_index;
     const auto intern_rect = [&rects, &rect_index](const glm::vec4& uv) -> uint32_t {
@@ -488,7 +490,7 @@ bool Renderer::initialize_gpu_mesher() {
         rect_index.emplace(key, index);
         return index;
     };
-    for (int id = 0; id < k_max_block_types; ++id) {
+    for (size_t id = 0; id < id_count; ++id) {
         const Block_Properties& props = get_block_props(static_cast<Block_ID>(id));
         for (int face = 0; face < 6; ++face) {
             for (int meta = 0; meta < 256; ++meta) {
@@ -501,7 +503,7 @@ bool Renderer::initialize_gpu_mesher() {
                     const int direction = face == 2 ? 1 : (face == 3 ? -1 : 0);
                     entry = intern_rect(props.get_uv(direction));
                 }
-                lut[(static_cast<size_t>(id) * 6 + face) * 256 + meta] = entry;
+                lut[(id * 6 + static_cast<size_t>(face)) * 256 + meta] = entry;
             }
         }
     }
@@ -514,8 +516,9 @@ bool Renderer::initialize_gpu_mesher() {
     const Gpu_Mesh_Tables tables = gpu_mesh_tables();
     std::vector<uint32_t> table_words;
     table_words.reserve(tables.flags.size() + tables.light_coarse.size());
-    table_words.insert(table_words.end(), tables.flags.begin(), tables.flags.end());
+    // Порядок как в шейдере: light_coarse (фиксированные 256 слов), затем флаги по id.
     table_words.insert(table_words.end(), tables.light_coarse.begin(), tables.light_coarse.end());
+    table_words.insert(table_words.end(), tables.flags.begin(), tables.flags.end());
 
     m_gpu_lut_ssbo = create_ssbo(lut.size() * sizeof(uint32_t), lut.data(), GL_STATIC_DRAW);
     m_gpu_tables_ssbo = create_ssbo(table_words.size() * sizeof(uint32_t), table_words.data(), GL_STATIC_DRAW);

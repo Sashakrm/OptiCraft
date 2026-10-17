@@ -34,6 +34,10 @@ struct Horse_Context {
     glm::vec3 player_position{0.0f};
     bool player_sneaking = false;   // крадущегося игрока дикая лошадь не пугается
     bool player_alive = true;
+    // Добыча — паук рядом (ближайший). Лошадь без всадника идёт к нему и бьёт, если он в досягаемости.
+    bool prey_valid = false;
+    glm::vec3 prey_min{0.0f};   // хитбокс паука
+    glm::vec3 prey_max{0.0f};
 };
 
 // Ввод всадника, уже переведённый Game в «язык лошади».
@@ -138,6 +142,8 @@ public:
     // Удобная перегрузка для цели-точки (центр игрока и т.п.).
     Horse_Attack_Result attack(const glm::vec3& target_position);
     float get_attack_cooldown_remaining() const { return m_attack_cooldown; }
+    // Удар, сделанный в последнем update() по добыче (паук). Забирается и сбрасывается.
+    Horse_Attack_Result consume_attack() { Horse_Attack_Result r = m_pending_attack; m_pending_attack = {}; return r; }
     bool is_removable() const { return m_dying && m_death_timer >= Config::horse_death_seconds; }
 
 private:
@@ -161,6 +167,7 @@ private:
     Block_Types m_parent_food_a = Block_Types::Air;
     Block_Types m_parent_food_b = Block_Types::Air;
     float m_seek_timer = 0.0f;
+    Horse_Attack_Result m_pending_attack;
     glm::vec3 m_seek_target{0.0f};
 
     // Приручение.

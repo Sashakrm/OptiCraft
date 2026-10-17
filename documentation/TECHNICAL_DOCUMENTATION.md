@@ -235,8 +235,8 @@ local_z = world_z - chunk_z * 32
 ((y * 32) + z) * 32 + x
 ```
 
-Реестр допускает до 256 ID, поэтому для runtime/storage достаточно
-одного байта.
+Реестр допускает до 65536 ID (`Block_ID` — uint16). Палитра чанка хранит
+полноценные ID; ширина записи палитры растёт 1 → 2 → 4 → 8 → 16 бит (см. Chunk.h).
 
 ### Block light
 
@@ -272,11 +272,15 @@ voxel.
 `Block_Types` содержит именованные ID для блоков, которые нужны C++
 напрямую. Однако реестр не ограничен `Block_Types::Count`.
 
-`Block_Registry` имеет ёмкость:
+`Block_Registry` имеет потолок пространства ID и растущую ёмкость:
 
 ``` text
-k_max_block_types = 256
+k_max_block_types = 65536          // потолок id (Block_ID = uint16)
+Block_Registry::id_capacity()      // max зарегистрированный id + 1 (растёт при загрузке)
 ```
+
+Таблицы свойств растут по `id_capacity()`; плоские кэши (прозрачность, свет, взрыв)
+и флаги мешера фиксированы на потолке 65536 (около 1 МБ). GPU-LUT — по `id_capacity()`.
 
 Блоки могут регистрироваться data-driven через:
 
@@ -1410,6 +1414,10 @@ fly speed      = 8.0
 max health     = 20
 ```
 
+Горизонтальная скорость ограничена `Config::player_max_speed` = 50 блоков/с (включая импульсы
+инструментов и течение воды). Импульс от инструмента (`impulse_speed` в blocks.json, ПКМ) затухает с
+`Config::impulse_drag`.
+
 Полёт переключается через F1.
 
 В обычном режиме используются AABB collision checks против solid blocks.
@@ -1568,8 +1576,10 @@ Settings является push-state поверх Playing, поэтому игр
 9.  обновляется Block_Interaction; затем, если пришёл запрос на открытие
     контейнера, открывается Container_Session.
 
-Мобы (`Pig`) обновляются в том же update и получают `Chunk_Manager` для
-физики (раздел 47). Пока открыт экран контейнера, `update_gameplay`
+Мобы управляются `Mobs_Update` (раздел 47). Периодический тик (фаза Simulate,
+приоритет 20) вызывает `Mobs_Update::update_tick`, который обновляет свиней, коров и овец, размножение и
+врагов (`update_hostiles`). Лошади обновляются по кадрам в `Mobs_Update::update_frame`. Мобы получают
+`Chunk_Manager` для физики. Пока открыт экран контейнера, `update_gameplay`
 вызывается с `simulation_active = false` (как при открытом инвентаре).
 
 В gameplay render:
@@ -1594,6 +1604,9 @@ Settings является push-state поверх Playing, поэтому игр
 Полный цикл занимает 20 минут реального времени.
 
 Солнце и луна всегда находятся в противоположных направлениях.
+
+Ночь начинается, когда нормализованное время суток >= `Config::night_start_normalized` (0.5, закат).
+От этого зависит, нападают ли пауки на игрока (`Mob_Player_View::night`).
 
 Ambient и цвет неба плавно зависят от положения солнца.
 
@@ -1710,8 +1723,10 @@ procedural biome selection читается из них.
 
 ### Block registry
 
-Runtime ID должен помещаться в `uint8_t`, потому что chunk storage
-хранит ID как один байт.
+Runtime ID — `Block_ID` (uint16). Chunk storage хранит палитру из `Block_ID`
+и расширяет ширину записи, когда палитра переполняется. Региональный формат пишет
+uint16 на воксель (форматы 3–5), старые форматы 0–2 читаются и приводятся к `Block_ID`;
+неизвестные id при загрузке заменяются воздухом.
 
 ### Mesh boundary
 
@@ -1980,24 +1995,173 @@ streaming limits и mesh section calculations.
 
 ## 47. Мобы
 
-`Pig` (`src/entities/animals/Pig.*`) использует `Pig_AI` для состояний и `Mob`
-для модели/анимации. Физика:
+Все мобы управляются `Mobs_Update` (`src/mobs/Mobs_Update.*`): он хранит списки свиней,
+коров, овец, лошадей и врагов, спавнит их и вызывает их обновление. Игра передаёт ему
+`Mob_Player_View` (позиция, скорость, `sneaking`, `alive`, `night`) и `Chunk_Manager`.
+
+Тики:
+
+-   `update_tick` (фаза Simulate): спавн и обновление свиней, коров, овец; размножение; враги
+    (`update_hostiles`);
+-   `update_frame` (по кадрам): лошади и езда.
+
+Виды:
+
+-   пассивные: `Pig` (`Pig_AI`), `Passive_Animal` (корова, овца);
+-   лошадь: `Horse` (`Horse_AI`), приручение, езда, дикая лошадь пугается игрока;
+-   враги: `Hostile_Mob` с видом `Hostile_Kind` (`Zombie`, `Skeleton`, `Spider`). Параметры — в
+    `hostile_stats()` (`src/entities/hostile/Hostile_Mob.cpp`) и в `Config.h` (`*_attack_damage`,
+    `*_run_speed`, `*_detect_range`, `min_*_count`, `*_spawn_radius_*`).
+
+Враги:
+
+-   спавнятся только в Survival (`Mobs_Update::set_hostiles_enabled`, ставится `Game` при
+    создании мира и переключении режима);
+-   видят игрока дистанцией `detect_range` (вдвое меньше, если он крадётся) и лучом через блоки;
+    тревога поднимает врагов рядом;
+-   пауки видят игрока только ночью (`Mob_Player_View::night`);
+-   `Hostile_Mob::update` возвращает `Hostile_Result` с двумя полями: `player_damage` (урон игроку до
+    брони) и `horse_damage` (удар по лошади, если `hit_horse`);
+-   урон по игроку растёт от его скорости сверх ходьбы: `attack_damage * (1 + over_walk *
+    mob_speed_bonus_per_speed)`, без потолка;
+-   паук в `Hostile_Context.prey_valid` (ближайшая живая лошадь в `spider_detect_range`) гонится за
+    лошадью, а не за игроком, и бьёт её, когда она в досягаемости.
+
+Лошадь и паук:
+
+-   лошадь без всадника, не в панике (`Flee`/`Scared`), бежит к ближайшему пауку в
+    `Config::horse_hunt_range` (`Horse_Context.prey_valid`);
+-   удар делает `Horse::attack` (кулдаун `horse_attack_cooldown`); результат забирает
+    `Mobs_Update::update_frame` через `Horse::consume_attack()` и наносит урон пауку;
+-   удар паука по лошади наносит `Mobs_Update::update_hostiles` через `Horse::take_damage`.
+
+Бой игрока (`Mobs_Update::interact`):
+
+-   перезарядка удара — `attack_cooldown` инструмента в руке (кулак — `Config::player_attack_cooldown`);
+-   урон — `attack_damage` инструмента (кулак — `Config::player_fist_damage`), умноженный на
+    `1 + over_walk * melee_speed_bonus_per_speed * speed_damage_scale`, где `over_walk` — скорость
+    игрока сверх `player_move_speed`; потолка нет;
+-   `speed_damage_scale` и `attack_cooldown` задаются в `assets/blocks.json` у каждого инструмента.
+
+Оружие (`"tool": "weapon"` в blocks.json, id 106–123):
+
+-   поля предмета: `attack_damage`, `attack_cooldown`, `speed_damage_scale`, `durability`; у копья и
+    трезубца ещё `impulse_speed` (на суше), `impulse_speed_water` (в жидкости, если не задан — как
+    `impulse_speed`) и `impulse_cooldown` (если не задан — `Config::tool_impulse_cooldown`);
+-   импульс срабатывает по ПКМ только в Survival и тратит 1 прочность (`Game::handle_tool_impulse`);
+-   после удара моб неуязвим 0,4–0,5 с (`*_invulnerable_seconds` в `Config.h`): перезарядка оружия
+    меньше этого времени даёт пропущенные удары, при этом прочность всё равно тратится.
+
+Физика (общая для наземных мобов):
 
 -   вертикальная скорость копится каждый кадр:
     `v = max(mob_max_fall_speed, v + mob_gravity * dt)`;
--   гравитация общая для всех мобов: `Config::mob_gravity = -20.0`,
-    `Config::mob_max_fall_speed = -40.0`; если мобу нужна другая ---
-    умножать в его логике, а не заводить новую константу;
--   оси X, Z и Y проверяются раздельно AABB-тестом против solid-блоков
-    (`Pig::collides_at`, размеры `Config::pig_width/pig_height`), поэтому
-    моб останавливается на полу и не проходит сквозь стены;
--   `Pig::update(dt, const Chunk_Manager&)` получает мир параметром, а не
-    хранит ссылку.
+-   гравитация общая: `Config::mob_gravity = -20.0`, `Config::mob_max_fall_speed = -40.0`;
+-   оси X, Z и Y проверяются раздельно AABB-тестом против solid-блоков, поэтому моб
+    останавливается на полу и не проходит сквозь стены;
+-   `update(dt, const Chunk_Manager&)` получает мир параметром, а не хранит ссылку.
 
-Спавн ставит свинью на высоту игрока; до земли она долетает под действием
-гравитации.
+Модели: `assets/mobs/*.glb`. Врагу нужны клипы `Idle` и `Walk`, `Attack` необязательный. Если модель не
+загрузилась, спавн пишет ошибку и откладывает попытку (для врагов — 30 с).
 
 ------------------------------------------------------------------------
 
 **Состояние документа:** соответствует содержимому архива на момент его
 создания.
+
+## 48. Режимы игры, полёт и инвентарь
+
+- Режимы: `Game_Mode {Creative, Survival}` и флаг `Game::m_spectator` (наблюдатель — это Creative с полётом сквозь блоки).
+- F1 вызывает `Game::cycle_game_mode()`: Survival → Creative (полёт с коллизиями) → наблюдатель (`noclip`) → Survival.
+- `Game::apply_game_mode(mode, spectator)` — единая точка смены режима: выставляет инвентарь, мобов,
+  урон/голод, полёт (`Player::set_flying`) и `noclip` (`Player::set_noclip`).
+- Полёт с коллизиями — `Player::move_flying_with_collision`: движение по осям по очереди, упёрся — скорость
+  и импульс по этой оси обнуляются. `noclip` — прежнее свободное движение.
+- Инвентарь один для обоих режимов: хотбар и хранилище (`Inventory::m_hotbar`, `m_storage`) хранят реальные
+  стаки. Палитра Creative (`get_palette_slot`) — бесконечный источник: клик берёт копию на курсор
+  (`m_carried_infinite`), которая кладётся в обычные слоты через `place_infinite`. Курсор из палитры при
+  закрытии панели отпускается, реальный стак возвращается в инвентарь.
+- Слоты панели: 0..26 хранилище, 27..35 хотбар, палитра — id 400..426 (`Panel_Slot_Ids::k_creative_palette_base`).
+- Сундук/верстак/печь показывают хранилище игрока в обоих режимах (`Container_Session` без творческой ветки).
+
+## 49. Палитра блоков и ширина ID
+
+- `Chunk_Block_Grid`: палитра `std::vector<Block_ID>`, индексы упакованы в 0/1/2/4/8/16 бит.
+  Переполнение палитры вызывает `repack` на следующую ширину (см. `bits_for_palette`).
+- Мешер: CPU-ключ слияния — 64 бита: id 0..15, meta 16..23, свет 24..31, AO 32..39
+  (`Chunk.cpp`, константы `kKeyPresent`, `kKeyRotate` — 40/41 бит). Шейдер `mesh_greedy.comp` — `uvec2`
+  с той же раскладкой (.x = id | meta<<16, .y = свет | AO<<8).
+- GPU-каналы (`pack_channel`) — шаблон по ширине значения; палитра канала хранится в 32-битных словах.
+- Таблица правил для GPU: `[light_coarse 256 слов][block_flags по id]` — порядок зафиксирован в шейдере.
+- Региональный файл: форматы 0–2 (байт на воксель) читаются, пишутся 3 (raw16), 4 (RLE16), 5 (метаданные + RLE/raw16).
+- Проверка без GPU: headless-тест палитры на 1000 id и кругового прохода региона (см. историю версии 8.7).
+
+## 50. Время суток по измерениям и привязка чанка
+
+- `Dimension_Info::time_mode`: `Cycle` (свои часы) или `Fixed` (отметка `fixed_time`, часы заморожены).
+- `Game::load`: для `Fixed` вызывает `set_frozen(true)` и ставит `fixed_time`; для `Cycle` — `day_time` из `world.json`.
+- `Game::save_world`: замороженное время не пишется в `world.json`.
+- `Chunk::m_dimension` задаётся `World_Generator::get_dimension_id()` в конструкторе; хранение по `storage_key`.
+- Ограничение: одно измерение в памяти; для нескольких одновременно (фаза 7) время нужно хранить по измерениям.
+
+## 51. Типы мира
+
+Тип мира — это измерение из `Dimension.cpp` плюс (для «один биом») биом в `World_Settings::biome`.
+Экран «Создание мира» (`State_Create_World`, `Application.cpp`) перебирает пять типов через кнопку
+«Тип мира» и показывает кнопку «Биом» только для измерений с `single_biome`.
+
+- `Dimension_Info`: новые флаги `caves` (пещеры), `ground` (есть ли земля под островами) и `single_biome`
+  (весь мир одного биома). Флаг `sky_islands` теперь читается генератором; раньше острова
+  генерировались всегда, а флаг был декоративным.
+- `superflat` — `Terrain_Mode::Flat` со слоями: глубинный камень до Y=-1, камень 0..2, земля 3..4, трава 5.
+- `single_biome` — `Terrain_Mode::Noise`, `caves = false`, `sky_islands = false`, `single_biome = true`.
+- `single_islands` — то же, но `ground = false`, `sky_islands = true`, без декораций.
+- `World_Generator::set_biome(Biome_Id)`: в измерении с `single_biome` `surface_biome_for_column` и
+  `biome_at` возвращают выбранный биом; климатические поля и рельеф остаются обычными.
+- `ground = false`: `block_in_column` возвращает воздух; чанки ниже Y=200 пусты
+  (`generate_chunk` выходит раньше, `chunk_is_definitely_air` возвращает true).
+- Острова в `ground = false` ставятся с `anchor_valid = true`, центр — Y 290..350. Низ самого большого
+  острова — центр − 66, поэтому он не обрезается по Y=200. В обычном мире якорь и центр не меняются.
+- `World_Generator::find_spawn_surface(x, z)`: для мира с землёй возвращает `get_height`; без земли ищет
+  ближайший остров кольцами до радиуса 256 с шагом 8 и меняет x, z. Если островов нет — Y=220 (игрок упадёт;
+  нужен `/tp`).
+- `World_File`: поле `biome` в `world.json` (по умолчанию `Plains`), читается и пишется как остальные поля.
+- `Game::create_world(..., dimension, biome, error)`: записывает оба поля; `setup_world_objects` и
+  `reload_world` вызывают `set_biome(biome_from_name(...))` и `find_spawn_surface`.
+- Проверка (headless): супер плоский — земля на Y=5; один биом — 0 пещер из 8712 выборок (в обычном мире 205),
+  биом совпадает во всех выборках; острова — 0 блоков ниже Y=200, острова есть в ~25% колонок.
+- Не проверено в игре: отрисовка островов и их граница по Y=200 в рендере, поведение на старых сохранениях.
+
+## 52. Перенос id камня и удаление «Oak Wood»
+
+- `Block_Types::Stone` = 5 (раньше 3). `Block_Types::Oak_Wood` удалён; дубовый ствол — `Block_Types::Oak_Log` = 56
+  (запись из `blocks.json`).
+- id 3 не зарегистрирован: `Block_Registry::is_known(3) == false`. Старые данные с id 3 при чтении региона
+  приводятся к воздуху (как и любой неизвестный id).
+- id 8 зарезервирован под динамит (`reserved_block_ids` в `blocks.json`) и не используется.
+- Из данных убраны все ссылки на «Oak Wood»: тег `logs` и рецепт досок в `recipe.json`, входы и топливо в
+  `smelting.json`. Деревья (`Tree_Generator`) ставят `Oak_Log`.
+- Проверено headless: реестр даёт `3 → нет`, `5 → Stone`, `8 → зарезервирован`, `56 → Oak Log`.
+
+## 53. Запись сгенерированных чанков и приоритет очереди
+
+- `Chunk_Manager::worker_loop`: сгенерированный чанк сразу пишется через `World_File::save_chunk`, до передачи
+  главному потоку (чанк ещё принадлежит воркеру). Загрузка с диска по-прежнему идёт первой.
+- `unload_chunk` / `save_chunk_to_disk` без изменений: нетронутый чанк при выгрузке не перезаписывается, изменённый — пишется.
+- `reprioritize_pending_jobs()` вызывается из `update_player_position` при смене чанка игрока: перестраивает
+  `m_pending_jobs` по `chunk_job_priority` (квадрат горизонтального расстояния + 4 × dy²), задачи вне
+  `is_chunk_wanted` снимаются и чистят `m_requested_chunks`.
+- Воркер снимает снимок `generator`, `World_File` и `generation_folder` вместе с задачей, под `m_job_mutex`;
+  задача с `generation_id` от прошлого мира пропускается.
+- Проверено headless (`Chunk_Manager` + регионы, быстрое перемещение 16 блоков за кадр): все загруженные рядом с
+  игроком чанки (75/75) и все пройденные (28/28) читаются с диска.
+- Не проверено: задержка записи на реальном диске при 50 блоках/с и поведение на огромной очереди в игре.
+
+## 54. Булыжник
+
+- `Block_Types::Cobblestone` = 3 (бывший свободный id). `Stone` (5) в `blocks.json` имеет `"drop": "Cobblestone"`:
+  `Dropped_Item` читает `drop_id` при добыче, и камень выпадает как булыжник.
+- Переплавка: `smelting.json` — `Cobblestone` → `Stone`, 1 шт., 10 с.
+- Спрайт `cobblestone` — ячейка (96, 16) в `texture_atlas.png`, запись в `blocks_main.atlas.json`. Нарисован процедурно.
+- Проверено headless: id 3 — Cobblestone, `drop_id` камня = 3.
+

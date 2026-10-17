@@ -28,14 +28,14 @@ std::vector<std::string> tokenize(const std::string& input) {
     return tokens;
 }
 
-// Имя блока -> ключ для сравнения: нижний регистр, пробелы -> '_' ("Oak Wood" == "oak_wood").
+// Имя блока -> ключ для сравнения: нижний регистр, пробелы -> '_' ("Oak Log" == "oak_log").
 std::string block_key(const std::string& name) {
     std::string key = to_lower(name);
     std::replace(key.begin(), key.end(), ' ', '_');
     return key;
 }
 
-// Ищет блок по имени ("oak_wood", "Oak Wood") или по числовому id. Air находится только
+// Ищет блок по имени ("oak_log", "Oak Log") или по числовому id. Air находится только
 // при allow_air. Пустые имена — свободные слоты реестра, их пропускаем.
 bool find_block(const std::string& text, bool allow_air, Block_Types& out) {
     const Block_Registry& registry = Block_Registry::get_instance();
@@ -53,7 +53,8 @@ bool find_block(const std::string& text, bool allow_air, Block_Types& out) {
     }
 
     const std::string wanted = block_key(text);
-    for (Block_ID id = 0; id < k_max_block_types; ++id) {
+    for (size_t raw_id = 0; raw_id < Block_Registry::get_instance().id_capacity(); ++raw_id) {
+        const Block_ID id = static_cast<Block_ID>(raw_id);
         const std::string& name = registry.get_properties(id).name;
         if (name.empty()) continue;
         if (block_key(name) != wanted) continue;
@@ -125,7 +126,7 @@ const Command_Info k_commands[] = {
     {"fly",         "/fly",                                         "Toggle flying"},
     {"give",        "/give <block> [count]",                        "Give item (Survival)"},
     {"setblock",    "/setblock <x> <y> <z> <block>",                "Place a block (~ ok)"},
-    {"summon",      "/summon <pig|horse|cow|sheep|zombie|skeleton> [count]", "Spawn mobs near you"},
+    {"summon",      "/summon <pig|horse|cow|sheep|zombie|skeleton|spider> [count]", "Spawn mobs near you"},
     {"breed",       "/breed <pig|cow|sheep|horse>",                 "Make all adult animals of a kind ready to breed"},
     {"clear",       "/clear",                                       "Remove dropped items"},
 };
@@ -281,19 +282,22 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
     }
 
     if (cmd == "gamemode" || cmd == "gm") {
-        if (args.size() != 2) { reply = "Usage: /gamemode <creative|survival>"; return false; }
+        if (args.size() != 2) { reply = "Usage: /gamemode <creative|survival|spectator>"; return false; }
         const std::string mode = to_lower(args[1]);
-        Game_Mode wanted;
+        Game_Mode wanted = Game_Mode::Creative;
+        bool spectator = false;
         if (mode == "survival" || mode == "s" || mode == "0")      wanted = Game_Mode::Survival;
         else if (mode == "creative" || mode == "c" || mode == "1") wanted = Game_Mode::Creative;
+        else if (mode == "spectator" || mode == "sp" || mode == "2") spectator = true;
         else { reply = "Unknown game mode: " + args[1]; return false; }
 
-        game.set_game_mode(wanted);
+        game.apply_game_mode(wanted, spectator);
         reply = "Game mode: " + game.get_game_mode_name();
         return true;
     }
 
     if (cmd == "fly") {
+        if (game.get_game_mode() == Game_Mode::Survival) { reply = "Flight is only available in Creative"; return false; }
         game.toggle_fly();
         reply = "Flying toggled";
         return true;
@@ -309,10 +313,6 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
         if (args.size() == 3 && !parse_int(args[2], count)) { reply = "Invalid count: " + args[2]; return false; }
         count = std::clamp(count, 1, 2304); // 36 слотов * 64
 
-        if (game.get_game_mode() != Game_Mode::Survival) {
-            reply = "In Creative take blocks from the inventory (E)";
-            return false;
-        }
         const int added = game.give_item(type, count);
         if (added <= 0) { reply = "Inventory is full"; return false; }
         reply = "Gave " + std::to_string(added) + " x " + get_block_props(type).name;
@@ -350,8 +350,8 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
     if (cmd == "summon") {
         std::string what = args.size() >= 2 ? to_lower(args[1]) : "pig";
         if (what.size() > 1 && what.back() == 's') what.pop_back(); // pigs -> pig, skeletons -> skeleton
-        const char* usage = "Usage: /summon <pig|horse|cow|sheep|zombie|skeleton> [count]";
-        if (what != "pig" && what != "horse" && what != "cow" && what != "sheep" && what != "zombie" && what != "skeleton") {
+        const char* usage = "Usage: /summon <pig|horse|cow|sheep|zombie|skeleton|spider> [count]";
+        if (what != "pig" && what != "horse" && what != "cow" && what != "sheep" && what != "zombie" && what != "skeleton" && what != "spider") {
             reply = usage;
             return false;
         }
@@ -364,6 +364,7 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
         else if (what == "cow") spawned = game.summon_cows(count);
         else if (what == "sheep") spawned = game.summon_sheep(count);
         else if (what == "zombie") spawned = game.summon_zombies(count);
+        else if (what == "spider") spawned = game.summon_spiders(count);
         else spawned = game.summon_skeletons(count);
         if (spawned <= 0) { reply = "Failed to summon " + what + " (model missing?)"; return false; }
         reply = "Summoned " + std::to_string(spawned) + " " + what + (spawned == 1 ? "" : "s");
@@ -415,13 +416,15 @@ std::vector<std::string> get_command_completions(const std::string& raw_input) {
 
         if (cmd == "give" && word_index == 1) {
             const Block_Registry& registry = Block_Registry::get_instance();
-            for (Block_ID id = 1; id < k_max_block_types; ++id) {
+            for (size_t raw_id = 1; raw_id < Block_Registry::get_instance().id_capacity(); ++raw_id) {
+                const Block_ID id = static_cast<Block_ID>(raw_id);
                 const std::string& name = registry.get_properties(id).name;
                 if (!name.empty()) candidates.push_back(block_key(name));
             }
         } else if (cmd == "setblock" && word_index == 4) {
             const Block_Registry& registry = Block_Registry::get_instance();
-            for (Block_ID id = 0; id < k_max_block_types; ++id) {
+            for (size_t raw_id = 0; raw_id < Block_Registry::get_instance().id_capacity(); ++raw_id) {
+                const Block_ID id = static_cast<Block_ID>(raw_id);
                 const std::string& name = registry.get_properties(id).name;
                 if (!name.empty()) candidates.push_back(block_key(name));
             }

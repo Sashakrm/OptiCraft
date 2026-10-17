@@ -62,42 +62,49 @@ Region_File::~Region_File() {
 // ---------------------------------------------------------------------------
 //  Сжатие
 // ---------------------------------------------------------------------------
-void Region_File::compress_rle(const uint8_t* source, size_t source_size,
-                               std::vector<uint8_t>& out) {
-    out.clear();
-    out.reserve(source_size / 8 + 16);
-
-    size_t i = 0;
-    while (i < source_size) {
-        const uint8_t value = source[i];
-        size_t run = 1;
-        // Длина серии ограничена 65535, чтобы влезть в uint16.
-        while (i + run < source_size && source[i + run] == value && run < 0xFFFFu) {
-            ++run;
+namespace {
+    // RLE: (значение шириной sizeof(T), uint16 длина серии). Данные чанка почти всегда состоят
+    // из длинных однородных полос — чанк чистого воздуха ужимается до нескольких байт.
+    template <typename T>
+    void compress_rle(const T* source, size_t count, std::vector<uint8_t>& out) {
+        out.clear();
+        out.reserve(count * sizeof(T) / 8 + 16);
+        size_t i = 0;
+        while (i < count) {
+            const T value = source[i];
+            size_t run = 1;
+            // Длина серии ограничена 65535, чтобы влезть в uint16.
+            while (i + run < count && source[i + run] == value && run < 0xFFFFu) {
+                ++run;
+            }
+            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&value);
+            out.insert(out.end(), bytes, bytes + sizeof(T));
+            out.push_back(static_cast<uint8_t>(run & 0xFFu));
+            out.push_back(static_cast<uint8_t>((run >> 8) & 0xFFu));
+            i += run;
         }
-        out.push_back(value);
-        out.push_back(static_cast<uint8_t>(run & 0xFFu));
-        out.push_back(static_cast<uint8_t>((run >> 8) & 0xFFu));
-        i += run;
+    }
+
+    template <typename T>
+    bool decompress_rle(const uint8_t* source, size_t source_size, T* destination, size_t destination_count) {
+        constexpr size_t k_entry = sizeof(T) + 2;
+        size_t written = 0;
+        size_t i = 0;
+        while (i + k_entry <= source_size) {
+            T value{};
+            std::memcpy(&value, source + i, sizeof(T));
+            const size_t run = static_cast<size_t>(source[i + sizeof(T)]) |
+                               (static_cast<size_t>(source[i + sizeof(T) + 1]) << 8);
+            i += k_entry;
+            if (run == 0 || written + run > destination_count) return false;
+            std::fill_n(destination + written, run, value);
+            written += run;
+        }
+        return i == source_size && written == destination_count;
     }
 }
 
-bool Region_File::decompress_rle(const uint8_t* source, size_t source_size,
-                                 uint8_t* destination, size_t destination_size) {
-    size_t written = 0;
-    size_t i = 0;
-    while (i + 2 < source_size) {
-        const uint8_t value = source[i];
-        const size_t run = static_cast<size_t>(source[i + 1]) |
-                           (static_cast<size_t>(source[i + 2]) << 8);
-        i += 3;
-        if (run == 0 || written + run > destination_size) return false;
-        std::memset(destination + written, value, run);
-        written += run;
-    }
-    return written == destination_size;
-}
-
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 //  Открытие / заголовок / индекс
 // ---------------------------------------------------------------------------
@@ -342,45 +349,71 @@ bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
 
     blocks.clear_meta();
 
-    // Внутри чанк хранится палитрой (см. Chunk_Block_Grid), а на диске формат прежний — плоские
-    // байты, RLE или оболочка с метаданными: старые миры читаются без конвертации. Сначала
-    // распаковываем в плоский буфер, затем один раз строим палитру.
-    std::vector<uint8_t>& flat = m_scratch_flat;
-    flat.resize(blocks.size_bytes());
+    // Внутри чанк хранится палитрой (см. Chunk_Block_Grid). На диске — плоские id: новые форматы
+    // пишут uint16 на воксель, старые (0..2) — байт на воксель; оба читаются и приводятся к Block_ID.
+    std::vector<Block_ID>& flat = m_scratch_flat;
+    flat.resize(Chunk_Block_Grid::voxel_count);
+    const uint8_t* p = m_scratch_read.data();
+    const size_t total = m_scratch_read.size();
 
-    if (entry.format == k_format_raw) {
-        if (entry.payload_bytes != blocks.size_bytes()) return false;
-        std::memcpy(flat.data(), m_scratch_read.data(), flat.size());
+    // Декодирует блоки из буфера нужной ширины: wide — по uint16 на воксель, иначе по байту.
+    const auto decode = [&flat](const uint8_t* data, size_t length, bool rle, bool wide) -> bool {
+        const size_t count = flat.size();
+        if (wide) {
+            if (rle) return decompress_rle<Block_ID>(data, length, flat.data(), count);
+            if (length != count * sizeof(Block_ID)) return false;
+            std::memcpy(flat.data(), data, length);
+            return true;
+        }
+        std::vector<uint8_t> narrow(count);
+        if (rle) {
+            if (!decompress_rle<uint8_t>(data, length, narrow.data(), count)) return false;
+        } else {
+            if (length != count) return false;
+            std::memcpy(narrow.data(), data, count);
+        }
+        for (size_t k = 0; k < count; ++k) flat[k] = narrow[k];
+        return true;
+    };
+    // Id, которых нет в blocks.json (битые или устаревшие данные), превращаем в воздух.
+    const auto sanitize = [&flat]() {
+        const Block_Registry& registry = Block_Registry::get_instance();
+        for (Block_ID& id : flat) {
+            if (!registry.is_known(id)) id = static_cast<Block_ID>(Block_Types::Air);
+        }
+    };
+
+    if (entry.format == k_format_raw || entry.format == k_format_rle) {
+        if (entry.format == k_format_raw && entry.payload_bytes != Chunk_Block_Grid::voxel_count) return false;
+        if (!decode(p, total, entry.format == k_format_rle, false)) return false;
+        sanitize();
         blocks.assign_flat(flat.data());
         return true;
     }
-
-    if (entry.format == k_format_blocks_meta) {
-        const uint8_t* p = m_scratch_read.data();
-        const size_t total = m_scratch_read.size();
+    if (entry.format == k_format_raw16 || entry.format == k_format_rle16) {
+        if (!decode(p, total, entry.format == k_format_rle16, true)) return false;
+        sanitize();
+        blocks.assign_flat(flat.data());
+        return true;
+    }
+    if (entry.format == k_format_blocks_meta || entry.format == k_format_blocks_meta16) {
         if (total < 1 + 4) return false;
         const uint8_t encoding = p[0];
+        if (encoding > 1) return false;
         uint32_t blocks_len = 0;
         std::memcpy(&blocks_len, p + 1, sizeof(blocks_len));
         size_t offset = 1 + 4;
         if (offset + blocks_len + 4 > total) return false;
-
-        if (encoding == 0) {
-            if (blocks_len != blocks.size_bytes()) return false;
-            std::memcpy(flat.data(), p + offset, flat.size());
-        } else if (encoding == 1) {
-            if (!decompress_rle(p + offset, blocks_len, flat.data(), flat.size())) return false;
-        } else {
-            return false;
-        }
-        blocks.assign_flat(flat.data());
+        if (!decode(p + offset, blocks_len, encoding == 1, entry.format == k_format_blocks_meta16)) return false;
+        sanitize();
+        blocks.assign_flat(flat.data());   // сбрасывает метаданные — их читаем ПОСЛЕ
         offset += blocks_len;
 
         uint32_t meta_count = 0;
         std::memcpy(&meta_count, p + offset, sizeof(meta_count));
         offset += 4;
         if (offset + static_cast<size_t>(meta_count) * 3 > total) return false;
-        for (uint32_t i = 0; i < meta_count; ++i) {
+        for (uint32_t k = 0; k < meta_count; ++k) {
             uint16_t index = 0;
             std::memcpy(&index, p + offset, sizeof(index));
             blocks.set_meta_by_index(index, p[offset + 2]);
@@ -388,14 +421,6 @@ bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
         }
         return true;
     }
-
-    if (entry.format == k_format_rle) {
-        if (!decompress_rle(m_scratch_read.data(), m_scratch_read.size(),
-                            flat.data(), flat.size())) return false;
-        blocks.assign_flat(flat.data());
-        return true;
-    }
-
     return false;
 }
 
@@ -403,40 +428,36 @@ bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!open_locked()) return false;
 
-    std::vector<uint8_t>& flat = m_scratch_flat;
-    flat.resize(blocks.size_bytes());
+    // Пишем всегда 16-битными id: ограничения на число видов блоков на диске нет.
+    std::vector<Block_ID>& flat = m_scratch_flat;
+    flat.resize(Chunk_Block_Grid::voxel_count);
     blocks.unpack(flat.data());
-    compress_rle(flat.data(), flat.size(), m_scratch_compress);
+    const size_t raw_bytes = flat.size() * sizeof(Block_ID);
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(flat.data());
 
-    const uint8_t* payload = nullptr;
-    uint32_t payload_bytes = 0;
-    uint32_t format = 0;
+    compress_rle<Block_ID>(flat.data(), flat.size(), m_scratch_compress);
+    // Сжатый вариант берём, только если он короче сырого (шумный чанк с рудами — сырой).
+    const bool use_rle = m_scratch_compress.size() < raw_bytes;
+    const uint8_t* block_bytes = use_rle ? m_scratch_compress.data() : raw;
+    const uint32_t block_len = static_cast<uint32_t>(use_rle ? m_scratch_compress.size() : raw_bytes);
 
-    if (m_scratch_compress.size() < blocks.size_bytes()) {
-        payload = m_scratch_compress.data();
-        payload_bytes = static_cast<uint32_t>(m_scratch_compress.size());
-        format = k_format_rle;
-    } else {
-        payload = flat.data();
-        payload_bytes = static_cast<uint32_t>(flat.size());
-        format = k_format_raw;
-    }
+    const uint8_t* payload = block_bytes;
+    uint32_t payload_bytes = block_len;
+    uint32_t format = use_rle ? k_format_rle16 : k_format_raw16;
 
     // Чанк с метаданными блоков: оборачиваем блоки (как выбраны выше) и дописываем метаданные.
     std::vector<uint8_t> meta_payload;
     if (blocks.has_meta()) {
-        const bool use_rle = (format == k_format_rle);
-        const uint32_t blocks_len = payload_bytes;
         const auto& entries = blocks.meta_entries();
         const uint32_t meta_count = static_cast<uint32_t>(entries.size());
-        meta_payload.reserve(1 + 4 + blocks_len + 4 + static_cast<size_t>(meta_count) * 3);
+        meta_payload.reserve(1 + 4 + block_len + 4 + static_cast<size_t>(meta_count) * 3);
         meta_payload.push_back(use_rle ? 1 : 0);
         const auto append_u32 = [&meta_payload](uint32_t v) {
             const uint8_t* b = reinterpret_cast<const uint8_t*>(&v);
             meta_payload.insert(meta_payload.end(), b, b + sizeof(v));
         };
-        append_u32(blocks_len);
-        meta_payload.insert(meta_payload.end(), payload, payload + blocks_len);
+        append_u32(block_len);
+        meta_payload.insert(meta_payload.end(), block_bytes, block_bytes + block_len);
         append_u32(meta_count);
         for (const auto& [index, value] : entries) {
             const uint8_t* b = reinterpret_cast<const uint8_t*>(&index);
@@ -445,7 +466,7 @@ bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
         }
         payload = meta_payload.data();
         payload_bytes = static_cast<uint32_t>(meta_payload.size());
-        format = k_format_blocks_meta;
+        format = k_format_blocks_meta16;
     }
 
     const uint32_t needed_sectors = (payload_bytes + k_sector_size - 1) / k_sector_size;

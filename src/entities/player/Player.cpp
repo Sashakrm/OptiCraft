@@ -83,6 +83,15 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
     m_velocity.z += m_impulse.z + wet.flow.z;
     m_impulse *= std::exp(-Config::impulse_drag * delta_time);
     if (glm::length(m_impulse) < 0.02f) m_impulse = glm::vec3(0.0f);
+    // Потолок горизонтальной скорости (движение + импульсы инструментов + течение воды).
+    if (const float horizontal = glm::length(glm::vec2(m_velocity.x, m_velocity.z));
+        horizontal > Config::player_max_speed) {
+        const float k = Config::player_max_speed / horizontal;
+        m_velocity.x *= k;
+        m_velocity.z *= k;
+        m_impulse.x *= k;
+        m_impulse.z *= k;
+    }
 
     if (m_is_flying) {
         if (m_pending_input.jump) {
@@ -94,7 +103,11 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
         }
 
         m_on_ground = false;
-        m_position += m_velocity * delta_time;
+        if (m_noclip) {
+            m_position += m_velocity * delta_time;
+        } else {
+            move_flying_with_collision(delta_time, chunk_manager);
+        }
 
         m_pending_input = {0.0f, 0.0f, false, false};   // <-- не забудьте 4-й false
         return;
@@ -196,6 +209,23 @@ void Player::apply_impulse(const glm::vec3& direction, float speed) {
     m_impulse += glm::vec3(d.x, 0.0f, d.z) * speed;
     m_velocity.y += d.y * speed;   // вертикальная часть — сразу в скорость (вверх или вниз)
     m_on_ground = false;
+}
+
+void Player::move_flying_with_collision(float delta_time, const Chunk_Manager& chunk_manager) {
+    // Оси по очереди, как при ходьбе: упёрся в блок — стоим по этой оси и гасим скорость
+    // и импульс, поэтому полёт скользит вдоль стен и не проходит сквозь них.
+    for (int axis = 0; axis < 3; ++axis) {
+        const float step = m_velocity[axis] * delta_time;
+        if (step == 0.0f) continue;
+        glm::vec3 target = m_position;
+        target[axis] += step;
+        if (collides_at(target, chunk_manager)) {
+            m_velocity[axis] = 0.0f;
+            m_impulse[axis] = 0.0f;
+        } else {
+            m_position = target;
+        }
+    }
 }
 
 void Player::tick_breath(float delta_time, bool head_in_liquid) {

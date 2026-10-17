@@ -27,6 +27,7 @@ private:
 
     // Полёт
     bool m_is_flying = false;
+    bool m_noclip = false;    // полёт сквозь блоки (третья ступень F1: режим наблюдателя)
     float m_fly_speed = Config::player_fly_speed;
 
     // Верховая езда: пока true, Player не двигает себя сам — позицию каждый кадр выставляет
@@ -78,6 +79,8 @@ private:
     glm::vec3 m_view_right;
 
     bool collides_at(const glm::vec3& position, const Chunk_Manager& chunk_manager) const;
+    // Полёт с коллизиями: движение по осям по очереди, упёрся — гасим скорость по этой оси.
+    void move_flying_with_collision(float delta_time, const Chunk_Manager& chunk_manager);
     bool is_solid_block_at(const glm::vec3& world_pos, const Chunk_Manager& chunk_manager) const;
 
     bool would_fit_at_height(float height, const Chunk_Manager& chunk_manager) const;
@@ -93,8 +96,13 @@ public:
                             const glm::vec3& view_right);
 
     // Полёт
-    void toggle_flying() { m_is_flying = !m_is_flying; m_velocity = glm::vec3(0.0f); }
+    void toggle_flying() { set_flying(!m_is_flying); }
+    // Выключение полёта снимает и noclip.
+    void set_flying(bool flying) { m_is_flying = flying; m_velocity = glm::vec3(0.0f); if (!flying) m_noclip = false; }
     bool is_flying() const { return m_is_flying; }
+    // Noclip — полёт без коллизий; имеет смысл только вместе с полётом.
+    void set_noclip(bool noclip) { m_noclip = noclip && m_is_flying; }
+    bool is_noclip() const { return m_noclip; }
 
     // Верховая езда
     bool is_riding() const { return m_is_riding; }

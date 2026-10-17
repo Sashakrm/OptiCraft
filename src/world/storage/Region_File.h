@@ -113,6 +113,13 @@ private:
     //   [uint8 кодировка блоков: 0 сырые / 1 RLE] [uint32 длина блоков] [блоки]
     //   [uint32 число записей] [записи: uint16 индекс вокселя, uint8 значение]...
     static constexpr uint32_t k_format_blocks_meta = 2;
+    // Новые форматы: id блока — uint16 (2 байта на воксель), без ограничения 256 видов блоков.
+    // Старые форматы 0..2 читаются и расширяются; пишутся только новые.
+    //   3 — сырые uint16, 4 — RLE uint16 (значение u16 + длина u16),
+    //   5 — как 2, но с метаданными; блоки: [uint8 кодировка 0 сырые/1 RLE][uint32 длина][блоки].
+    static constexpr uint32_t k_format_raw16 = 3;
+    static constexpr uint32_t k_format_rle16 = 4;
+    static constexpr uint32_t k_format_blocks_meta16 = 5;
 
     std::filesystem::path m_path;
     std::fstream m_stream;
@@ -128,7 +135,7 @@ private:
     std::vector<uint8_t> m_scratch_compress;
     std::vector<uint8_t> m_scratch_read;
     // Плоский (распакованный) вид чанка: на диске формат прежний, а в памяти чанк палитровый.
-    std::vector<uint8_t> m_scratch_flat;
+    std::vector<Block_ID> m_scratch_flat;
 
     bool open_locked();
     bool create_empty_locked();
@@ -139,14 +146,7 @@ private:
     uint32_t allocate_sectors_locked(uint32_t sector_count);
     void release_sectors_locked(uint32_t first_sector, uint32_t sector_count);
 
-    // RLE: (uint8 значение, uint16 длина серии). Данные чанка почти всегда
-    // состоят из длинных однородных полос — чанк чистого воздуха ужимается
-    // с 32768 байт до трёх. Если RLE вдруг вышел длиннее сырых данных
-    // (шумный чанк с рудами), пишутся сырые байты.
-    static void compress_rle(const uint8_t* source, size_t source_size,
-                             std::vector<uint8_t>& out);
-    static bool decompress_rle(const uint8_t* source, size_t source_size,
-                               uint8_t* destination, size_t destination_size);
+    // RLE-кодирование и декодирование — шаблоны по ширине значения (см. Region_File.cpp).
 };
 
 #endif // OPTICRAFT_REGION_FILE_H

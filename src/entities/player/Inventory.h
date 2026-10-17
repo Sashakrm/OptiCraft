@@ -11,9 +11,10 @@
 #include <cstdint>
 #include "world/blocks/Block_Types.h"
 
-// Режим игры. Creative — бесконечный доступ ко всем блокам (как было раньше), Survival —
-// хотбар и инвентарь хранят только то, что реально собрано (стаки ресурсов, как в
-// обычном Minecraft), плюс урон от падения (см. Player).
+// Режим игры. Инвентарь ОДИН для обоих режимов: хотбар и хранилище хранят реальные стаки.
+// Creative добавляет палитру всех блоков как бесконечный источник: взятое оттуда попадает
+// в обычный слот и остаётся там (его можно использовать в Survival, положить в сундук и т.д.).
+// Survival — то же, но предметы только собираются в мире. Урон и голод — см. Player/Game.
 enum class Game_Mode : uint8_t {
     Creative,
     Survival
@@ -41,6 +42,8 @@ public:
 
     void set_mode(Game_Mode mode) { m_mode = mode; }
     Game_Mode get_mode() const { return m_mode; }
+    // Курсор держит копию из бесконечной палитры (Creative): при закрытии не возвращается.
+    bool carried_is_infinite() const { return m_carried_infinite; }
 
     // Переключение АКТИВНОГО СЛОТА ХОТБАРА (0..k_hotbar_size-1) — клавиши [ ] и 1-9.
     void select_next();
@@ -52,9 +55,7 @@ public:
     Block_Types get_selected_block() const;
     const std::string& get_selected_block_name() const;
 
-    // Хотбар (нижняя полоса, всегда на экране): k_hotbar_size слотов.
-    // Creative — каждый слот содержит один тип блока (см. pick_grid_slot), запас бесконечен.
-    // Survival — каждый слот содержит реальный собранный стак (может быть пустым).
+    // Хотбар (нижняя полоса, всегда на экране): k_hotbar_size реальных стаков (может быть пустым).
     static constexpr size_t k_hotbar_size = 9;
     size_t get_hotbar_slot_count() const { return k_hotbar_size; }
     Item_Stack get_hotbar_slot(size_t index) const;
@@ -76,6 +77,12 @@ public:
     size_t get_panel_rows() const { return k_panel_rows; }
     Item_Stack get_panel_slot(size_t index) const;
 
+    // Палитра Creative: 27 блоков текущей страницы (бесконечный источник, count = 0 в HUD).
+    static constexpr size_t k_palette_slots = k_panel_storage_slots;
+    Item_Stack get_palette_slot(size_t index) const;
+    // Клик по палитре: ЛКМ — полный стак на курсор, ПКМ — один предмет. Creative only.
+    void click_palette_slot(size_t index, bool right = false);
+
     // Клик по слоту панели. Модель одна для обоих режимов и обеих строк — как
     // курсор в Minecraft: пустая рука берёт стак из слота, занятая кладёт его
     // обратно (или меняет местами с тем, что там лежало).
@@ -89,7 +96,7 @@ public:
     // Позволяет внешнему коду (см. Container_Session) временно "одолжить" курсор
     // инвентаря, чтобы прогнать клик по хотбару через click_panel_slot и получить
     // тот же самый merge/swap, не дублируя его логику у контейнеров.
-    void set_carried_stack(Item_Stack stack) { m_carried = stack; }
+    void set_carried_stack(Item_Stack stack) { m_carried = stack; m_carried_infinite = false; }
     // Сохранение содержимого в простой текст (хотбар, хранилище, выбранный слот) и обратно.
     std::string serialize() const;
     void deserialize(const std::string& text);
@@ -131,7 +138,7 @@ public:
     // Износ брони от удара: каждая надетая деталь теряет amount прочности, сломанная пропадает.
     void damage_armor(int amount = 1);
 
-    // Прямой доступ к слоту панели (nullptr в Creative или вне диапазона) — для контейнеров.
+    // Прямой доступ к реальному слоту панели (nullptr вне диапазона) — для контейнеров.
     Item_Stack* get_panel_slot_mutable(size_t index);
     // Вернуть содержимое сетки в инвентарь (при закрытии окна).
     void return_craft_to_inventory();
@@ -158,19 +165,19 @@ public:
 
 private:
     Game_Mode m_mode = Game_Mode::Creative;
-    int m_selected_index = 0; // Индекс активного слота хотбара — общий для обоих режимов
+    int m_selected_index = 0; // Индекс активного слота хотбара
     Item_Stack m_carried;     // Стак на курсоре, пока открыта панель инвентаря
+    bool m_carried_infinite = false; // курсор взят из палитры Creative (бесконечный запас)
     size_t m_creative_page = 0;
 
-    // Creative
+    // Палитра Creative (только для отображения и бесконечного источника)
     std::vector<Block_Types> m_all_blocks;      // Все зарегистрированные блоки, кроме Air
-    std::vector<Block_Types> m_creative_hotbar; // k_hotbar_size, изначально первые блоки реестра
 
-    // Survival
-    static constexpr size_t k_survival_storage_size = k_panel_storage_slots; // 3x9 верхних строк
+    // Реальный инвентарь — общий для Creative и Survival
+    static constexpr size_t k_storage_size = k_panel_storage_slots; // 3x9 верхних строк
     static constexpr int k_max_stack = 64;                // как в Minecraft
-    std::vector<Item_Stack> m_survival_hotbar;   // k_hotbar_size, изначально пусто
-    std::vector<Item_Stack> m_survival_storage;  // k_survival_storage_size, изначально пусто
+    std::vector<Item_Stack> m_hotbar;   // k_hotbar_size
+    std::vector<Item_Stack> m_storage;  // k_storage_size
     Item_Stack m_craft_grid[k_craft_size];       // сетка крафта 2x2 в окне инвентаря
     std::array<Item_Stack, k_armor_count> m_armor{}; // надетая броня (Survival)
 
@@ -178,6 +185,8 @@ private:
     // (с учётом текущей страницы). Air — слот за пределами списка блоков.
     Block_Types creative_block_at(size_t panel_index) const;
 
+    // Клик курсором из бесконечной палитры по реальному слоту: копия, ничего не теряя.
+    void place_infinite(Item_Stack& slot, bool right);
     static void left_click_stack(Item_Stack& slot, Item_Stack& carried);
     static void right_click_stack(Item_Stack& slot, Item_Stack& carried);
 

@@ -290,11 +290,20 @@ void Horse::update_free_motion(float dt, const Horse_Context& context) {
                               (state == Horse_State::Idle || state == Horse_State::Wander || state == Horse_State::Happy);
 
     const bool seeking = m_seek_timer > 0.0f;
+    // Пауки рядом — бежит к ним (кроме паники и страха).
+    const bool hunting = context.prey_valid && state != Horse_State::Flee && state != Horse_State::Scared;
     if (seeking) {
         const glm::vec3 to_mate(m_seek_target.x - pos.x, 0.0f, m_seek_target.z - pos.z);
         if (glm::length(to_mate) > 0.05f) {
             turn_towards(std::atan2(to_mate.x, to_mate.z), 3.5f, dt);
             desired = forward_of(m_yaw) * Config::horse_walk_speed * 1.8f;
+        }
+    } else if (hunting) {
+        const glm::vec3 prey_center = 0.5f * (context.prey_min + context.prey_max);
+        const glm::vec3 to_prey(prey_center.x - pos.x, 0.0f, prey_center.z - pos.z);
+        if (glm::length(to_prey) > 0.05f) {
+            turn_towards(std::atan2(to_prey.x, to_prey.z), 4.0f, dt);
+            desired = forward_of(m_yaw) * Config::horse_walk_speed * 2.0f;
         }
     } else if (follow_owner) {
         turn_towards(std::atan2(to_player.x, to_player.z), 3.0f, dt);
@@ -550,6 +559,11 @@ void Horse::update(float dt, const Chunk_Manager& chunk_manager,
     } else {
         m_drifting = false;
         update_free_motion(dt, context);
+    }
+
+    // 2b. Удар по пауку, если он в досягаемости (без всадника, не в панике).
+    if (!m_has_rider && context.prey_valid && !Horse_AI::is_urgent(m_ai.get_state())) {
+        m_pending_attack = attack(context.prey_min, context.prey_max);
     }
 
     // 3. Физика мира.

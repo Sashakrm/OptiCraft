@@ -30,7 +30,20 @@ const Hostile_Stats& hostile_stats(Hostile_Kind kind) {
         Config::skeleton_invulnerable_seconds, Config::skeleton_death_seconds,
         false,   // скелет не плавает — тонет
     };
-    return kind == Hostile_Kind::Skeleton ? skeleton : zombie;
+    static const Hostile_Stats spider{
+        "Spider", "assets/mobs/spider.glb",
+        Config::min_spider_count, Config::spider_spawn_radius_min, Config::spider_spawn_radius_max,
+        Config::spider_walk_speed, Config::spider_run_speed, Config::spider_detect_range,
+        Config::spider_width, Config::spider_height, Config::spider_max_health,
+        Config::spider_attack_damage, Config::spider_attack_reach, Config::spider_attack_cooldown,
+        Config::spider_invulnerable_seconds, Config::spider_death_seconds,
+        false,   // паук не плавает — тонет
+    };
+    switch (kind) {
+        case Hostile_Kind::Skeleton: return skeleton;
+        case Hostile_Kind::Spider: return spider;
+        default: return zombie;
+    }
 }
 
 Hostile_Mob::Hostile_Mob(Hostile_Kind kind, std::string name, const glm::vec3& spawn_position)
@@ -154,7 +167,7 @@ bool Hostile_Mob::take_damage(float amount, const glm::vec3& attacker_position) 
     return false;
 }
 
-int Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Hostile_Context& context) {
+Hostile_Result Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Hostile_Context& context) {
     const Hostile_Stats& s = stats();
     if (m_dying) {
         m_death_timer += dt;
@@ -163,7 +176,7 @@ int Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Host
         m_mob.set_roll_degrees(90.0f * fall_t * fall_t);
         m_mob.set_hurt_flash(0.8f);
         m_mob.update(dt);
-        return 0;
+        return {};
     }
 
     m_invulnerable_timer = std::max(0.0f, m_invulnerable_timer - dt);
@@ -172,7 +185,9 @@ int Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Host
     m_attack_cooldown = std::max(0.0f, m_attack_cooldown - dt);
 
     // --- Память о преследовании --------------------------------------------------------
-    if (!context.player_alive) {
+    // Игрок — цель, только если жив и враг может его трогать (паук — только ночью).
+    const bool player_ok = context.player_alive && context.player_targetable;
+    if (!player_ok) {
         m_memory_timer = 0.0f;
     } else if (context.player_seen) {
         m_memory_timer = Config::hostile_memory_seconds;
@@ -197,8 +212,34 @@ int Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Host
 
     glm::vec3 horizontal{0.0f};   // желаемая скорость по XZ
     int damage = 0;
+    Hostile_Result out;
 
-    if (m_memory_timer > 0.0f) {
+    if (context.prey_valid) {
+        // --- Охота на лошадь (пауки): идут за ней круглые сутки, игрока при этом не трогают -
+        glm::vec3 to_prey = context.prey_position - position;
+        to_prey.y = 0.0f;
+        const float prey_dist = glm::length(to_prey);
+        const glm::vec3 prey_dir = prey_dist > 0.001f ? to_prey / prey_dist : glm::vec3(0.0f);
+        if (prey_dir != glm::vec3(0.0f)) {
+            m_mob.set_yaw_degrees(glm::degrees(std::atan2(prey_dir.x, prey_dir.z)));
+        }
+        const glm::vec3 closest = glm::clamp(position + glm::vec3(0.0f, s.height * 0.5f, 0.0f),
+                                             context.prey_min, context.prey_max);
+        const float gap = glm::length(glm::vec2(closest.x - position.x, closest.z - position.z));
+        if (gap <= s.attack_reach) {
+            if (m_attack_cooldown <= 0.0f) {
+                m_attack_cooldown = s.attack_cooldown;
+                out.hit_horse = true;
+                out.horse_damage = s.attack_damage;
+                play_clip("Attack", false);
+            } else if (!(m_mob.has_animation("Attack") && !m_mob.is_animation_finished())) {
+                play_clip("Idle");
+            }
+        } else {
+            horizontal = prey_dir * s.run_speed;
+            play_clip("Walk");
+        }
+    } else if (m_memory_timer > 0.0f) {
         // --- Погоня -----------------------------------------------------------------------
         glm::vec3 to_target = m_target_position - position;
         to_target.y = 0.0f;
@@ -211,9 +252,12 @@ int Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Host
         const bool vertical_ok = std::abs(m_target_position.y - position.y) <= Config::hostile_attack_height_tolerance;
         if (dist <= s.attack_reach && vertical_ok) {
             // В упор: стоим и бьём по кулдауну.
-            if (m_attack_cooldown <= 0.0f && context.player_alive) {
+            if (m_attack_cooldown <= 0.0f && player_ok) {
                 m_attack_cooldown = s.attack_cooldown;
-                damage = static_cast<int>(std::ceil(s.attack_damage));
+                // Быстрый игрок получает больший удар: бонус от скорости сверх ходьбы, без потолка.
+                const float over_walk = std::max(0.0f, context.player_speed - Config::player_move_speed);
+                damage = static_cast<int>(std::ceil(s.attack_damage *
+                    (1.0f + over_walk * Config::mob_speed_bonus_per_speed)));
                 play_clip("Attack", false);
             } else if (!(m_mob.has_animation("Attack") && !m_mob.is_animation_finished())) {
                 // Замах доигран (или клипа Attack нет) — стоим на месте.
@@ -289,7 +333,8 @@ int Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Host
 
     m_mob.set_position(position);
     m_mob.update(dt);
-    return damage;
+    out.player_damage = damage;
+    return out;
 }
 
 void Hostile_Mob::render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient_intensity) const {

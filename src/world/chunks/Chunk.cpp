@@ -47,16 +47,16 @@ uint64_t current_connectivity_epoch() {
 // ---------------------------------------------------------------------------
 void Chunk_Block_Grid::apply_bits(uint8_t bits) {
     m_bits = bits;
-    m_log_bits = bits == 8 ? 3 : bits == 4 ? 2 : bits == 2 ? 1 : 0;
+    m_log_bits = bits == 16 ? 4 : bits == 8 ? 3 : bits == 4 ? 2 : bits == 2 ? 1 : 0;
     m_word_shift = static_cast<uint8_t>(6 - m_log_bits);
     m_slot_mask = static_cast<uint8_t>((1u << m_word_shift) - 1u);
-    m_value_mask = bits == 0 ? 0 : static_cast<uint8_t>((1u << bits) - 1u);
+    m_value_mask = bits == 0 ? 0u : (1u << bits) - 1u;
 }
 
-void Chunk_Block_Grid::repack(uint8_t new_bits, const uint8_t* remap) {
-    std::vector<uint8_t> indices(voxel_count);
+void Chunk_Block_Grid::repack(uint8_t new_bits, const uint16_t* remap) {
+    std::vector<uint16_t> indices(voxel_count);
     for (size_t i = 0; i < voxel_count; ++i) {
-        const uint8_t old_index = index_at(i);
+        const uint16_t old_index = index_at(i);
         indices[i] = remap ? remap[old_index] : old_index;
     }
 
@@ -78,36 +78,38 @@ void Chunk_Block_Grid::repack(uint8_t new_bits, const uint8_t* remap) {
     }
 }
 
-uint8_t Chunk_Block_Grid::palette_index_for(uint8_t block_id) {
+uint16_t Chunk_Block_Grid::palette_index_for(Block_ID block_id) {
     for (size_t i = 0; i < m_palette.size(); ++i) {
-        if (m_palette[i] == block_id) return static_cast<uint8_t>(i);
+        if (m_palette[i] == block_id) return static_cast<uint16_t>(i);
     }
     // Запись, которую больше никто не использует (блок целиком заменили), можно занять
     // повторно — так палитра не растёт при активной правке чанка.
     for (size_t i = 0; i < m_palette.size(); ++i) {
         if (m_counts[i] == 0) {
             m_palette[i] = block_id;
-            return static_cast<uint8_t>(i);
+            return static_cast<uint16_t>(i);
         }
     }
+    // Палитра переполнилась для текущей ширины — расширяем её (1 -> 2 -> 4 -> 8 -> 16 бит).
     if (m_palette.size() >= capacity_for_bits(m_bits)) {
         repack(bits_for_palette(m_palette.size() + 1));
     }
     m_palette.push_back(block_id);
     m_counts.push_back(0);
-    return static_cast<uint8_t>(m_palette.size() - 1);
+    return static_cast<uint16_t>(m_palette.size() - 1);
 }
 
-void Chunk_Block_Grid::assign_flat(const uint8_t* flat) {
-    uint16_t slot_of[256];
-    std::fill(std::begin(slot_of), std::end(slot_of), static_cast<uint16_t>(0xFFFFu));
+void Chunk_Block_Grid::assign_flat(const Block_ID* flat) {
+    // Таблица "id -> номер в новой палитре" живёт в thread_local: заполнять 65536 записей на
+    // каждый чанк было бы дорого, поэтому после работы возвращаем занятые слоты в исходное состояние.
+    thread_local std::vector<uint32_t> slot_of(k_max_block_types, 0xFFFFFFFFu);
 
     m_palette.clear();
     m_counts.clear();
     for (size_t i = 0; i < voxel_count; ++i) {
-        const uint8_t id = flat[i];
-        if (slot_of[id] == 0xFFFFu) {
-            slot_of[id] = static_cast<uint16_t>(m_palette.size());
+        const Block_ID id = flat[i];
+        if (slot_of[id] == 0xFFFFFFFFu) {
+            slot_of[id] = static_cast<uint32_t>(m_palette.size());
             m_palette.push_back(id);
             m_counts.push_back(0);
         }
@@ -119,24 +121,25 @@ void Chunk_Block_Grid::assign_flat(const uint8_t* flat) {
     if (m_bits == 0) {
         m_words.clear();
         m_words.shrink_to_fit();
-        return;
+    } else {
+        const size_t per_word = static_cast<size_t>(1) << m_word_shift;
+        m_words.assign(voxel_count / per_word, 0);
+        for (size_t w = 0; w < m_words.size(); ++w) {
+            uint64_t packed = 0;
+            const Block_ID* src = flat + w * per_word;
+            for (size_t k = 0; k < per_word; ++k) {
+                packed |= static_cast<uint64_t>(slot_of[src[k]]) << (k * m_bits);
+            }
+            m_words[w] = packed;
+        }
     }
 
-    const size_t per_word = static_cast<size_t>(1) << m_word_shift;
-    m_words.assign(voxel_count / per_word, 0);
-    for (size_t w = 0; w < m_words.size(); ++w) {
-        uint64_t packed = 0;
-        const uint8_t* src = flat + w * per_word;
-        for (size_t k = 0; k < per_word; ++k) {
-            packed |= static_cast<uint64_t>(slot_of[src[k]]) << (k * m_bits);
-        }
-        m_words[w] = packed;
-    }
+    for (const Block_ID id : m_palette) slot_of[id] = 0xFFFFFFFFu;
 }
 
-void Chunk_Block_Grid::unpack(uint8_t* out) const {
+void Chunk_Block_Grid::unpack(Block_ID* out) const {
     if (m_bits == 0) {
-        std::memset(out, m_palette[0], voxel_count);
+        std::fill_n(out, voxel_count, m_palette[0]);
         return;
     }
     const size_t per_word = static_cast<size_t>(1) << m_word_shift;
@@ -155,12 +158,12 @@ void Chunk_Block_Grid::compact() {
     }
     if (live == m_palette.size() && bits_for_palette(live) == m_bits) return;
 
-    std::vector<uint8_t> remap(m_palette.size(), 0);
-    std::vector<uint8_t> new_palette;
+    std::vector<uint16_t> remap(m_palette.size(), 0);
+    std::vector<Block_ID> new_palette;
     std::vector<uint16_t> new_counts;
     for (size_t i = 0; i < m_palette.size(); ++i) {
         if (m_counts[i] == 0) continue;
-        remap[i] = static_cast<uint8_t>(new_palette.size());
+        remap[i] = static_cast<uint16_t>(new_palette.size());
         new_palette.push_back(m_palette[i]);
         new_counts.push_back(m_counts[i]);
     }
@@ -180,6 +183,7 @@ Chunk::Chunk(int chunk_x, int chunk_y, int chunk_z, const World_Generator& gener
     // Номер объекта нужен потому, что позиция в мире не отличает объект от его замены: выгрузили
     // и загрузили заново — позиция та же, а результат задачи, снятой для старого объекта, применять нельзя.
     m_instance_id = ++g_chunk_instance_counter;
+    m_dimension = generator.get_dimension_id();
 }
 
 void Chunk::recalculate_metadata() {
@@ -190,12 +194,12 @@ void Chunk::recalculate_metadata() {
         }
         return;
     }
-    std::vector<uint8_t> flat(Chunk_Block_Grid::voxel_count);
+    std::vector<Block_ID> flat(Chunk_Block_Grid::voxel_count);
     m_blocks.unpack(flat.data());
     constexpr size_t layer = static_cast<size_t>(Config::chunk_size) * Config::chunk_size;
-    const uint8_t air = static_cast<uint8_t>(static_cast<Block_ID>(Block_Types::Air));
+    const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
     for (int y = 0; y < Config::chunk_height; ++y) {
-        const uint8_t* row = flat.data() + static_cast<size_t>(y) * layer;
+        const Block_ID* row = flat.data() + static_cast<size_t>(y) * layer;
         int count = 0;
         for (size_t i = 0; i < layer; ++i) count += (row[i] != air);
         m_layer_block_count[y] = count;
@@ -453,14 +457,14 @@ namespace {
     constexpr size_t kVoxels = kLayer * kH;
 
     // Биты ключа слияния грани (см. комментарий выше): id | meta<<8 | light<<16 | флаги.
-    constexpr uint32_t kKeyPresent = 1u << 24;
-    constexpr uint32_t kKeyRotate = 1u << 25;   // повёрнутая текстура — такой квад не сливается
+    constexpr uint64_t kKeyPresent = 1ull << 40;
+    constexpr uint64_t kKeyRotate = 1ull << 41;   // повёрнутая текстура — такой квад не сливается
 
     // Свойства блока по id: реестр неизменен после загрузки blocks.json, а Block_Properties —
     // тяжёлая структура, поэтому в горячем цикле держим только указатели.
-    const std::array<const Block_Properties*, k_max_block_types>& props_table() {
-        static const std::array<const Block_Properties*, k_max_block_types> table = [] {
-            std::array<const Block_Properties*, k_max_block_types> t{};
+    const std::vector<const Block_Properties*>& props_table() {
+        static const std::vector<const Block_Properties*> table = [] {
+            std::vector<const Block_Properties*> t(k_max_block_types, nullptr);
             for (size_t i = 0; i < t.size(); ++i) {
                 t[i] = &get_block_props(static_cast<Block_ID>(i));
             }
@@ -472,15 +476,15 @@ namespace {
     // Плоские таблицы "id -> нужный бит" (256 байт каждая, целиком в L1): в цикле построения маски
     // каждая клетка проверяется по ним, а не через Block_Properties (тяжёлая структура).
     struct Mesh_Tables {
-        std::array<uint8_t, k_max_block_types> greedy{};      // твёрдый блок, сливается жадным мешером
-        std::array<uint8_t, k_max_block_types> transparent{}; // грань к такому соседу видна
-        std::array<uint8_t, k_max_block_types> uses_meta{};
+        std::vector<uint8_t> greedy = std::vector<uint8_t>(k_max_block_types, 0);      // твёрдый блок, сливается жадным мешером
+        std::vector<uint8_t> transparent = std::vector<uint8_t>(k_max_block_types, 0); // грань к такому соседу видна
+        std::vector<uint8_t> uses_meta = std::vector<uint8_t>(k_max_block_types, 0);
         // Полупрозрачный кубический блок (листва, стекло, лёд, слизь): грань к такому же блоку
         // не рисуется (внутри кроны/глыбы граней нет), а свет грани огрубляется (light_coarse),
         // чтобы соседние грани сливались в большие квады, а не дробились из-за 1 уровня света.
-        std::array<uint8_t, k_max_block_types> cull_same{};
+        std::vector<uint8_t> cull_same = std::vector<uint8_t>(k_max_block_types, 0);
         // Непрозрачный полный куб (жадно-мешаемый и не прозрачный): такой блок закрывает AO соседних углов.
-        std::array<uint8_t, k_max_block_types> occludes{};
+        std::vector<uint8_t> occludes = std::vector<uint8_t>(k_max_block_types, 0);
         // Упакованный свет (sky<<4 | block) -> огрублённый до 6 уровней на канал (0,3,6,9,12,15).
         std::array<uint8_t, 256> light_coarse{};
     };
@@ -510,17 +514,19 @@ namespace {
     // Рабочие буферы мешера — свои у каждого потока (мешинг идёт в воркерах), чтобы не
     // аллоцировать ~100 КБ на каждую задачу.
     struct Mesh_Scratch {
-        std::array<uint8_t, kVoxels> blocks;       // id блоков чанка, плоско (y, z, x)
+        std::array<Block_ID, kVoxels> blocks;      // id блоков чанка, плоско (y, z, x)
         std::array<uint8_t, kVoxels> light;        // упакованный свет, плоско
         std::array<uint8_t, kVoxels> meta;         // метаданные блоков, плоско (для GPU-нагрузки)
         // Соседние клетки за границей чанка запрашиваются лениво и кэшируются: за пределами
         // загруженного мира блок спрашивается у генератора (дорого), поэтому берём только те
         // клетки, которые реально понадобились.
-        std::array<uint8_t, 6 * kLayer> border_block, border_light;
+        std::array<Block_ID, 6 * kLayer> border_block;
+        std::array<uint8_t, 6 * kLayer> border_light;
         std::array<uint8_t, 6 * kLayer> block_known, light_known;
         // Кольцо рёбер и углов за границей (для AO), лениво, как и грани.
-        std::array<uint8_t, Chunk_Ring::kSize> ring_block, ring_known;
-        std::array<uint32_t, kLayer> mask;
+        std::array<Block_ID, Chunk_Ring::kSize> ring_block;
+        std::array<uint8_t, Chunk_Ring::kSize> ring_known;
+        std::array<uint64_t, kLayer> mask;   // ключ слияния граней, см. kKey* ниже
         // Обход компонент прозрачных клеток одной секции (см. compute_section_connectivity).
         std::array<uint8_t, kLayer * Config::chunk_section_height> section_seen;
         std::array<uint16_t, kLayer * Config::chunk_section_height> section_stack;
@@ -768,7 +774,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
         // Layer culling: слои без единого блока пропускаются (дёшево — 32x32 на слой).
         for (int y = 0; y < kH; ++y) {
-            const uint8_t* row = S.blocks.data() + static_cast<size_t>(y) * kLayer;
+            const Block_ID* row = S.blocks.data() + static_cast<size_t>(y) * kLayer;
             int count = 0;
             for (size_t i = 0; i < kLayer; ++i) count += (row[i] != 0);
             layer_block_count[y] = count;
@@ -777,7 +783,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
     // Блок / свет в клетке чанка или в соседней клетке за его границей (ровно одна координата
     // выходит за диапазон: диагональных соседей мешер не спрашивает).
-    const auto block_at = [&](int x, int y, int z) -> uint8_t {
+    const auto block_at = [&](int x, int y, int z) -> Block_ID {
         if (static_cast<unsigned>(x) < static_cast<unsigned>(kN) &&
             static_cast<unsigned>(y) < static_cast<unsigned>(kH) &&
             static_cast<unsigned>(z) < static_cast<unsigned>(kN)) {
@@ -787,7 +793,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         if (!S.block_known[slot]) {
             S.block_known[slot] = 1;
             S.border_block[slot] = neighbor_lookup
-                ? static_cast<uint8_t>(static_cast<Block_ID>(
+                ? static_cast<Block_ID>((
                       neighbor_lookup(base_x + x, base_y + y, base_z + z)))
                 : static_cast<uint8_t>(0);
         }
@@ -810,12 +816,12 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
     };
 
     // Рёбра и углы за границей (две или три координаты вне чанка): лениво, через лукап соседей.
-    const auto ring_block_at = [&](int x, int y, int z) -> uint8_t {
+    const auto ring_block_at = [&](int x, int y, int z) -> Block_ID {
         const int idx = chunk_ring_index(x, y, z);
         if (!S.ring_known[idx]) {
             S.ring_known[idx] = 1;
             S.ring_block[idx] = neighbor_lookup
-                ? static_cast<uint8_t>(static_cast<Block_ID>(
+                ? static_cast<Block_ID>((
                       neighbor_lookup(base_x + x, base_y + y, base_z + z)))
                 : static_cast<uint8_t>(0);
         }
@@ -830,7 +836,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
             return mesh_tables().occludes[S.blocks[(static_cast<size_t>(y) * kN + z) * kN + x]] != 0;
         }
         const int out_axes = int(x < 0 || x >= kN) + int(y < 0 || y >= kH) + int(z < 0 || z >= kN);
-        const uint8_t id = out_axes >= 2 ? ring_block_at(x, y, z) : block_at(x, y, z);
+        const Block_ID id = out_axes >= 2 ? ring_block_at(x, y, z) : block_at(x, y, z);
         return mesh_tables().occludes[id] != 0;
     };
 
@@ -876,7 +882,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
     // Высота поверхности жидкости в клетке (0, если там не жидкость). Как в Minecraft: уровень
     // amount/9, а если над клеткой та же жидкость — полный блок (иначе в столбе воды были бы щели).
-    const auto liquid_height = [&](int x, int y, int z, uint8_t id) -> float {
+    const auto liquid_height = [&](int x, int y, int z, Block_ID id) -> float {
         const bool x_in = static_cast<unsigned>(x) < static_cast<unsigned>(kN);
         const bool z_in = static_cast<unsigned>(z) < static_cast<unsigned>(kN);
         // Над клеткой на самом краю чанка (две оси сразу за границей) мешер соседей не знает.
@@ -910,7 +916,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         if (solid_on_gpu && !all_air) {
             for (int y = y_begin; y < y_end && !section_greedy; ++y) {
                 if (layer_block_count[y] == 0) continue;
-                const uint8_t* row = S.blocks.data() + static_cast<size_t>(y) * kLayer;
+                const Block_ID* row = S.blocks.data() + static_cast<size_t>(y) * kLayer;
                 for (size_t i = 0; i < kLayer; ++i) {
                     if (mesh_tables().greedy[row[i]]) { section_greedy = true; break; }
                 }
@@ -948,11 +954,11 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                         for (int v = 0; v < v_count; ++v) {
                             const int row = s * s_stride + (v_begin + v) * v_stride;
                             for (int u = 0; u < kN; ++u) {
-                                uint32_t key = 0;
+                                uint64_t key = 0;
                                 const int idx = row + u * u_stride;
-                                const uint8_t cur = S.blocks[idx];
+                                const Block_ID cur = S.blocks[idx];
                                 if (tab.greedy[cur]) {
-                                    uint8_t neighbor;
+                                    Block_ID neighbor;
                                     int c[3];
                                     if (inside) {
                                         neighbor = S.blocks[idx + sign * s_stride];
@@ -975,10 +981,11 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                                        c[2] + (axis == 2 ? sign : 0));
                                         if (tab.cull_same[cur]) face_light = tab.light_coarse[face_light];
                                         const uint32_t ao = face_ao(c, axis, sign, ua, va);
-                                        key = static_cast<uint32_t>(cur) |
-                                              (static_cast<uint32_t>(meta) << 8) |
-                                              (static_cast<uint32_t>(face_light) << 16) |
-                                              (ao << 24);
+                                        // Ключ: id (биты 0..15) | meta (16..23) | свет (24..31) | AO (32..39).
+                                        key = static_cast<uint64_t>(cur) |
+                                              (static_cast<uint64_t>(meta) << 16) |
+                                              (static_cast<uint64_t>(face_light) << 24) |
+                                              (static_cast<uint64_t>(ao) << 32);
                                         any = true;
                                     }
                                 }
@@ -989,11 +996,11 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
 
                         for (int v = 0; v < v_count; ++v) {
                             for (int u = 0; u < kN;) {
-                                const uint32_t key = S.mask[static_cast<size_t>(v) * kN + u];
+                                const uint64_t key = S.mask[static_cast<size_t>(v) * kN + u];
                                 if (key == 0) { ++u; continue; }
 
-                                const Block_Properties& bp = *props[key & 0xFFu];
-                                const uint8_t meta = static_cast<uint8_t>((key >> 8) & 0xFFu);
+                                const Block_Properties& bp = *props[key & 0xFFFFu];
+                                const uint8_t meta = static_cast<uint8_t>((key >> 16) & 0xFFu);
                                 bool rotate = false;
                                 const glm::vec4& uv = bp.uses_meta
                                     ? bp.resolve_face_uv(face, meta, rotate)
@@ -1028,8 +1035,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                                   static_cast<float>(base_y + c[1]),
                                                   static_cast<float>(base_z + c[2]),
                                                   axis, sign, w, h, uv,
-                                                  static_cast<float>((key >> 16) & 0xFFu), rotate,
-                                                  (key >> 24) & 0xFFu);
+                                                  static_cast<float>((key >> 24) & 0xFFu), rotate,
+                                                  (key >> 32) & 0xFFu);
                                 u += w;
                             }
                         }
@@ -1043,7 +1050,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                 if (layer_block_count[y] == 0) continue;
                 for (int z = 0; z < kN; ++z) {
                     for (int x = 0; x < kN; ++x) {
-                        const uint8_t id = S.blocks[(static_cast<size_t>(y) * kN + z) * kN + x];
+                        const Block_ID id = S.blocks[(static_cast<size_t>(y) * kN + z) * kN + x];
                         if (id == 0) continue;
                         const Block_Properties& bp = *props[id];
                         const Block_Types block = static_cast<Block_Types>(id);
@@ -1067,7 +1074,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                             const bool negative = (d & 1) != 0;
                             if (negative && only_positive_faces) continue;
                             const int nx = x + dirs[d][0], ny = y + dirs[d][1], nz = z + dirs[d][2];
-                            const uint8_t nid = block_at(nx, ny, nz);
+                            const Block_ID nid = block_at(nx, ny, nz);
 
                             float ylo = 0.0f, yhi = h;
                             if (nid == id) {
@@ -1124,42 +1131,45 @@ namespace {
     // номера фиксированной битности: 0 бит (одно значение) или 1..8 бит. Номер i лежит в битах
     // [i*bits, (i+1)*bits), младший бит первым, в uint32-словах; значение может пересекать границу
     // двух слов. Декодер в mesh_greedy.comp читает ровно так же. header: палитра, слова, битность.
-    void pack_channel(const uint8_t* values, size_t count, std::vector<uint32_t>& out,
+    template <typename T>
+    void pack_channel(const T* values, size_t count, std::vector<uint32_t>& out,
                       std::array<uint32_t, 3>& header) {
-        std::array<int, 256> index;
-        index.fill(-1);
-        std::array<uint8_t, 256> palette{};
-        size_t palette_size = 0;
+        // Таблица "значение -> номер в палитре канала": значения могут быть любой ширины (id блоков
+        // до 16 бит). Заполняем только использованные записи и сбрасываем их обратно после прохода.
+        thread_local std::vector<int> index;
+        if (index.size() < (size_t(1) << (8 * sizeof(T)))) index.assign(size_t(1) << (8 * sizeof(T)), -1);
+        std::vector<T> palette;
         for (size_t i = 0; i < count; ++i) {
-            const uint8_t v = values[i];
+            const T v = values[i];
             if (index[v] < 0) {
-                index[v] = static_cast<int>(palette_size);
-                palette[palette_size++] = v;
+                index[v] = static_cast<int>(palette.size());
+                palette.push_back(v);
             }
         }
 
         uint32_t bits = 0;
-        if (palette_size > 1) {
+        if (palette.size() > 1) {
             bits = 1;
-            while ((static_cast<size_t>(1) << bits) < palette_size) ++bits;
+            while ((static_cast<size_t>(1) << bits) < palette.size()) ++bits;
         }
 
         header[0] = static_cast<uint32_t>(out.size());
-        for (size_t p = 0; p < palette_size; ++p) out.push_back(palette[p]);
+        for (const T v : palette) out.push_back(static_cast<uint32_t>(v));
         header[1] = static_cast<uint32_t>(out.size());
         header[2] = bits;
-        if (bits == 0) return;
-
-        const size_t base = out.size();
-        out.resize(base + (count * bits + 31) / 32, 0u);
-        for (size_t i = 0; i < count; ++i) {
-            const uint32_t idx = static_cast<uint32_t>(index[values[i]]);
-            const size_t bit = i * bits;
-            const size_t w = base + (bit >> 5);
-            const unsigned s = static_cast<unsigned>(bit & 31);
-            out[w] |= idx << s;
-            if (s + bits > 32) out[w + 1] |= idx >> (32 - s);
+        if (bits != 0) {
+            const size_t base = out.size();
+            out.resize(base + (count * bits + 31) / 32, 0u);
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t idx = static_cast<uint32_t>(index[values[i]]);
+                const size_t bit = i * bits;
+                const size_t w = base + (bit >> 5);
+                const unsigned s = static_cast<unsigned>(bit & 31);
+                out[w] |= idx << s;
+                if (s + bits > 32) out[w + 1] |= idx >> (32 - s);
+            }
         }
+        for (const T v : palette) index[v] = -1;
     }
 }
 
@@ -1219,10 +1229,10 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
     const int base_y = chunk_y * kH;
     const int base_z = chunk_z * kN;
     for (int face = 0; face < 6; ++face) {
-        uint8_t* dst_blocks = S.border_block.data() + static_cast<size_t>(face) * kLayer;
+        Block_ID* dst_blocks = S.border_block.data() + static_cast<size_t>(face) * kLayer;
         uint8_t* dst_light = S.border_light.data() + static_cast<size_t>(face) * kLayer;
         if (!face_needed[face]) {
-            std::fill(dst_blocks, dst_blocks + kLayer, static_cast<uint8_t>(0));
+            std::fill(dst_blocks, dst_blocks + kLayer, static_cast<Block_ID>(0));
             std::fill(dst_light, dst_light + kLayer, static_cast<uint8_t>(0));
             continue;
         }
@@ -1247,7 +1257,7 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
                 const size_t i = static_cast<size_t>(b) * kN + a;
                 if (!have_blocks) {
                     dst_blocks[i] = neighbor_lookup
-                        ? static_cast<uint8_t>(static_cast<Block_ID>(neighbor_lookup(wx, wy, wz)))
+                        ? static_cast<Block_ID>((neighbor_lookup(wx, wy, wz)))
                         : static_cast<uint8_t>(0);
                 }
                 if (!have_light) {
@@ -1272,7 +1282,7 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
         int x = 0, y = 0, z = 0;
         chunk_ring_coords(idx, x, y, z);
         S.ring_block[idx] = neighbor_lookup
-            ? static_cast<uint8_t>(static_cast<Block_ID>(neighbor_lookup(base_x + x, base_y + y, base_z + z)))
+            ? static_cast<Block_ID>((neighbor_lookup(base_x + x, base_y + y, base_z + z)))
             : static_cast<uint8_t>(0);
     }
     pack_channel(S.ring_block.data(), Chunk_Ring::kSize, meshes.gpu_words, meshes.gpu_channels[15]);
@@ -1282,7 +1292,9 @@ void build_gpu_solid_payload(Chunk_Meshes& meshes,
 Gpu_Mesh_Tables gpu_mesh_tables() {
     const Mesh_Tables& tab = mesh_tables();
     Gpu_Mesh_Tables out;
-    for (size_t i = 0; i < static_cast<size_t>(k_max_block_types); ++i) {
+    const size_t capacity = Block_Registry::get_instance().id_capacity();
+    out.flags.assign(capacity, 0u);
+    for (size_t i = 0; i < capacity; ++i) {
         out.flags[i] = (tab.greedy[i] ? 1u : 0u) | (tab.transparent[i] ? 2u : 0u) |
                        (tab.uses_meta[i] ? 4u : 0u) | (tab.cull_same[i] ? 8u : 0u) |
                        (tab.occludes[i] ? 16u : 0u);

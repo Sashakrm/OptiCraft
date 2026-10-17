@@ -149,6 +149,7 @@ bool World_File::load(World_Settings& settings) const {
     }
 
     if (const auto dim = read_string_field(contents, "dimension")) settings.dimension = *dim;
+    if (const auto biome = read_string_field(contents, "biome")) settings.biome = *biome;
     if (const auto mode = read_string_field(contents, "game_mode")) settings.game_mode = *mode;
     if (const auto played = read_string_field(contents, "last_played")) settings.last_played = *played;
     const auto px = read_float_field(contents, "player_x");
@@ -186,6 +187,7 @@ bool World_File::save(const World_Settings& settings) const {
          << "  \"generation_folder\": \"" << escape_json(settings.generation_folder) << "\",\n"
          << "  \"seed\": " << settings.seed << ",\n"
          << "  \"dimension\": \"" << escape_json(settings.dimension) << "\",\n"
+         << "  \"biome\": \"" << escape_json(settings.biome) << "\",\n"
          << "  \"game_mode\": \"" << escape_json(settings.game_mode) << "\",\n"
          << "  \"last_played\": \"" << escape_json(settings.last_played) << "\",\n";
     if (settings.has_player_position) {
@@ -243,14 +245,13 @@ namespace {
         }
 
         if (version == 2) {
-            std::vector<std::uint8_t> payload(blocks.size_bytes());
+            // Старый формат: байт на воксель (id < 256).
+            std::vector<std::uint8_t> payload(Chunk_Block_Grid::voxel_count);
             file.read(reinterpret_cast<char*>(payload.data()),
                       static_cast<std::streamsize>(payload.size()));
             if (!file) return false;
-            for (auto id : payload) {
-                if (id >= k_max_block_types) return false;
-            }
-            blocks.assign_flat(payload.data());
+            std::vector<Block_ID> wide(payload.begin(), payload.end());
+            blocks.assign_flat(wide.data());
             return true;
         }
 

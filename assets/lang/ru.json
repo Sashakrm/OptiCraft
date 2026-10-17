@@ -7,8 +7,6 @@
 
   "mode.survival": "Выживание",
   "mode.creative": "Творчество",
-  "world_type.classic": "Классика",
-  "world_type.islands": "Острова",
 
   "menu.subtitle": "Воксельная песочница",
   "menu.singleplayer": "Одиночная игра",
@@ -29,6 +27,13 @@
   "create.seed": "Зерно (пусто - случайное)",
   "create.game_mode": "Режим: {0}",
   "create.world_type": "Тип мира: {0}",
+  "world_type.normal": "Обычный",
+  "world_type.superflat": "Супер плоский",
+  "world_type.single_biome": "Один биом",
+  "world_type.single_islands": "Парящие острова",
+  "world_type.flat_test": "Тест: плоский",
+  "world_type.void_test": "Тест: пустота",
+  "create.biome": "Биом: {0}",
 
   "pause.title": "Меню игры",
   "pause.back": "Вернуться в игру",
