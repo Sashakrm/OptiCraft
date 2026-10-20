@@ -71,7 +71,11 @@ set(SOURCES
         ${SRC_DIR}/world/crafting/Crop_Manager.cpp
         ${SRC_DIR}/world/crafting/Smelting.cpp
         ${SRC_DIR}/world/storage/Region_File.cpp
+        ${SRC_DIR}/world/storage/Chunk_IO.cpp
         ${SRC_DIR}/world/generation/Biome.cpp
+        ${SRC_DIR}/world/generation/Cave_Network.cpp
+        ${SRC_DIR}/world/generation/River_Network.cpp
+        ${SRC_DIR}/world/generation/Structure_Placement.cpp
         ${SRC_DIR}/world/blocks/Block_Interaction.cpp
         ${SRC_DIR}/world/chunks/Chunk.cpp
         ${SRC_DIR}/world/chunks/Chunk_Manager.cpp
@@ -163,6 +167,9 @@ target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/world/blocks/Container_Session.h
         ${SRC_DIR}/world/blocks/Block_Types.h
         ${SRC_DIR}/world/generation/Biome.h
+        ${SRC_DIR}/world/generation/Cave_Network.h
+        ${SRC_DIR}/world/generation/River_Network.h
+        ${SRC_DIR}/world/generation/Structure_Placement.h
         ${SRC_DIR}/world/blocks/Block_Interaction.h
         ${SRC_DIR}/world/chunks/Chunk.h
         ${SRC_DIR}/world/chunks/Chunk_Manager.h
@@ -172,6 +179,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/world/generation/World_Generator.h
         ${SRC_DIR}/world/storage/World_File.h
         ${SRC_DIR}/world/storage/Region_File.h
+        ${SRC_DIR}/world/storage/Chunk_IO.h
 
         ${SRC_DIR}/physics/Raycast.h
 

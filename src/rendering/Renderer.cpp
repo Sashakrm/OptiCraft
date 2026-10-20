@@ -838,8 +838,18 @@ void Renderer::draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks
     if (!to_submit.empty()) {
         if (m_gpu_readback_count == kGpuReadbackRing) poll_gpu_readbacks(true);
         if (m_gpu_readback_count < kGpuReadbackRing) {
-            const size_t batch_size = std::min(to_submit.size(), static_cast<size_t>(kGpuBatchChunks));
-            submit_gpu_batch(std::vector<const Renderable_Chunk*>(to_submit.begin(), to_submit.begin() + batch_size));
+            // Бюджет кадра: to_submit уже от ближних к дальним, поэтому останавливаемся на первом
+            // чанке, который не влезает. Так дальние не обгоняют ближние.
+            std::vector<const Renderable_Chunk*> batch;
+            size_t bytes = 0;
+            for (const Renderable_Chunk* chunk_ptr : to_submit) {
+                if (batch.size() == static_cast<size_t>(kGpuBatchChunks)) break;
+                const size_t chunk_bytes = chunk_ptr->meshes->gpu_words.size() * sizeof(uint32_t);
+                if (!batch.empty() && bytes + chunk_bytes > kGpuFrameBudgetBytes) break;
+                batch.push_back(chunk_ptr);
+                bytes += chunk_bytes;
+            }
+            submit_gpu_batch(batch);
         }
     }
 

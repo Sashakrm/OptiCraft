@@ -319,6 +319,43 @@ void Region_File::release_sectors_locked(uint32_t first_sector, uint32_t sector_
 // ---------------------------------------------------------------------------
 //  Чтение / запись
 // ---------------------------------------------------------------------------
+bool Region_File::read_batch(const std::vector<Key>& keys, const std::vector<Chunk_Block_Grid*>& outs,
+                             std::vector<uint8_t>& ok) {
+    ok.assign(keys.size(), 0);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!open_locked()) return false;
+
+    // Читаем в порядке расположения на диске: последовательные чтения вместо прыжков по файлу.
+    std::vector<std::pair<uint32_t, size_t>> order;
+    order.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        const auto it = m_index.find(keys[i]);
+        if (it != m_index.end()) order.push_back({it->second.first_sector, i});
+    }
+    std::sort(order.begin(), order.end());
+
+    bool all_ok = true;
+    for (const auto& [sector, i] : order) {
+        (void)sector;
+        ok[i] = read_locked(keys[i], *outs[i]) ? 1 : 0;
+        all_ok = all_ok && ok[i];
+    }
+    return all_ok;
+}
+
+bool Region_File::write_batch(const std::vector<Key>& keys, const std::vector<const Chunk_Block_Grid*>& blocks) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!open_locked()) return false;
+
+    bool all_ok = true;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        all_ok = write_locked(keys[i], *blocks[i]) && all_ok;
+    }
+    // Индекс пишется один раз на всю пачку, а не на каждый чанк.
+    all_ok = flush_locked() && all_ok;
+    return all_ok;
+}
+
 bool Region_File::contains(const Key& key) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!open_locked()) return false;
@@ -327,6 +364,10 @@ bool Region_File::contains(const Key& key) {
 
 bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    return read_locked(key, blocks);
+}
+
+bool Region_File::read_locked(const Key& key, Chunk_Block_Grid& blocks) {
     if (!open_locked()) return false;
 
     auto it = m_index.find(key);
@@ -426,6 +467,10 @@ bool Region_File::read(const Key& key, Chunk_Block_Grid& blocks) {
 
 bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    return write_locked(key, blocks);
+}
+
+bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
     if (!open_locked()) return false;
 
     // Пишем всегда 16-битными id: ограничения на число видов блоков на диске нет.
@@ -509,6 +554,10 @@ bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
 
 bool Region_File::flush() {
     std::lock_guard<std::mutex> lock(m_mutex);
+    return flush_locked();
+}
+
+bool Region_File::flush_locked() {
     if (!m_open || !m_index_dirty) return true;
 
     // Индекс пишется в новое место в конце файла. Заголовок обновляется

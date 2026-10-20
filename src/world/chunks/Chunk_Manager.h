@@ -6,6 +6,7 @@
 #define OPTICRAFT_CHUNK_MANAGER_H
 
 #include <unordered_set>
+#include <chrono>
 #include <memory>
 #include <limits>
 #include <atomic>
@@ -20,6 +21,11 @@
 #include <glm/glm.hpp>
 #include "world/chunks/Chunk.h"
 #include "world/chunks/Chunk_Table.h"
+#include "world/chunks/Chunk_Slot_Pool.h"
+#include "world/storage/Chunk_IO.h"
+#include "utils/concurrency/Mpmc_Queue.h"
+#include "utils/concurrency/Priority_Bucket_Queue.h"
+#include <deque>
 #include "world/blocks/Block_Entity_Store.h"
 #include "math/Hash_Utils.h"
 #include "world/generation/World_Generator.h"
@@ -62,18 +68,11 @@ private:
         int priority;
     };
 
-    // priority_queue по умолчанию — max-heap; чтобы наверху оказывалась задача с МЕНЬШИМ
-    // priority (= более срочная), сравнение инвертировано.
-    struct Chunk_Job_Priority {
-        bool operator()(const Chunk_Job& a, const Chunk_Job& b) const {
-            return a.priority > b.priority;
-        }
-    };
 
     struct Chunk_Result {
         glm::ivec3 position;
         uint64_t generation_id;
-        std::unique_ptr<Chunk> chunk;
+        Chunk_Ptr chunk;
     };
 
     // Границы области захвата (см. begin_capture_region), прикладываются к задаче меша в момент
@@ -118,10 +117,6 @@ private:
         bool solid_on_gpu = false;
     };
 
-    struct Mesh_Job_Priority {
-        bool operator()(const Mesh_Job& a, const Mesh_Job& b) const { return a.priority > b.priority; }
-    };
-
     struct Mesh_Result {
         glm::ivec3 position;
         uint64_t generation_id;
@@ -134,6 +129,11 @@ private:
     // см. подробное обоснование в Chunk_Table.h. get_chunk() вызывается на каждое чтение
     // блока/света и на каждый видимый чанк при рендере каждый кадр, так что устройство ЭТОЙ
     // структуры — самое горячее место во всём Chunk_Manager.
+    // Слоты под чанки. Объявлен ДО m_chunks и очереди результатов: уничтожается последним, поэтому
+    // делетеры Chunk_Ptr всегда находят живой пул.
+    std::unique_ptr<Chunk_Slot_Pool> m_chunk_pool;
+    // Буферный слой диска: пачками пишет и читает регионы, не заставляя главный поток ждать диск.
+    std::unique_ptr<Chunk_IO> m_chunk_io;
     Chunk_Table m_chunks;
     // Меняется при загрузке, выгрузке и замене чанков: по нему кэш обхода достижимости знает, что набор изменился.
     uint64_t m_chunk_set_epoch = 0;
@@ -165,6 +165,19 @@ private:
     int m_player_chunk_y = 0;
     int m_load_radius;
 
+    // Движение игрока: скорость в блоках/с, сглаженная по кадрам. Нужна приоритету загрузки
+    // (чанки впереди идут раньше) и выбору вертикального окна.
+    glm::vec3 m_player_velocity{0.0f};
+    glm::vec3 m_last_player_pos{0.0f};
+    std::chrono::steady_clock::time_point m_last_pos_time{};
+    bool m_has_last_pos = false;
+    // Полуширина вертикального окна в чанках: слоёв = 2 * m_vertical_half. Обычно 4 (8 слоёв),
+    // при быстром вертикальном движении или малой дальности прорисовки — 2 (4 слоя).
+    int m_vertical_half = 4;
+    // Остались ли в окне незапрошенные чанки (load_around упёрся в лимит очереди). Тогда
+    // update_player_position доливает их по мере освобождения очереди.
+    bool m_load_backlog = false;
+
     const World_Generator* m_world_generator = nullptr;
     World_File m_world_file;
     std::string m_generation_folder{"Classic"};
@@ -177,10 +190,27 @@ private:
     // поле priority, посчитанное заранее при постановке в очередь — сам компаратор
     // не меняется во времени, так что обычный инвариант std::priority_queue не нарушается
     // (в отличие от гипотетического компаратора, читающего живую позицию игрока "на лету").
-    std::priority_queue<Chunk_Job, std::vector<Chunk_Job>, Chunk_Job_Priority> m_pending_jobs;
-    std::queue<Chunk_Result> m_completed_jobs;
-    std::priority_queue<Mesh_Job, std::vector<Mesh_Job>, Mesh_Job_Priority> m_pending_mesh_jobs;
-    std::queue<Mesh_Result> m_completed_mesh_jobs;
+    // Задачи генерации: корзины по приоритету, без замков (см. Priority_Bucket_Queue).
+    Priority_Bucket_Queue<Chunk_Job> m_pending_jobs;
+    std::atomic<size_t> m_pending_job_count{0};
+    std::atomic<int> m_sleepers{0};
+    void wake_workers();
+    // Поколение вида: растёт при каждой смене чанка игрока. Кольца загруженных чанков пересчитываются
+    // под него; меш ставится с приоритетом по кольцу, а кольца 0–1 без меша уходят сразу.
+    uint32_t m_view_generation = 0;
+    uint8_t view_ring_of(const glm::ivec3& position) const;
+    void refresh_view_rings();
+    Mpmc_Queue<Chunk_Result> m_completed_jobs;
+    // Задачи загрузки, которые есть на диске: их читает m_disk_reader пачками (см. Chunk_IO).
+    std::deque<Chunk_Job> m_pending_disk_reads;
+    std::thread m_disk_reader;
+    // Задачи мешинга: приоритет = кольцо * 2048 + квадрат расстояния (до 2047), то есть до 34816 при
+    // кольце 16. Корзины шириной 16 покрывают весь диапазон (2176 штук); при шаге 1 и 1024 корзинах
+    // все кольца от 1 и дальше попадали в одну последнюю корзину и шли FIFO, без порядка по кольцам.
+    // Сами задачи лежат за unique_ptr: Mesh_Job крупный, а ячейки кольца хранят указатель.
+    Priority_Bucket_Queue<std::unique_ptr<Mesh_Job>, 16, 2176, 64> m_pending_mesh_jobs;
+    std::atomic<size_t> m_pending_mesh_count{0};
+    Mpmc_Queue<Mesh_Result> m_completed_mesh_jobs;
     // Чанки, для которых задача пересборки меша прямо сейчас в очереди/выполняется воркером —
     // не даём поставить вторую задачу поверх (бессмысленно дублирует работу).
     Chunk_Coord_Set m_pending_mesh_rebuilds;
@@ -192,7 +222,6 @@ private:
     // Процесс-глобально: включает GPU-путь для всех менеджеров (см. set_gpu_solid_meshing).
     static inline bool s_gpu_solid_meshing = false;
     std::mutex m_job_mutex;
-    std::mutex m_completed_mutex;
     std::condition_variable m_job_available;
     bool m_stop_workers = false;
 
@@ -243,13 +272,21 @@ private:
     void enqueue_chunk_load(int cx, int cy, int cz);
     // Приоритет задачи генерации: квадрат расстояния до игрока, вертикаль весит в 4 раза сильнее.
     int chunk_job_priority(int cx, int cy, int cz) const;
+    // Лимит одновременно запрошенных чанков: растёт со скоростью игрока.
+    size_t max_inflight_chunks() const;
+    // Пересчитывает вертикальное окно по скорости и дальности; true, если оно изменилось.
+    bool update_vertical_window();
     // Пересчёт приоритетов всех задач в очереди после смены чанка игроком; задачи вне окна загрузки
     // снимаются (их запись в m_requested_chunks тоже чистится, чтобы чанк можно было поставить снова).
     void reprioritize_pending_jobs();
+    // То же для задач мешинга: приоритет пересчитывается по текущему кольцу и расстоянию (задачи не снимаются).
+    void reprioritize_pending_meshes();
     bool save_chunk_to_disk(const Chunk& chunk) const;
     void enqueue_mesh_rebuild(int cx, int cy, int cz);
     bool is_chunk_wanted(const glm::ivec3& position) const;
     void start_workers();
+    void disk_reader_loop();
+    void requeue_generation(const Chunk_Job& job);
     void stop_workers();
     void worker_loop(bool mesh_dedicated = false);
 

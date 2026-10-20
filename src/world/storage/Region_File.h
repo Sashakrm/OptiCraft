@@ -81,6 +81,11 @@ public:
 
     bool read(const Key& key, Chunk_Block_Grid& blocks);
     bool write(const Key& key, const Chunk_Block_Grid& blocks);
+    // Пакетные операции: замок и сброс индекса один раз на всю пачку. outs[i] / blocks[i] — буферы
+    // вызывающего. read_batch сортирует чтения по расположению на диске. ok[i] = 1, если чанк прочитан.
+    bool read_batch(const std::vector<Key>& keys, const std::vector<Chunk_Block_Grid*>& outs,
+                    std::vector<uint8_t>& ok);
+    bool write_batch(const std::vector<Key>& keys, const std::vector<const Chunk_Block_Grid*>& blocks);
     bool contains(const Key& key);
     // Сбрасывает индекс и данные на диск. Дёргается на выгрузке мира и при
     // выходе; между этими моментами индекс живёт в памяти.
@@ -137,6 +142,9 @@ private:
     // Плоский (распакованный) вид чанка: на диске формат прежний, а в памяти чанк палитровый.
     std::vector<Block_ID> m_scratch_flat;
 
+    bool read_locked(const Key& key, Chunk_Block_Grid& blocks);
+    bool write_locked(const Key& key, const Chunk_Block_Grid& blocks);
+    bool flush_locked();
     bool open_locked();
     bool create_empty_locked();
     bool read_header_locked();

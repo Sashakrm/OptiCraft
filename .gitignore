@@ -54,3 +54,8 @@ assets/texture/*_before_*.png
 tools/*.py
 __pycache__/
 *.pyc
+
+# tools/cave_paths: сборка и результаты прогона
+tools/cave_paths/cave_paths
+tools/cave_paths/*.o
+tools/cave_paths/out/

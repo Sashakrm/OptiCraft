@@ -536,6 +536,10 @@ private:
     // подряд, то есть тысячи записей по 32 КБ при обычной ходьбе по миру.
     bool m_is_modified = false;
     uint64_t m_mesh_version = 0;
+    // Кольцо относительно игрока (max по |dx|,|dz|,|dy|, 255 = неизвестно) и поколение вида, в котором оно
+    // посчитано. Менеджер пересчитывает кольца при каждой смене чанка игрока.
+    uint8_t m_view_ring = 255;
+    uint32_t m_view_generation = 0;
 
 public:
     Chunk(int chunk_x, int chunk_y, int chunk_z, const World_Generator& generator);
@@ -580,6 +584,12 @@ public:
     const Chunk_Meshes& get_meshes() const { return m_meshes; }
     Chunk_Meshes& get_meshes_mutable() { return m_meshes; }
     uint64_t get_mesh_version() const { return m_mesh_version; }
+    uint8_t get_view_ring() const { return m_view_ring; }
+    uint32_t get_view_generation() const { return m_view_generation; }
+    void set_view_ring(uint8_t ring, uint32_t generation) {
+        m_view_ring = ring;
+        m_view_generation = generation;
+    }
     bool is_mesh_dirty() const { return m_is_mesh_dirty; }
     bool is_modified() const { return m_is_modified; }
     void mark_modified() { m_is_modified = true; }

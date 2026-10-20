@@ -28,16 +28,23 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="">
+    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="исправление жадного алгоритма">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Game.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/mobs/player.glb" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Table.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Table.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/dimensions/Dimension.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/dimensions/Dimension.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -76,23 +83,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.368127902143067" />
-      <entry key="MS500" value="4.00141774424706" />
-      <entry key="S2" value="9.967359207209988" />
-      <entry key="S5" value="20.349395707018456" />
-      <entry key="S10" value="37.780808732464685" />
-      <entry key="S30" value="91.05584343033262" />
-      <entry key="S60" value="140.95100004673756" />
-      <entry key="M2" value="232.47207889054755" />
-      <entry key="M5" value="452.8292238619496" />
-      <entry key="M10" value="647.7061670929738" />
-      <entry key="M15" value="777.3611078746065" />
-      <entry key="M30" value="1111.8263059009646" />
-      <entry key="H1" value="1638.8909596512956" />
-      <entry key="H2" value="2295.354232797781" />
-      <entry key="H4" value="2985.250356020461" />
-      <entry key="D1" value="4102.1415922059605" />
-      <entry key="W1" value="4386.836341357959" />
+      <entry key="MS100" value="1.0002786790152045" />
+      <entry key="MS500" value="1.2492706038296504" />
+      <entry key="S2" value="2.5517128608381556" />
+      <entry key="S5" value="3.8396628518634808" />
+      <entry key="S10" value="4.713862350806286" />
+      <entry key="S30" value="12.719538907535687" />
+      <entry key="S60" value="47.5982178850414" />
+      <entry key="M2" value="137.3649995360096" />
+      <entry key="M5" value="378.1682780541549" />
+      <entry key="M10" value="612.2481898293246" />
+      <entry key="M15" value="764.1411851498326" />
+      <entry key="M30" value="1125.4538463223628" />
+      <entry key="H1" value="1670.8275223879214" />
+      <entry key="H2" value="2342.68068845963" />
+      <entry key="H4" value="3045.0983544281326" />
+      <entry key="D1" value="4179.850289805201" />
+      <entry key="W1" value="4469.0282789615085" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -100,37 +107,37 @@
       <entry key="S2" value="0.0" />
       <entry key="S5" value="0.0" />
       <entry key="S10" value="0.0" />
-      <entry key="S30" value="1.472195721660473E-114" />
-      <entry key="S60" value="1.2133407277679474E-57" />
-      <entry key="M2" value="3.483304074823084E-29" />
-      <entry key="M5" value="4.1380578245549605E-12" />
-      <entry key="M10" value="2.0342308571141173E-6" />
-      <entry key="M15" value="1.6060650861669752E-4" />
-      <entry key="M30" value="0.013087132829415326" />
-      <entry key="H1" value="0.14766272678709186" />
-      <entry key="H2" value="0.6593950754727764" />
-      <entry key="H4" value="1.5644900528672014" />
-      <entry key="D1" value="3.4047164076129373" />
-      <entry key="W1" value="3.9085619273994094" />
+      <entry key="S30" value="3.769550083689806E-116" />
+      <entry key="S60" value="1.941532921093472E-58" />
+      <entry key="M2" value="1.393389005659729E-29" />
+      <entry key="M5" value="2.8683289204776157E-12" />
+      <entry key="M10" value="1.6936218036317788E-6" />
+      <entry key="M15" value="1.4213704208666892E-4" />
+      <entry key="M30" value="0.012311658951048545" />
+      <entry key="H1" value="0.14322107100038303" />
+      <entry key="H2" value="0.6494021407285611" />
+      <entry key="H4" value="1.5525901067867087" />
+      <entry key="D1" value="3.4003864612338894" />
+      <entry key="W1" value="3.9078514383973344" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.2775471203557502" />
-      <entry key="MS500" value="3.956444925051752" />
-      <entry key="S2" value="9.940295611983" />
-      <entry key="S5" value="20.32698884540036" />
-      <entry key="S10" value="37.759489564742765" />
-      <entry key="S30" value="91.03829611008672" />
-      <entry key="S60" value="140.93736832216925" />
-      <entry key="M2" value="232.46076963576593" />
-      <entry key="M5" value="452.8203204226229" />
-      <entry key="M10" value="647.6997594287175" />
-      <entry key="M15" value="777.3561082487951" />
-      <entry key="M30" value="1111.835572162184" />
-      <entry key="H1" value="1639.035379476497" />
-      <entry key="H2" value="2296.0106241187314" />
-      <entry key="H4" value="2986.812325121576" />
-      <entry key="D1" value="4105.545565913846" />
-      <entry key="W1" value="4390.74478485038" />
+      <entry key="MS100" value="0.9529109384576575" />
+      <entry key="MS500" value="1.2383806078693567" />
+      <entry key="S2" value="2.54631961449083" />
+      <entry key="S5" value="3.835428496742291" />
+      <entry key="S10" value="4.710871290718034" />
+      <entry key="S30" value="12.71689150080394" />
+      <entry key="S60" value="47.593555558665905" />
+      <entry key="M2" value="137.3583343842811" />
+      <entry key="M5" value="378.1608801660732" />
+      <entry key="M10" value="612.2421610971188" />
+      <entry key="M15" value="764.136278163741" />
+      <entry key="M30" value="1125.462312060422" />
+      <entry key="H1" value="1670.9674697105072" />
+      <entry key="H2" value="2343.327067492578" />
+      <entry key="H4" value="3046.6484101501187" />
+      <entry key="D1" value="4183.2499290526775" />
+      <entry key="W1" value="4472.936011206073" />
     </decayedShown>
   </component>
   <component name="ProjectApplicationVersion">
@@ -214,6 +221,21 @@
     <isAutomaticReloadCMake value="true" />
     <isAutomaticBootstrapAfterUpdate value="false" />
   </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="исправление жадного алгоритма" />
+    <option name="LAST_COMMIT_MESSAGE" value="исправление жадного алгоритма" />
+  </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
@@ -229,6 +251,11 @@
         <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
           <url>file://$PROJECT_DIR$/src/entities/hostile/Hostile_Mob.cpp</url>
           <option name="timeStamp" value="4" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/commands/Command_System.cpp</url>
+          <line>13</line>
+          <option name="timeStamp" value="6" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>

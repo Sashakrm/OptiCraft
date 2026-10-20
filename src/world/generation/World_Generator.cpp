@@ -13,19 +13,18 @@
 #include <string>
 
 namespace {
+
+// Деление с округлением вниз (для отрицательных координат).
+inline int floordiv_int(int a, int b) {
+    return a >= 0 ? a / b : -((-a + b - 1) / b);
+}
     // Уровень моря. Вода занимает Y <= 63 везде, где поверхность ниже этого уровня.
     constexpr int kSeaLevel = 63;
-
-    // Порог пещер общий для всех решений о пещерах/биомах.
-    constexpr double kCaveThreshold = 0.58;
 
     // Пороговые высоты горных биомов (абсолютные, над Y=0). Суша обычно лежит в 66..100.
     constexpr double kMountainHeight = 118.0;
     constexpr double kHighMountainHeight = 175.0;
     constexpr double kPlateauHeight = 92.0;
-
-    // Размер ячейки, на которой считается связность пещер (см. cave_flags_for_cell).
-    constexpr int kCaveCellSize = 16;
 
     uint64_t hash_position(int x, int z, uint32_t seed, int salt) {
         uint64_t h = static_cast<uint64_t>(seed);
@@ -128,10 +127,6 @@ namespace {
     constexpr size_t kColumnCacheMask = kColumnCacheSize - 1;
     constexpr size_t kColumnWays = 4;                    // колонок в одном наборе
 
-    constexpr size_t kCaveCellCacheBits = 11;            // 2048 ячеек 16^3
-    constexpr size_t kCaveCellCacheSize = 1u << kCaveCellCacheBits;
-    constexpr size_t kCaveCellCacheMask = kCaveCellCacheSize - 1;
-
     size_t cache_index2(int x, int z, size_t mask) {
         uint64_t h = static_cast<uint64_t>(static_cast<int64_t>(x)) * 0x9E3779B185EBCA87ull ^
                      static_cast<uint64_t>(static_cast<int64_t>(z)) * 0xC2B2AE3D27D4EB4Full;
@@ -139,133 +134,6 @@ namespace {
         return static_cast<size_t>(h) & mask;
     }
 
-    size_t cache_index3(int x, int y, int z, size_t mask) {
-        uint64_t h = static_cast<uint64_t>(static_cast<int64_t>(x)) * 0x9E3779B185EBCA87ull ^
-                     static_cast<uint64_t>(static_cast<int64_t>(y)) * 0xD6E8FEB86659FD93ull ^
-                     static_cast<uint64_t>(static_cast<int64_t>(z)) * 0xC2B2AE3D27D4EB4Full;
-        h ^= h >> 31;
-        return static_cast<size_t>(h) & mask;
-    }
-
-    // --- Решётка поля пещер (см. World_Generator::cave_lattice_value) ---------------------
-    // Два поля на разных решётках: тоннели (шаг 2, каналы A и B) и залы (шаг 4). Залы
-    // низкочастотные, поэтому их узлы в 2 раза реже по каждой оси — в 8 раз меньше узлов.
-    constexpr int kTunnelShift = 1;                        // шаг 2 = 1 << 1
-    constexpr int kChamberShift = 2;                       // шаг 4 = 1 << 2
-    // Плотное окно под чанк с запасом 8 блоков с каждой стороны (декорации): 50 блоков
-    // тоннельной решётки и 52 блока решётки залов.
-    constexpr int kTunnelWindowNodes = 25;
-    constexpr int kChamberWindowNodes = 13;
-    constexpr size_t kLatticeWindowMax = static_cast<size_t>(kTunnelWindowNodes) *
-                                         kTunnelWindowNodes * kTunnelWindowNodes;
-    constexpr size_t kLatticeSlots = 4096;                 // запасной хэш-кэш вне окна
-    constexpr size_t kLatticeSlotMask = kLatticeSlots - 1;
-    // Полоса тоннеля: тоннель есть, пока |шум| < kTunnelBand на обоих каналах.
-    constexpr double kTunnelBand = 0.16;
-    // Запас для границ ячеек (см. Cave_Field): гарантирует пропуски без округлений.
-    constexpr double kTunnelGate = kTunnelBand + 1e-6;
-    // Сырой порог залов: 0.5 * raw + 0.5 > 0.85 только при raw > 0.7.
-    constexpr double kChamberRawLimit = 0.7 - 1e-6;
-
-
-    // Трилинейная сумма восьми узлов ячейки. Порядок суммирования фиксирован, и окно, и плотный
-    // массив чанка идут через неё: значения совпадают бит-в-бит, так что декорации (окно) и сам
-    // чанк (плотные массивы) видят одну и ту же пещеру.
-    template <typename Fetch>
-    double trilinear_sum(double fx, double fy, double fz, Fetch&& fetch) {
-        const double wx[2] = {1.0 - fx, fx};
-        const double wy[2] = {1.0 - fy, fy};
-        const double wz[2] = {1.0 - fz, fz};
-        double sum = 0.0;
-        for (int corner = 0; corner < 8; ++corner) {
-            const int ox = corner & 1, oy = (corner >> 1) & 1, oz = (corner >> 2) & 1;
-            const double w = wx[ox] * wy[oy] * wz[oz];
-            if (w <= 0.0) continue;
-            sum += w * fetch(ox, oy, oz);
-        }
-        return sum;
-    }
-
-    // Положение точки мира в обеих решётках: угол ячейки и доля внутри неё.
-    struct Cave_Coords {
-        int tx, ty, tz;              // узел тоннелей (шаг 2)
-        double tfx, tfy, tfz;
-        int cx, cy, cz;              // узел залов (шаг 4)
-        double cfx, cfy, cfz;
-
-        Cave_Coords(int world_x, int world_y, int world_z) {
-            constexpr int kTunnelStep = 1 << kTunnelShift;
-            constexpr int kChamberStep = 1 << kChamberShift;
-            tx = world_x >> kTunnelShift;
-            ty = world_y >> kTunnelShift;
-            tz = world_z >> kTunnelShift;
-            tfx = (world_x - tx * kTunnelStep) / static_cast<double>(kTunnelStep);
-            tfy = (world_y - ty * kTunnelStep) / static_cast<double>(kTunnelStep);
-            tfz = (world_z - tz * kTunnelStep) / static_cast<double>(kTunnelStep);
-            cx = world_x >> kChamberShift;
-            cy = world_y >> kChamberShift;
-            cz = world_z >> kChamberShift;
-            cfx = (world_x - cx * kChamberStep) / static_cast<double>(kChamberStep);
-            cfy = (world_y - cy * kChamberStep) / static_cast<double>(kChamberStep);
-            cfz = (world_z - cz * kChamberStep) / static_cast<double>(kChamberStep);
-        }
-    };
-
-    // Формула плотности пещеры — одна для окна декораций и для плотных массивов чанка.
-    // Поля отдаёт источник (tunnel(канал), chambers()), и спрашиваются они лениво: второй
-    // канал тоннелей и залы — только когда без них результат неизвестен.
-    template <typename Source>
-    double cave_density_formula(int world_y, double surface_height, Source& source) {
-        const auto clamp01 = [](double v) { return std::clamp(v, 0.0, 1.0); };
-        if (world_y > surface_height - 4.0) return 0.0;
-
-        const double n1 = source.tunnel(0);
-        const double depth = clamp01(
-            (surface_height - static_cast<double>(world_y) - 80.0) / 420.0);
-
-        double tunnel = 0.0;
-        if (std::abs(n1) < kTunnelBand) {
-            const double n2 = source.tunnel(1);
-            const double band1 = 1.0 - std::abs(n1) / kTunnelBand;
-            const double band2 = clamp01(1.0 - std::abs(n2) / kTunnelBand);
-            tunnel = band1 * band2;
-        }
-
-        // Залы дают вклад только глубже 80 блоков под поверхностью и только если тоннель
-        // ещё не насытил результат.
-        if (depth <= 0.0 || tunnel >= 1.0) return clamp01(tunnel);
-
-        const double chambers = clamp01(source.chambers() * 0.5 + 0.5);
-        const double cavern = chambers > 0.85 ? (chambers - 0.85) / 0.15 : 0.0;
-        return clamp01(std::max(tunnel, cavern * depth));
-    }
-
-
-    struct Lattice_Window {
-        uint32_t epoch = 0;
-        bool active = false;
-        int origin[3] = {0, 0, 0};                         // индекс узла угла окна
-        float values[kLatticeWindowMax * 2] = {};          // 2 канала на узел
-        uint8_t ready[kLatticeWindowMax] = {};             // бит канала: значение посчитано
-    };
-
-    struct Lattice_Slot {
-        int32_t key[3] = {0, 0, 0};
-        uint32_t epoch = 0;
-        bool valid = false;
-        uint8_t ready = 0;
-        float values[2] = {0.0f, 0.0f};
-    };
-
-    // Всё хранилище — thread_local POD с константной инициализацией: обращение к нему
-    // компилируется в обычный TLS-доступ, без гварда инициализации на каждый вызов. (Прежняя
-    // версия с function-local static thread_local тратила на гварды больше, чем экономила.)
-    // Воркеры генерации не делят ни строки памяти.
-    struct Cave_Lattice_Storage {
-        Lattice_Window windows[2];                         // 0 — тоннели, 1 — залы
-        Lattice_Slot slots[2][kLatticeSlots];
-    };
-    constinit thread_local Cave_Lattice_Storage g_cave_lattice{};
 }
 
 World_Generator::Noise_Field::Noise_Field(OpenSimplexEnv* env, long seed)
@@ -308,6 +176,14 @@ World_Generator::World_Generator(const std::string& generation_folder, uint32_t 
     m_detail = Noise_Field(m_noise_environment, derive_seed(seed, 0x07));
     m_mountain = Noise_Field(m_noise_environment, derive_seed(seed, 0x08));
     m_caves = Noise_Field(m_noise_environment, derive_seed(seed, 0x09));
+
+    m_cave_network = std::make_unique<Cave_Network>(
+        seed, [this](int world_x, int world_z) { return get_height(world_x, world_z); }, kSeaLevel);
+    m_river_network = std::make_unique<River_Network>(
+        seed, [this](int world_x, int world_z) { return get_height(world_x, world_z); }, kSeaLevel);
+    m_structures = std::make_unique<Structure_Placement>(
+        seed, [this](int world_x, int world_z) { return get_height(world_x, world_z); },
+        m_river_network.get(), kSeaLevel);
 
     register_default_biomes();
 }
@@ -473,281 +349,6 @@ double World_Generator::raw_surface_height(int world_x, int world_z,
                       static_cast<double>(Config::world_max_y));
 }
 
-// Значение канала поля пещер в узле решётки. Тоннели: канал 0 — A, 1 — B (шаг 2); залы:
-// канал 0 на решётке шага 4. Значение — чистая функция узла, так что окно чанка, хэш-кэш и
-// повторный расчёт дают одно и то же число (хранится как float).
-float World_Generator::compute_lattice_value(bool chambers, int channel,
-                                             int node_x, int node_y, int node_z) const {
-    if (chambers) {
-        const double wx = static_cast<double>(node_x) * (1 << kChamberShift);
-        const double wy = static_cast<double>(node_y) * (1 << kChamberShift);
-        const double wz = static_cast<double>(node_z) * (1 << kChamberShift);
-        return static_cast<float>(fbm3(m_caves, wx + 1731.0, wy * 0.6, wz - 941.0,
-                                       3, 0.0055, 2.0, 0.55));
-    }
-    const double wx = static_cast<double>(node_x) * (1 << kTunnelShift);
-    const double wy = static_cast<double>(node_y) * (1 << kTunnelShift);
-    const double wz = static_cast<double>(node_z) * (1 << kTunnelShift);
-    if (channel == 0) {
-        return static_cast<float>(fbm3(m_caves, wx, wy * 1.4, wz, 3, 0.018, 2.0, 0.5));
-    }
-    return static_cast<float>(fbm3(m_caves, wx + 4096.0, wy * 1.4, wz - 4096.0,
-                                   3, 0.018, 2.0, 0.5));
-}
-
-float World_Generator::cave_lattice_value(bool chambers, int channel,
-                                          int node_x, int node_y, int node_z) const {
-    // Узел вне окна декораций: хэш-кэш того же смысла (границы окна проверяет lattice_sum).
-    const int kind = chambers ? 1 : 0;
-    const int slot_channel = chambers ? 0 : channel;
-    const uint8_t bit = static_cast<uint8_t>(1u << slot_channel);
-
-    Lattice_Slot& slot = g_cave_lattice.slots[kind][cache_index3(node_x, node_y, node_z,
-                                                                 kLatticeSlotMask)];
-    if (!(slot.valid && slot.epoch == m_cache_epoch &&
-          slot.key[0] == node_x && slot.key[1] == node_y && slot.key[2] == node_z)) {
-        slot = Lattice_Slot{};
-        slot.key[0] = node_x;
-        slot.key[1] = node_y;
-        slot.key[2] = node_z;
-        slot.epoch = m_cache_epoch;
-        slot.valid = true;
-    }
-    if (!(slot.ready & bit)) {
-        slot.values[slot_channel] = compute_lattice_value(chambers, channel,
-                                                          node_x, node_y, node_z);
-        slot.ready = static_cast<uint8_t>(slot.ready | bit);
-    }
-    return slot.values[slot_channel];
-}
-
-void World_Generator::begin_cave_window(int world_x, int world_y, int world_z) const {
-    // Запас 8 блоков с каждой стороны чанка (декорации заходят за его границы).
-    constexpr int margin = 8;
-    for (int kind = 0; kind < 2; ++kind) {
-        const bool chambers = kind == 1;
-        Lattice_Window& window = g_cave_lattice.windows[kind];
-        const int shift = chambers ? kChamberShift : kTunnelShift;
-        std::fill(std::begin(window.ready), std::end(window.ready), static_cast<uint8_t>(0));
-        window.origin[0] = (world_x - margin) >> shift;
-        window.origin[1] = (world_y - margin) >> shift;
-        window.origin[2] = (world_z - margin) >> shift;
-        window.epoch = m_cache_epoch;
-        window.active = true;
-    }
-}
-
-// Сумма по 8 углам ячейки решётки. Окно проверяется один раз на вызов: внутри него углы
-// читаются по индексу. Промах — только при первом обращении к узлу.
-double World_Generator::lattice_sum(bool chambers, int channel,
-                                    int base_x, int base_y, int base_z,
-                                    double fx, double fy, double fz) const {
-    const int kind = chambers ? 1 : 0;
-    Lattice_Window& window = g_cave_lattice.windows[kind];
-    const int nodes = chambers ? kChamberWindowNodes : kTunnelWindowNodes;
-    const int slot_channel = chambers ? 0 : channel;
-    const uint8_t bit = static_cast<uint8_t>(1u << slot_channel);
-
-    const int dx = base_x - window.origin[0];
-    const int dy = base_y - window.origin[1];
-    const int dz = base_z - window.origin[2];
-    const bool inside = window.active && window.epoch == m_cache_epoch &&
-                        dx >= 0 && dy >= 0 && dz >= 0 &&
-                        dx + 1 < nodes && dy + 1 < nodes && dz + 1 < nodes;
-
-    return trilinear_sum(fx, fy, fz, [&](int ox, int oy, int oz) -> float {
-        const int node_x = base_x + ox, node_y = base_y + oy, node_z = base_z + oz;
-        if (!inside) return cave_lattice_value(chambers, channel, node_x, node_y, node_z);
-
-        const size_t index = (static_cast<size_t>(dz + oz) * nodes + (dy + oy)) * nodes +
-                             (dx + ox);
-        float* values = window.values + index * 2;
-        if (!(window.ready[index] & bit)) {
-            values[slot_channel] = compute_lattice_value(chambers, channel,
-                                                         node_x, node_y, node_z);
-            window.ready[index] = static_cast<uint8_t>(window.ready[index] | bit);
-        }
-        return values[slot_channel];
-    });
-}
-
-// Плотность пещеры по окну (декорации, связность пещер, одиночные запросы).
-double World_Generator::cave_density_at(int world_x, int world_y, int world_z,
-                                        double surface_height) const {
-    struct Window_Source {
-        const World_Generator& gen;
-        const Cave_Coords& c;
-        double tunnel(int channel) {
-            return gen.lattice_sum(false, channel, c.tx, c.ty, c.tz, c.tfx, c.tfy, c.tfz);
-        }
-        double chambers() {
-            return gen.lattice_sum(true, 0, c.cx, c.cy, c.cz, c.cfx, c.cfy, c.cfz);
-        }
-    };
-    const Cave_Coords c(world_x, world_y, world_z);
-    Window_Source source{*this, c};
-    return cave_density_formula(world_y, surface_height, source);
-}
-
-// Плотный набор узлов поля пещер под один чанк. Тоннели (шаг 2): 17 узлов по каждой оси
-// (32 блока + 1), залы (шаг 4): 9. По Y строки строятся только до верхней точки чанка, где
-// плотность вообще нужна. Каждый канал заполняется целиком при первом обращении.
-// Границы по углам ячейки (min/max) позволяют пропускать трилинейную сумму там, где результат
-// уже известен: интерполяция не выходит за пределы углов, а запас 1e-6 покрывает округления.
-struct World_Generator::Cave_Field {
-    static constexpr int kTunnelSide = 17;
-    static constexpr int kTunnelCells = 16;
-    static constexpr int kChamberSide = 9;
-    static constexpr int kChamberCells = 8;
-
-    int tunnel_x0 = 0, tunnel_y0 = 0, tunnel_z0 = 0;
-    int chamber_x0 = 0, chamber_y0 = 0, chamber_z0 = 0;
-    int tunnel_rows = 0;                 // заполняемые строки узлов по Y
-    int chamber_rows = 0;
-    bool tunnel_built[2] = {false, false};
-    bool chamber_built = false;
-    float tunnel[2][kTunnelSide * kTunnelSide * kTunnelSide];
-    float tunnel_lo[2][kTunnelCells * kTunnelCells * kTunnelCells];
-    float tunnel_hi[2][kTunnelCells * kTunnelCells * kTunnelCells];
-    float chamber[kChamberSide * kChamberSide * kChamberSide];
-    float chamber_hi[kChamberCells * kChamberCells * kChamberCells];
-
-    static size_t index(int lx, int ly, int lz, int side) {
-        return (static_cast<size_t>(lz) * side + ly) * side + lx;
-    }
-};
-
-void World_Generator::begin_cave_field(Cave_Field& field, int world_x, int world_y, int world_z,
-                                       int top_y) const {
-    field.tunnel_x0 = world_x >> kTunnelShift;
-    field.tunnel_y0 = world_y >> kTunnelShift;
-    field.tunnel_z0 = world_z >> kTunnelShift;
-    field.chamber_x0 = world_x >> kChamberShift;
-    field.chamber_y0 = world_y >> kChamberShift;
-    field.chamber_z0 = world_z >> kChamberShift;
-    // Нужны узлы до top_y включительно и один сверху (правый угол верхней ячейки).
-    field.tunnel_rows = std::clamp((top_y >> kTunnelShift) + 2 - field.tunnel_y0,
-                                   0, Cave_Field::kTunnelSide);
-    field.chamber_rows = std::clamp((top_y >> kChamberShift) + 2 - field.chamber_y0,
-                                    0, Cave_Field::kChamberSide);
-    field.tunnel_built[0] = false;
-    field.tunnel_built[1] = false;
-    field.chamber_built = false;
-}
-
-// Плотность пещеры по плотному полю чанка. Та же формула, что и в cave_density_at, и те же
-// значения узлов; точки вне заполненного поля (при корректной верхней точке не случаются)
-// уходят в окно, результат от этого не меняется.
-double World_Generator::cave_density_dense(Cave_Field& field, int world_x, int world_y,
-                                           int world_z, double surface_height) const {
-    using F = Cave_Field;
-    struct Dense_Source {
-        const World_Generator& gen;
-        F& f;
-        const Cave_Coords& c;
-
-        void fill_tunnel(int channel) {
-            float* grid = f.tunnel[channel];
-            for (int z = 0; z < F::kTunnelSide; ++z)
-                for (int y = 0; y < f.tunnel_rows; ++y)
-                    for (int x = 0; x < F::kTunnelSide; ++x)
-                        grid[F::index(x, y, z, F::kTunnelSide)] = gen.compute_lattice_value(
-                            false, channel, f.tunnel_x0 + x, f.tunnel_y0 + y, f.tunnel_z0 + z);
-
-            float* lo = f.tunnel_lo[channel];
-            float* hi = f.tunnel_hi[channel];
-            for (int z = 0; z < F::kTunnelCells; ++z)
-                for (int y = 0; y + 1 < f.tunnel_rows; ++y)
-                    for (int x = 0; x < F::kTunnelCells; ++x) {
-                        float mn = grid[F::index(x, y, z, F::kTunnelSide)];
-                        float mx = mn;
-                        for (int oz = 0; oz < 2; ++oz)
-                            for (int oy = 0; oy < 2; ++oy)
-                                for (int ox = 0; ox < 2; ++ox) {
-                                    const float v = grid[F::index(x + ox, y + oy, z + oz,
-                                                                  F::kTunnelSide)];
-                                    mn = std::min(mn, v);
-                                    mx = std::max(mx, v);
-                                }
-                        lo[F::index(x, y, z, F::kTunnelCells)] = mn;
-                        hi[F::index(x, y, z, F::kTunnelCells)] = mx;
-                    }
-            f.tunnel_built[channel] = true;
-        }
-
-        void fill_chambers() {
-            for (int z = 0; z < F::kChamberSide; ++z)
-                for (int y = 0; y < f.chamber_rows; ++y)
-                    for (int x = 0; x < F::kChamberSide; ++x)
-                        f.chamber[F::index(x, y, z, F::kChamberSide)] = gen.compute_lattice_value(
-                            true, 0, f.chamber_x0 + x, f.chamber_y0 + y, f.chamber_z0 + z);
-
-            for (int z = 0; z < F::kChamberCells; ++z)
-                for (int y = 0; y + 1 < f.chamber_rows; ++y)
-                    for (int x = 0; x < F::kChamberCells; ++x) {
-                        float mx = f.chamber[F::index(x, y, z, F::kChamberSide)];
-                        for (int oz = 0; oz < 2; ++oz)
-                            for (int oy = 0; oy < 2; ++oy)
-                                for (int ox = 0; ox < 2; ++ox)
-                                    mx = std::max(mx, f.chamber[F::index(x + ox, y + oy, z + oz,
-                                                                         F::kChamberSide)]);
-                        f.chamber_hi[F::index(x, y, z, F::kChamberCells)] = mx;
-                    }
-            f.chamber_built = true;
-        }
-
-        double tunnel(int channel) {
-            const int lx = c.tx - f.tunnel_x0;
-            const int ly = c.ty - f.tunnel_y0;
-            const int lz = c.tz - f.tunnel_z0;
-            if (lx < 0 || ly < 0 || lz < 0 || lx + 1 >= F::kTunnelSide ||
-                ly + 1 >= f.tunnel_rows || lz + 1 >= F::kTunnelSide) {
-                return gen.lattice_sum(false, channel, c.tx, c.ty, c.tz, c.tfx, c.tfy, c.tfz);
-            }
-            if (!f.tunnel_built[channel]) fill_tunnel(channel);
-
-            // Вся ячейка вне полосы тоннеля: |шум| >= полосы при любой точке ячейки, так что
-            // формула (см. cave_density_formula) получит ровно то же "нет тоннеля".
-            const size_t cell = F::index(lx, ly, lz, F::kTunnelCells);
-            if (f.tunnel_lo[channel][cell] >= kTunnelGate ||
-                f.tunnel_hi[channel][cell] <= -kTunnelGate) {
-                return kTunnelBand;
-            }
-
-            const float* base = f.tunnel[channel] + F::index(lx, ly, lz, F::kTunnelSide);
-            return trilinear_sum(c.tfx, c.tfy, c.tfz, [base](int ox, int oy, int oz) {
-                return base[ox + oy * F::kTunnelSide + oz * F::kTunnelSide * F::kTunnelSide];
-            });
-        }
-
-        double chambers() {
-            const int lx = c.cx - f.chamber_x0;
-            const int ly = c.cy - f.chamber_y0;
-            const int lz = c.cz - f.chamber_z0;
-            if (lx < 0 || ly < 0 || lz < 0 || lx + 1 >= F::kChamberSide ||
-                ly + 1 >= f.chamber_rows || lz + 1 >= F::kChamberSide) {
-                return gen.lattice_sum(true, 0, c.cx, c.cy, c.cz, c.cfx, c.cfy, c.cfz);
-            }
-            if (!f.chamber_built) fill_chambers();
-
-            // Вся ячейка ниже порога залов: нормированное значение не превышает 0.85, залов нет.
-            // -2.0 — сырое значение, которое формула нормирует в 0 (cavern = 0).
-            if (f.chamber_hi[F::index(lx, ly, lz, F::kChamberCells)] < kChamberRawLimit) {
-                return -2.0;
-            }
-
-            const float* base = f.chamber + F::index(lx, ly, lz, F::kChamberSide);
-            return trilinear_sum(c.cfx, c.cfy, c.cfz, [base](int ox, int oy, int oz) {
-                return base[ox + oy * F::kChamberSide + oz * F::kChamberSide * F::kChamberSide];
-            });
-        }
-    };
-
-    const Cave_Coords c(world_x, world_y, world_z);
-    Dense_Source source{*this, field, c};
-    return cave_density_formula(world_y, surface_height, source);
-}
-
 // ---------------------------------------------------------------------------
 //  Кэш рельефа и колонок
 // ---------------------------------------------------------------------------
@@ -862,118 +463,6 @@ World_Generator::Column World_Generator::column_at(int world_x, int world_z) con
     built.stamp = ++use_clock;
     *victim = built;
     return built;
-}
-
-// ---------------------------------------------------------------------------
-//  Связность пещер (на сетке 16^3, с кэшем)
-// ---------------------------------------------------------------------------
-// Прежняя версия запускала поиск в ширину на 4096 узлов ДЛЯ КАЖДОГО ВОКСЕЛЯ, и
-// каждый узел заново считал полный набор шумов. Замер: один подземный чанк
-// генерировался 33 секунды. Биому пещеры поблочная точность не нужна — флаги
-// считаются один раз на ячейку 16x16x16 и кладутся в кэш, а сам обход остаётся
-// честным поиском компоненты связности, просто с шагом 2 блока и жёстким лимитом.
-bool World_Generator::cave_cell_open(int world_x, int world_y, int world_z) const {
-    if (world_y < Config::world_min_y || world_y > Config::world_max_y) return false;
-    const double surface = column_at(world_x, world_z).surface_height;
-    if (world_y >= surface - 4.0) return false;
-    return cave_density_at(world_x, world_y, world_z, surface) > kCaveThreshold;
-}
-
-World_Generator::Cave_Flags
-World_Generator::cave_flags_for_cell(int cell_x, int cell_y, int cell_z) const {
-    Cave_Flags flags;
-
-    const int origin_x = cell_x * kCaveCellSize + kCaveCellSize / 2;
-    const int origin_y = cell_y * kCaveCellSize + kCaveCellSize / 2;
-    const int origin_z = cell_z * kCaveCellSize + kCaveCellSize / 2;
-
-    if (!cave_cell_open(origin_x, origin_y, origin_z)) return flags;
-
-    constexpr int kStep = 2;              // шаг обхода, блоки
-    constexpr int kMaxNodes = 320;        // жёсткий потолок работы
-    constexpr int kMaxHorizontal = 96;
-    constexpr int kMaxVertical = 128;
-
-    struct Node { int x, y, z; };
-    Node queue[kMaxNodes];
-    int head = 0, tail = 0;
-
-    // Посещённые узлы — открытая адресация в таблице фиксированного размера
-    // (линейный поиск по массиву давал бы O(n^2) на каждую ячейку).
-    constexpr size_t kVisitedSize = 1024;   // > 2 * kMaxNodes, степень двойки
-    uint64_t visited_keys[kVisitedSize] = {};
-
-    const auto try_mark = [&](int x, int y, int z) -> bool {
-        const uint64_t key = (hash_position3(x, y, z, m_seed, 0x7E5) | 1ull);
-        size_t index = static_cast<size_t>(key) & (kVisitedSize - 1);
-        for (size_t probe = 0; probe < kVisitedSize; ++probe) {
-            if (visited_keys[index] == 0) { visited_keys[index] = key; return true; }
-            if (visited_keys[index] == key) return false;   // уже были
-            index = (index + 1) & (kVisitedSize - 1);
-        }
-        return false;
-    };
-
-    queue[tail++] = {origin_x, origin_y, origin_z};
-    try_mark(origin_x, origin_y, origin_z);
-
-    while (head < tail && tail < kMaxNodes) {
-        const Node n = queue[head++];
-
-        const Column here = column_at(n.x, n.z);
-        // Компонента дошла до поверхности.
-        if (n.y >= static_cast<int>(std::floor(here.surface_height)) - 6) {
-            flags.surface_connected = true;
-        }
-        // Компонента дошла до воды: клетка ниже уровня моря, а поверхность этой
-        // колонки ещё ниже, значит над ней стоит настоящая вода.
-        if (n.y <= kSeaLevel && here.surface_height < n.y) {
-            flags.water_connected = true;
-        }
-        if (flags.surface_connected && flags.water_connected) break;
-
-        static constexpr int dirs[6][3] = {
-            {kStep,0,0},{-kStep,0,0},{0,kStep,0},{0,-kStep,0},{0,0,kStep},{0,0,-kStep}
-        };
-        for (const auto& d : dirs) {
-            const int nx = n.x + d[0], ny = n.y + d[1], nz = n.z + d[2];
-            if (std::abs(nx - origin_x) > kMaxHorizontal ||
-                std::abs(nz - origin_z) > kMaxHorizontal ||
-                std::abs(ny - origin_y) > kMaxVertical) continue;
-            if (!try_mark(nx, ny, nz)) continue;
-            if (tail < kMaxNodes && cave_cell_open(nx, ny, nz))
-                queue[tail++] = {nx, ny, nz};
-        }
-    }
-
-    return flags;
-}
-
-World_Generator::Cave_Flags
-World_Generator::cave_flags_at(int world_x, int world_y, int world_z) const {
-    struct Entry {
-        int cx = 0, cy = 0, cz = 0;
-        uint32_t epoch = 0;
-        bool valid = false;
-        Cave_Flags flags;
-    };
-    static thread_local Entry cache[kCaveCellCacheSize];
-
-    const int cx = floor_div(world_x, kCaveCellSize);
-    const int cy = floor_div(world_y, kCaveCellSize);
-    const int cz = floor_div(world_z, kCaveCellSize);
-
-    Entry& slot = cache[cache_index3(cx, cy, cz, kCaveCellCacheMask)];
-    if (slot.valid && slot.epoch == m_cache_epoch &&
-        slot.cx == cx && slot.cy == cy && slot.cz == cz) {
-        return slot.flags;
-    }
-
-    slot.cx = cx; slot.cy = cy; slot.cz = cz;
-    slot.epoch = m_cache_epoch;
-    slot.valid = true;
-    slot.flags = cave_flags_for_cell(cx, cy, cz);
-    return slot.flags;
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,9 +725,7 @@ Biome_Id World_Generator::surface_biome_for_column(const Column& column) const {
     return best->id;
 }
 
-Biome_Id World_Generator::biome_at(const Column& column, int world_y,
-                                   double cave_density,
-                                   const Cave_Flags& flags) const {
+Biome_Id World_Generator::biome_at(const Column& column, int world_y, Cave_Kind cave) const {
     if (m_dimension->single_biome) return m_biome;
     if (world_y > 200 && column.humidity > 0.70 && column.continentalness < 0.60)
         return Biome_Id::Sky;
@@ -1246,14 +733,12 @@ Biome_Id World_Generator::biome_at(const Column& column, int world_y,
     if (world_y > 80 && column.mountainness > 0.75 && column.erosion > 0.75)
         return Biome_Id::Solar;
 
-    if (world_y < -10 && cave_density > kCaveThreshold) {
-        if (world_y < -150 && cave_density > 0.75 &&
-            !flags.surface_connected && column.temperature > 0.70)
-            return Biome_Id::Deep_Underground;
-        if (world_y < -15 && world_y >= -150 && cave_density > 0.60 &&
-            flags.water_connected && column.humidity > 0.85)
-            return Biome_Id::Flooded_Underground;
-        return Biome_Id::Underground;
+    switch (cave) {
+        case Cave_Kind::Sealed_Dry:     return Biome_Id::Deep_Underground;
+        case Cave_Kind::Sealed_Flooded: return Biome_Id::Flooded_Underground;
+        case Cave_Kind::Water:          return Biome_Id::Flooded_Underground;
+        case Cave_Kind::Air:            return Biome_Id::Underground;
+        case Cave_Kind::None:           break;
     }
 
     if (world_y > column.surface_height && world_y <= kSeaLevel) {
@@ -1363,37 +848,49 @@ Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int 
 
 Block_Types World_Generator::block_in_column(const Column& column,
                                              int world_x, int world_y,
-                                             int world_z, Cave_Field* field) const {
+                                             int world_z) const {
     // Измерение без земли (только острова): ни рельефа, ни воды, ни пещер.
     if (!m_dimension->ground) return Block_Types::Air;
 
     const int height = column.height;
 
-    // Над поверхностью. Вода наливается ВЕЗДЕ, где пусто и ниже уровня моря —
-    // без проверки континентальности. Именно эта проверка раньше оставляла сухую
-    // полосу между линией прибоя и водой и мешала появляться озёрам.
+    // Маркер деревни: столб над центром деревни (пока только для проверки размещения).
+    if (m_dimension->villages && world_y > height &&
+        world_y <= height + Structure_Placement::kMarkerHeight &&
+        m_structures->village_center_at(world_x, world_z)) {
+        return Block_Types::Diamond;
+    }
+
+    // Над поверхностью. Вода наливается ВЕЗДЕ, где пусто и ниже уровня моря.
     if (world_y > height) {
         return world_y <= kSeaLevel ? Block_Types::Water : Block_Types::Air;
     }
 
-    // Пещеры. Верхние 4 блока не выгрызаются, поэтому поверхность не дырявая.
-    if (m_dimension->caves && world_y < height - 4) {
-        // Под дном водоёма оставляем более толстую крышу, чтобы пещера не
-        // вскрывала океан и не осушала его.
-        const bool underwater = column.surface_height < kSeaLevel + 1.0;
-        const int roof = underwater ? 10 : 4;
-        if (world_y < height - roof) {
-            const double density = field
-                ? cave_density_dense(*field, world_x, world_y, world_z, column.surface_height)
-                : cave_density_at(world_x, world_y, world_z, column.surface_height);
-            if (density > kCaveThreshold) {
-                if (world_y < -15 && world_y >= -150 && density > 0.60 &&
-                    column.humidity > 0.85 && world_y < kSeaLevel) {
-                    const Cave_Flags flags = cave_flags_at(world_x, world_y, world_z);
-                    if (flags.water_connected) return Block_Types::Water;
-                }
+    // Реки: русло вырезано до уровня воды, поэтому проверяем до пещер и поверхности.
+    if (m_dimension->rivers) {
+        switch (m_river_network->kind_at(world_x, world_y, world_z)) {
+            case River_Kind::Air:
                 return Block_Types::Air;
-            }
+            case River_Kind::Water:
+                return Block_Types::Water;
+            case River_Kind::None:
+                break;
+        }
+    }
+
+    // Пещеры: сеть путей (входы с поверхности и выходы в воду) и закрытые большие пещеры ниже -60.
+    // Вырезание и вода решаются в Cave_Network по мировым координатам, поэтому здесь только
+    // перевод типа вокселя в блок.
+    if (m_dimension->caves) {
+        switch (m_cave_network->kind_at(world_x, world_y, world_z)) {
+            case Cave_Kind::Air:
+            case Cave_Kind::Sealed_Dry:
+                return Block_Types::Air;
+            case Cave_Kind::Water:
+            case Cave_Kind::Sealed_Flooded:
+                return Block_Types::Water;
+            case Cave_Kind::None:
+                break;
         }
     }
 
@@ -1470,8 +967,8 @@ bool World_Generator::is_solid(int world_x, int world_y, int world_z) const {
 
 World_Sample World_Generator::sample(int world_x, int world_y, int world_z) const {
     const Column column = column_at(world_x, world_z);
-    const Cave_Flags flags = (world_y < -10)
-        ? cave_flags_at(world_x, world_y, world_z) : Cave_Flags{};
+    const Cave_Kind cave = m_dimension->caves
+        ? m_cave_network->kind_at(world_x, world_y, world_z) : Cave_Kind::None;
 
     World_Sample s;
     s.world_x = world_x; s.world_y = world_y; s.world_z = world_z;
@@ -1485,9 +982,9 @@ World_Sample World_Generator::sample(int world_x, int world_y, int world_z) cons
     s.mountainness = column.mountainness;
     s.slope = column.slope;
     s.near_ocean = column.near_ocean;
-    s.cave_density = cave_density_at(world_x, world_y, world_z, column.surface_height);
-    s.surface_connection = flags.surface_connected ? 1.0 : 0.0;
-    s.water_connection = flags.water_connected ? 1.0 : 0.0;
+    s.cave_density = cave != Cave_Kind::None ? 1.0 : 0.0;
+    s.surface_connection = 0.0;   // связность с поверхностью теперь задана входами сети (см. Cave_Network)
+    s.water_connection = cave == Cave_Kind::Water ? 1.0 : 0.0;
     s.sky_anchor_valid = world_y > 200 && sky_island_block(world_x, world_y, world_z);
     return s;
 }
@@ -1504,17 +1001,15 @@ World_Sample World_Generator::sample_with_connections(int world_x, int world_y, 
 std::string World_Generator::get_biome_name(int world_x, int world_y, int world_z) const {
     if (m_dimension->terrain != Terrain_Mode::Noise) return m_dimension->display_name;
     const Column column = column_at(world_x, world_z);
-    const double density = cave_density_at(world_x, world_y, world_z, column.surface_height);
-    const Cave_Flags flags = (world_y < -10 && density > kCaveThreshold)
-        ? cave_flags_at(world_x, world_y, world_z) : Cave_Flags{};
-    return biome_name(biome_at(column, world_y, density, flags));
+    const Cave_Kind cave = m_dimension->caves
+        ? m_cave_network->kind_at(world_x, world_y, world_z) : Cave_Kind::None;
+    return biome_name(biome_at(column, world_y, cave));
 }
 
 bool World_Generator::cave_at(int world_x, int world_y, int world_z) const {
     if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->caves) return false;
-    const Column column = column_at(world_x, world_z);
-    return world_y < column.surface_height - 4.0 &&
-           cave_density_at(world_x, world_y, world_z, column.surface_height) > kCaveThreshold;
+    const Cave_Kind cave = m_cave_network->kind_at(world_x, world_y, world_z);
+    return cave != Cave_Kind::None;
 }
 
 Fast_Rng World_Generator::make_rng(int world_x, int world_z, int salt) const {
@@ -1567,20 +1062,6 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
         return;
     }
 
-    // Окно с запасом под декорации (они заходят за границы чанка): ленивое, как и прежде.
-    begin_cave_window(start_x, start_y, start_z);
-
-    // Плотное поле пещер для самого чанка. Выше cave_top block_in_column плотность не
-    // спрашивает (плотность нужна при world_y < height - roof, roof >= 4).
-    int cave_top = std::numeric_limits<int>::min();
-    for (int z = 0; z < Config::chunk_size; ++z) {
-        for (int x = 0; x < Config::chunk_size; ++x) {
-            cave_top = std::max(cave_top, column_at(start_x + x, start_z + z).height - 5);
-        }
-    }
-    thread_local Cave_Field cave_field;
-    begin_cave_field(cave_field, start_x, start_y, start_z, std::min(end_y, cave_top));
-
     for (int z = 0; z < Config::chunk_size; ++z) {
         for (int x = 0; x < Config::chunk_size; ++x) {
             const int world_x = start_x + x;
@@ -1589,7 +1070,9 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
 
             // Весь столбец выше поверхности и выше уровня моря — чистый воздух,
             // заполнять нечего (кроме диапазона парящих островов).
-            const int solid_top = std::max(column.height, kSeaLevel);
+            int solid_top = std::max(column.height, kSeaLevel);
+            if (m_dimension->villages && m_structures->village_center_at(world_x, world_z))
+                solid_top = std::max(solid_top, column.height + Structure_Placement::kMarkerHeight);
             if (!sky_range && start_y > solid_top) continue;
 
             const int y_from = start_y;
@@ -1606,7 +1089,7 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                     block = sky_island_block(world_x, world_y + 1, world_z)
                           ? Block_Types::Cloud_Stone : Block_Types::Grass;
                 } else {
-                    block = block_in_column(column, world_x, world_y, world_z, &cave_field);
+                    block = block_in_column(column, world_x, world_y, world_z);
                 }
 
                 if (block != Block_Types::Air) {
@@ -1634,6 +1117,19 @@ bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chun
         return !(m_dimension->sky_islands && start_y + Config::chunk_height - 1 >= 200);
     }
     if (start_y <= kSeaLevel) return false;      // может быть вода
+    // Деревня в этом чанке: маркер выше рельефа, чанк не пустой.
+    if (m_dimension->villages) {
+        const int x0 = chunk_x * Config::chunk_size, z0 = chunk_z * Config::chunk_size;
+        const int last_x = x0 + Config::chunk_size - 1, last_z = z0 + Config::chunk_size - 1;
+        for (int cz = floordiv_int(z0, Structure_Placement::kCellSize);
+             cz <= floordiv_int(last_z, Structure_Placement::kCellSize); ++cz)
+            for (int cx = floordiv_int(x0, Structure_Placement::kCellSize);
+                 cx <= floordiv_int(last_x, Structure_Placement::kCellSize); ++cx) {
+                const auto site = m_structures->village_in_cell(cx, cz);
+                if (site && site->x >= x0 && site->x <= last_x && site->z >= z0 && site->z <= last_z)
+                    return false;
+            }
+    }
     if (start_y + Config::chunk_height - 1 >= 200) return false;  // парящие острова
 
     // Достаточно проверить углы и центр: рельеф внутри одного чанка не может
@@ -1683,6 +1179,7 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
 
     const Biome_Id biome = column.biome;
     const Block_Types surface = block_in_column(column, world_x, terrain_height, world_z);
+    if (surface == Block_Types::Air) return;   // устье пещеры: растить там нечего
 
     if (surface == Block_Types::Water || surface == Block_Types::Snow_Block ||
         surface == Block_Types::Ice || surface == Block_Types::Slime_Block ||

@@ -6,6 +6,11 @@
 #include "utils/Config.h"
 #include "OpenSimplex2S.h"
 #include "math/Fast_Rng.h"
+#include "world/generation/Cave_Network.h"
+#include "world/generation/River_Network.h"
+#include "world/generation/Structure_Placement.h"
+
+#include <memory>
 
 #include <cstdint>
 #include <random>
@@ -186,7 +191,10 @@ private:
     Noise_Field m_terrain;
     Noise_Field m_detail;
     Noise_Field m_mountain;
-    Noise_Field m_caves;
+    Noise_Field m_caves;                       // шум руды (пещеры теперь в Cave_Network)
+    std::unique_ptr<Cave_Network> m_cave_network;
+    std::unique_ptr<River_Network> m_river_network;
+    std::unique_ptr<Structure_Placement> m_structures;
 
     std::vector<Biome_Definition> m_biomes;
     std::string m_generation_folder;
@@ -222,48 +230,19 @@ private:
     Column build_column(int world_x, int world_z) const;
     Column column_at(int world_x, int world_z) const;
 
-    // Поля пещер хранятся в узлах решёток и интерполируются трилинейно: тоннели — на шаге 2,
-    // залы — на шаге 4 (они низкочастотные). Узел — чистая функция своих мировых координат,
-    // поэтому любой чанк и декорация получают одно и то же значение в одной точке мира.
-    float compute_lattice_value(bool chambers, int channel,
-                                int node_x, int node_y, int node_z) const;
-    float cave_lattice_value(bool chambers, int channel,
-                             int node_x, int node_y, int node_z) const;
-    void begin_cave_window(int world_x, int world_y, int world_z) const;
-    double lattice_sum(bool chambers, int channel, int base_x, int base_y, int base_z,
-                       double fx, double fy, double fz) const;
-
-    double cave_density_at(int world_x, int world_y, int world_z,
-                           double surface_height) const;
-    // Плотное поле одного чанка: тоннели/залы в массивах, без проверок окна (см. generate_chunk).
-    struct Cave_Field;
-    void begin_cave_field(Cave_Field& field, int world_x, int world_y, int world_z,
-                          int top_y) const;
-    double cave_density_dense(Cave_Field& field, int world_x, int world_y, int world_z,
-                              double surface_height) const;
     bool sky_island_block(int world_x, int world_y, int world_z) const;
     bool sky_anchor_valid(int anchor_x, int anchor_z) const;
 
-    // Связность пещер считается на сетке 16^3 и кэшируется: биому пещеры не нужна
-    // поблочная точность, а прежний поиск в ширину на КАЖДЫЙ воксель стоил
-    // десятки секунд на один подземный чанк.
-    struct Cave_Flags { bool surface_connected = false; bool water_connected = false; };
-    Cave_Flags cave_flags_for_cell(int cell_x, int cell_y, int cell_z) const;
-    Cave_Flags cave_flags_at(int world_x, int world_y, int world_z) const;
-    bool cave_cell_open(int world_x, int world_y, int world_z) const;
-
     void register_default_biomes();
     Biome_Id surface_biome_for_column(const Column& column) const;
-    Biome_Id biome_at(const Column& column, int world_y,
-                      double cave_density, const Cave_Flags& flags) const;
+    Biome_Id biome_at(const Column& column, int world_y, Cave_Kind cave) const;
 
     Fast_Rng make_rng(int world_x, int world_z, int salt = 0) const;
     Block_Types surface_block_for(int world_x, int world_z, const Column& column) const;
     Block_Types subsurface_block_for(int world_x, int world_y, int world_z,
                                      const Column& column) const;
     Block_Types block_in_column(const Column& column,
-                                int world_x, int world_y, int world_z,
-                                Cave_Field* field = nullptr) const;
+                                int world_x, int world_y, int world_z) const;
 };
 
 #endif // OPTICRAFT_WORLD_GENERATOR_H

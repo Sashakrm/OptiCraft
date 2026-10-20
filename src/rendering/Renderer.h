@@ -129,6 +129,9 @@ private:
     // чанков, 2048 — 4 из 160. Память пула: 4 * kGpuQuadCap * 8 байт на слот (64 КБ при 2048).
     static constexpr int kGpuQuadCap = 2048;
     static constexpr int kGpuBatchChunks = 64;
+    // Бюджет загрузки за кадр по объёму слов GPU-нагрузки. Ближние чанки грузятся первыми; дальние
+    // ждут следующего кадра. Хотя бы один чанк в кадре грузится всегда, даже если он больше бюджета.
+    static constexpr size_t kGpuFrameBudgetBytes = 2u * 1024u * 1024u;
     static constexpr int kGpuReadbackRing = 8;
     struct Gpu_Readback {
         unsigned int buffer = 0;

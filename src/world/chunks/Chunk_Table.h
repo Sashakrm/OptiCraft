@@ -23,6 +23,7 @@
 #define OPTICRAFT_CHUNK_TABLE_H
 
 #include "world/chunks/Chunk.h"
+#include "world/chunks/Chunk_Slot_Pool.h"
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -250,7 +251,7 @@ public:
 
     // Вставляет новый чанк на эту позицию или заменяет существующий (как раньше
     // m_chunks[key] = ...). Возвращает сырой указатель на сохранённый чанк.
-    Chunk* insert_or_assign(int cx, int cy, int cz, std::unique_ptr<Chunk> chunk) {
+    Chunk* insert_or_assign(int cx, int cy, int cz, Chunk_Ptr chunk) {
         maybe_grow();
         return insert_core(Chunk_Coord_Pack::pack(cx, cy, cz), std::move(chunk));
     }
@@ -289,14 +290,14 @@ public:
     // возвращает.
     template <typename F>
     void for_each(F&& fn) {
-        for_each_until([&](const glm::ivec3& pos, std::unique_ptr<Chunk>& chunk) {
+        for_each_until([&](const glm::ivec3& pos, Chunk_Ptr& chunk) {
             fn(pos, chunk);
             return true;
         });
     }
     template <typename F>
     void for_each(F&& fn) const {
-        for_each_until([&](const glm::ivec3& pos, const std::unique_ptr<Chunk>& chunk) {
+        for_each_until([&](const glm::ivec3& pos, const Chunk_Ptr& chunk) {
             fn(pos, chunk);
             return true;
         });
@@ -306,7 +307,7 @@ private:
     struct Slot {
         uint64_t key = 0;
         bool occupied = false;
-        std::unique_ptr<Chunk> chunk;
+        Chunk_Ptr chunk;
     };
     static constexpr size_t k_initial_capacity = 4096; // с запасом под load_radius по умолчанию
     // (см. Config::chunk_load_radius/vertical_load_radius_chunks — обычно грузится порядка
@@ -355,11 +356,11 @@ private:
 
     // См. Chunk_Coord_Set::insert_core — та же логика Robin Hood, здесь дополнительно
     // переносим (move) unique_ptr<Chunk> вместе с ключом при каждом вытеснении.
-    Chunk* insert_core(uint64_t key, std::unique_ptr<Chunk> value) {
+    Chunk* insert_core(uint64_t key, Chunk_Ptr value) {
         size_t pos = home_index(key);
         uint32_t dist = 0;
         uint64_t cur_key = key;
-        std::unique_ptr<Chunk> cur_value = std::move(value);
+        Chunk_Ptr cur_value = std::move(value);
         Chunk* result = nullptr;
 
         while (true) {
