@@ -2813,14 +2813,13 @@ void Chunk_Manager::end_capture_region() {
     }
     m_requested_chunks.clear();
 
-    // Чанки на границе области остались с «обрезанными воздухом» боковыми гранями — пересобрать,
-    // если они переживут возврат к обычному окну.
+    // Меши, собранные во время захвата, построены с only_positive_faces (клип активен): у них нет
+    // граней -X/-Y/-Z, а у граничных чанков ещё и боковые грани обрезаны воздухом. Пересобираем
+    // все загруженные чанки; старый меш остаётся видимым до готовности нового, так что дыр не будет.
+    // Задачи, которые ещё летели с клипом, при этом получат dirty-эпоху и поставятся заново.
     if (clip.active) {
-        m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
-            if (key.x == clip.min_cx || key.x == clip.max_cx ||
-                key.z == clip.min_cz || key.z == clip.max_cz) {
-                chunk->mark_mesh_dirty();
-            }
+        m_chunks.for_each([&](const glm::ivec3&, const Chunk_Ptr& chunk) {
+            chunk->mark_mesh_dirty();
         });
     }
 

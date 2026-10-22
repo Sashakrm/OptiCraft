@@ -192,56 +192,62 @@ bool Region_File::write_header_locked(uint64_t index_offset, uint32_t index_coun
 bool Region_File::read_index_locked(uint64_t index_offset, uint32_t index_count) {
     m_index.clear();
     m_free_list.clear();
-    m_next_sector = 1;
+    m_index_first_sector = 0;
+    m_index_sector_count = 0;
 
-    if (index_count == 0) {
-        m_next_sector = static_cast<uint32_t>(index_offset / k_sector_size);
-        if (m_next_sector < 1) m_next_sector = 1;
-        return true;
-    }
+    // Занятые диапазоны: данные чанков и сам текущий индекс. Всё между ними — свободное место.
+    // Раньше свободное место между чанками после перезапуска терялось, а старые индексы
+    // из прошлых сессий никогда не возвращались.
+    std::vector<Free_Range> used;
 
-    std::vector<uint8_t> table(static_cast<size_t>(index_count) * k_index_entry_size);
-    m_stream.seekg(static_cast<std::streamoff>(index_offset), std::ios::beg);
-    m_stream.read(reinterpret_cast<char*>(table.data()),
-                  static_cast<std::streamsize>(table.size()));
-    if (!m_stream) {
-        LOG_WARN("Region_File: truncated index in " + m_path.string());
-        m_stream.clear();
-        return false;
-    }
-
-    uint32_t highest_sector = 1;
-    for (uint32_t i = 0; i < index_count; ++i) {
-        const uint8_t* p = table.data() + static_cast<size_t>(i) * k_index_entry_size;
-        Key key;
-        key.x = read_i32(p + 0);
-        key.y = read_i32(p + 4);
-        key.z = read_i32(p + 8);
-
-        Entry entry;
-        entry.first_sector = read_u32(p + 12);
-        entry.sector_count = read_u32(p + 16);
-        entry.payload_bytes = read_u32(p + 20);
-        entry.format = read_u32(p + 24);
-
-        if (entry.sector_count == 0) continue;
-        m_index[key] = entry;
-        highest_sector = std::max(highest_sector, entry.first_sector + entry.sector_count);
-    }
-
-    // Старая таблица индекса становится свободным местом: её сектора можно
-    // переиспользовать под данные при следующих записях.
-    m_next_sector = highest_sector;
-    const uint32_t index_first_sector = static_cast<uint32_t>(index_offset / k_sector_size);
-    if (index_first_sector >= m_next_sector) {
-        const uint64_t index_bytes = static_cast<uint64_t>(index_count) * k_index_entry_size;
-        const uint32_t index_sectors =
-            static_cast<uint32_t>((index_bytes + k_sector_size - 1) / k_sector_size);
-        if (index_first_sector > m_next_sector) {
-            release_sectors_locked(m_next_sector, index_first_sector - m_next_sector);
+    if (index_count > 0) {
+        std::vector<uint8_t> table(static_cast<size_t>(index_count) * k_index_entry_size);
+        m_stream.seekg(static_cast<std::streamoff>(index_offset), std::ios::beg);
+        m_stream.read(reinterpret_cast<char*>(table.data()),
+                      static_cast<std::streamsize>(table.size()));
+        if (!m_stream) {
+            LOG_WARN("Region_File: truncated index in " + m_path.string());
+            m_stream.clear();
+            return false;
         }
-        m_next_sector = index_first_sector + index_sectors;
+
+        for (uint32_t i = 0; i < index_count; ++i) {
+            const uint8_t* p = table.data() + static_cast<size_t>(i) * k_index_entry_size;
+            Key key;
+            key.x = read_i32(p + 0);
+            key.y = read_i32(p + 4);
+            key.z = read_i32(p + 8);
+
+            Entry entry;
+            entry.first_sector = read_u32(p + 12);
+            entry.sector_count = read_u32(p + 16);
+            entry.payload_bytes = read_u32(p + 20);
+            entry.format = read_u32(p + 24);
+
+            if (entry.sector_count == 0) continue;
+            m_index[key] = entry;
+            used.push_back({entry.first_sector, entry.sector_count});
+        }
+
+        const uint64_t index_bytes = static_cast<uint64_t>(index_count) * k_index_entry_size;
+        m_index_first_sector = static_cast<uint32_t>(index_offset / k_sector_size);
+        m_index_sector_count = static_cast<uint32_t>((index_bytes + k_sector_size - 1) / k_sector_size);
+        used.push_back({m_index_first_sector, m_index_sector_count});
     }
+
+    std::sort(used.begin(), used.end(), [](const Free_Range& a, const Free_Range& b) {
+        return a.first_sector < b.first_sector;
+    });
+
+    // Сектор 0 занят заголовком. Промежутки между занятыми диапазонами идут в свободное место.
+    uint32_t cursor = 1;
+    for (const auto& range : used) {
+        if (range.first_sector > cursor) {
+            m_free_list.push_back({cursor, range.first_sector - cursor});
+        }
+        cursor = std::max(cursor, range.first_sector + range.sector_count);
+    }
+    m_next_sector = cursor;
     return true;
 }
 
@@ -560,9 +566,6 @@ bool Region_File::flush() {
 bool Region_File::flush_locked() {
     if (!m_open || !m_index_dirty) return true;
 
-    // Индекс пишется в новое место в конце файла. Заголовок обновляется
-    // последним, поэтому падение между двумя записями оставляет валидным
-    // предыдущий индекс.
     const uint32_t index_count = static_cast<uint32_t>(m_index.size());
     std::vector<uint8_t> table(static_cast<size_t>(index_count) * k_index_entry_size, 0);
 
@@ -579,31 +582,41 @@ bool Region_File::flush_locked() {
         ++i;
     }
 
-    const uint32_t index_sectors =
-        static_cast<uint32_t>((table.size() + k_sector_size - 1) / k_sector_size);
-    const uint32_t index_first_sector = m_next_sector;
-    const uint64_t index_offset = static_cast<uint64_t>(index_first_sector) * k_sector_size;
+    uint32_t index_first_sector = 0;
+    uint32_t index_sectors = 0;
+    uint64_t index_offset = 0;
 
     if (!table.empty()) {
+        index_sectors = static_cast<uint32_t>((table.size() + k_sector_size - 1) / k_sector_size);
+        // Новый индекс — в свободное место. Текущий индекс занят: заголовок на него ещё указывает.
+        index_first_sector = allocate_sectors_locked(index_sectors);
+        index_offset = static_cast<uint64_t>(index_first_sector) * k_sector_size;
+
         m_stream.seekp(static_cast<std::streamoff>(index_offset), std::ios::beg);
         m_stream.write(reinterpret_cast<const char*>(table.data()),
                        static_cast<std::streamsize>(table.size()));
         if (!m_stream) {
             m_stream.clear();
+            release_sectors_locked(index_first_sector, index_sectors);
             LOG_ERROR("Region_File: cannot write index for " + m_path.string());
             return false;
         }
+        m_stream.flush();
     }
-    m_stream.flush();
 
+    // Данные и индекс должны быть на диске раньше заголовка, иначе заголовок может указать в никуда.
+    m_stream.flush();
     if (!write_header_locked(index_offset, index_count)) {
+        if (index_sectors > 0) release_sectors_locked(index_first_sector, index_sectors);
         LOG_ERROR("Region_File: cannot write header for " + m_path.string());
         return false;
     }
     m_stream.flush();
 
-    // Место под индекс теперь занято; следующие данные пойдут за ним.
-    m_next_sector = index_first_sector + index_sectors;
+    // Заголовок уже указывает на новый индекс: старый индекс становится свободным местом.
+    release_sectors_locked(m_index_first_sector, m_index_sector_count);
+    m_index_first_sector = index_first_sector;
+    m_index_sector_count = index_sectors;
     m_index_dirty = false;
     return true;
 }
