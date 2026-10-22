@@ -13,6 +13,7 @@ class Input_Manager;
 class Renderer;
 class Player;
 class Crop_Manager;
+class Sapling_Manager;
 
 // Сбросить кэш мешей чанка с блоком и соседних чанков на границе (после ручной правки блока).
 void invalidate_block_mesh(int wx, int wy, int wz, Chunk_Manager& chunk_manager, Renderer& renderer);
@@ -58,6 +59,7 @@ public:
 
     // Менеджер посевов (посадка по ПКМ семенами/морковью на грядку). nullptr — посадка выключена.
     void set_crop_manager(Crop_Manager* crops) { m_crop_manager = crops; }
+    void set_sapling_manager(Sapling_Manager* saplings) { m_sapling_manager = saplings; }
 
     // Прогресс добычи текущего блока 0..1 (0 — не копаем) — для полоски под прицелом.
     float get_break_progress() const { return m_break_progress; }
@@ -96,6 +98,7 @@ private:
 
     Block_Types m_place_block = Block_Types::Stone;
     Crop_Manager* m_crop_manager = nullptr;
+    Sapling_Manager* m_sapling_manager = nullptr;
     std::optional<glm::ivec3> m_container_open_request;
 
     // Добыча в Survival

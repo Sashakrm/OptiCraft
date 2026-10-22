@@ -104,6 +104,9 @@ enum class Block_Types : Block_ID {
     Iron_Leggings = 104,
     Iron_Boots = 105,
 
+    // Саженец ели: ставится игроком на землю/дёрн, растёт в 1x1 / 2x2 / 3x3 группы (Sapling_Manager).
+    Spruce_Sapling = 124,
+
     Count = 106
 };
 

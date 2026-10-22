@@ -78,21 +78,104 @@ void Tree_Generator::place_birch_tree(int x, int y, int z, Block_Setter setter, 
     setter(x - 1, y + h - 1, z, Block_Types::Birch_Leaves);
 }
 
-// Spruce: one strong central cone with dense tiers.
+// Spruce: a classic cone. Tiers are widest at the bottom and narrow to a point
+// at the top, so the crown never overhangs the trunk above the lowest tiers.
 void Tree_Generator::place_spruce_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
     std::uniform_int_distribution<int> hdist(8, 12);
     const int h = hdist(rng);
 
     for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Spruce_Log);
 
-    for (int level = 2; level <= h; level += 2) {
-        const int radius = std::min(4, 1 + level / 3);
+    for (int level = 2; level <= h - 1; level += 2) {
+        // Radius 3 at the bottom tier, shrinking by one every ~3 blocks up to 1.
+        const int radius = std::clamp(1 + (h - level) / 3, 1, 3);
         disk(setter, x, y + level, z, radius, Block_Types::Spruce_Leaves, false);
         if (level > 3) {
             disk(setter, x, y + level - 1, z, std::max(1, radius - 1), Block_Types::Spruce_Leaves, true);
         }
     }
+    setter(x, y + h, z, Block_Types::Spruce_Leaves);
     setter(x, y + h + 1, z, Block_Types::Spruce_Leaves);
+}
+
+// Большая хвойная крона строится непрерывным сужающимся силуэтом с редкими
+// выраженными юбками. Небольшой шум края сохраняет естественный вид.
+void Tree_Generator::place_spruce_giant(int cx, int base_y, int cz, int trunk_size, int height,
+                                        int max_radius, Block_Setter setter, Fast_Rng& rng) {
+    const int lo = -(trunk_size - 1) / 2;
+    const int hi = lo + trunk_size - 1;
+    const int core = trunk_size + 2;
+
+    for (int i = 1; i <= height; ++i) {
+        for (int dz = lo; dz <= hi; ++dz) {
+            for (int dx = lo; dx <= hi; ++dx) {
+                setter(cx + dx, base_y + i, cz + dz, Block_Types::Spruce_Log);
+            }
+        }
+    }
+
+    constexpr int crown_bottom = 3;
+    const int top = height;
+    const int span = std::max(1, top - crown_bottom);
+    // Юбки распределены по нижним 60% кроны. Между ними крона остаётся
+    // сплошной, а у основания есть небольшой просвет до первой юбки.
+    const int crown_height = top - crown_bottom;
+    const int first_skirt = crown_bottom + std::max(1, static_cast<int>(std::lround(crown_height * 0.07)));
+    const int skirt_spacing = std::max(5, crown_height / 6);
+
+    for (int level = crown_bottom; level <= top; ++level) {
+        const double t = static_cast<double>(top - level) / span;
+        const double profile = std::pow(t, 0.72);
+        const int nearest_skirt = static_cast<int>(std::lround(
+            static_cast<double>(level - first_skirt) / skirt_spacing));
+        const int skirt_center = first_skirt + nearest_skirt * skirt_spacing;
+        const double skirt_distance = std::abs(level - skirt_center);
+        const double skirt_bulge = (level >= first_skirt && t > 0.35 && skirt_distance <= 2.0)
+            ? 1.8 * (1.0 - skirt_distance / 3.0)
+            : 0.0;
+        const double ideal_radius = 1.0 + (max_radius - 1) * profile + skirt_bulge;
+        const int radius = std::clamp(static_cast<int>(std::lround(ideal_radius)), 1, max_radius);
+        const bool upper_crown = t <= 0.35;
+        const bool skirt = skirt_bulge > 1.0;
+        const int rx = radius;
+        const int rz = radius;
+
+        for (int dz = -rz; dz <= rz; ++dz) {
+            for (int dx = -rx; dx <= rx; ++dx) {
+                const double e = std::sqrt(static_cast<double>(dx * dx) / (rx * rx) +
+                                           static_cast<double>(dz * dz) / (rz * rz));
+                if (e > 1.0) continue;
+                const bool in_trunk = dx >= lo && dx <= hi && dz >= lo && dz <= hi;
+                const bool near_trunk = dx * dx + dz * dz <= core * core;
+                if (in_trunk) {
+                    if (!skirt) setter(cx + dx, base_y + level, cz + dz, Block_Types::Spruce_Leaves);
+                    continue;
+                }
+
+                // Вырез юбки ограничен нижней частью кроны; открываем только
+                // внутреннюю зону, оставляя непрерывное ядро вокруг ствола.
+                if (skirt && !near_trunk && e < 0.68) continue;
+                setter(cx + dx, base_y + level, cz + dz, Block_Types::Spruce_Leaves);
+            }
+        }
+    }
+
+    // Отдельная округлая верхушка: крайний уровень с радиусом 1 не покрывает
+    // углы квадратного ствола 3x3, поэтому без шапки сверху остаются видны брёвна.
+    disk(setter, cx, base_y + top, cz, 2, Block_Types::Spruce_Leaves);
+    disk(setter, cx, base_y + top + 1, cz, 1, Block_Types::Spruce_Leaves);
+}
+
+// Средняя ель: саженцы 2x2. Высота 20-40, ширина до 18 (радиус 8).
+void Tree_Generator::place_spruce_medium(int cx, int base_y, int cz, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hdist(20, 40);
+    place_spruce_giant(cx, base_y, cz, 2, hdist(rng), 8, setter, rng);
+}
+
+// Большая ель: саженцы 3x3. Высота 35-80, ширина до 30 (радиус 14).
+void Tree_Generator::place_spruce_large(int cx, int base_y, int cz, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hdist(35, 80);
+    place_spruce_giant(cx, base_y, cz, 3, hdist(rng), 14, setter, rng);
 }
 
 // Jungle: tall trunk, multiple large horizontal branches and a broad crown.

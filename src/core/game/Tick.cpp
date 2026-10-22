@@ -11,8 +11,8 @@
 
 // --- Tick_Clock -------------------------------------------------------------------------
 
-int Tick_Clock::advance(float frame_dt) {
-    m_accumulator += frame_dt;
+int Tick_Clock::advance(float frame_dt, float speed) {
+    m_accumulator += frame_dt * speed;
 
     int ticks = 0;
     while (m_accumulator >= Tick::SECONDS && ticks < Tick::MAX_PER_FRAME) {
@@ -50,7 +50,7 @@ void Tick_Scheduler::sort_if_needed() {
 
 int Tick_Scheduler::run_frame(float frame_dt) {
     sort_if_needed();
-    const int ticks = m_clock.advance(frame_dt);
+    const int ticks = m_clock.advance(frame_dt, m_speed);
     for (int i = 0; i < ticks; ++i) {
         run_one_tick();
     }

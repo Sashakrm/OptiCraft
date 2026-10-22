@@ -51,6 +51,25 @@ inline int floordiv_int(int a, int b) {
         return static_cast<int>(hash_position(x, z, seed, salt) % static_cast<uint64_t>(modulo));
     }
 
+    // Размещение деревьев с минимальным расстоянием. Каждый столбец получает
+    // детерминированный приоритет из хеша; дерево растёт только там, где приоритет
+    // строго выше, чем у всех столбцов в квадрате радиуса `radius`. Так два дерева
+    // никогда не окажутся ближе radius+1 блоков друг к другу, и не нужно знать
+    // соседние чанки. Приоритет не зависит от биома, поэтому граница биома не
+    // даёт дыр: решает только хеш.
+    constexpr int kTreeAnchorSalt = 9;
+
+    bool is_tree_anchor(int x, int z, uint32_t seed, int radius) {
+        const uint64_t self = hash_position(x, z, seed, kTreeAnchorSalt);
+        for (int dz = -radius; dz <= radius; ++dz) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (dx == 0 && dz == 0) continue;
+                if (hash_position(x + dx, z + dz, seed, kTreeAnchorSalt) >= self) return false;
+            }
+        }
+        return true;
+    }
+
     double interval_distance(double value, double min_value, double max_value) {
         if (value < min_value) return min_value - value;
         if (value > max_value) return value - max_value;
@@ -1269,23 +1288,29 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     }
 
     const int tree_roll = roll(rng);
-    int tree_frequency = 0;
+    // Тип дерева и радиус расстояния до соседей. Радиус = (ширина кроны / 2) + 1,
+    // чтобы кроны соседних деревьев не срастались в стену и между стволами
+    // оставался проход шириной минимум в блок. Ель самая широкая внизу — ей нужен
+    // самый большой отступ.
+    bool has_trees = false;
     Tree_Type tree_type = Tree_Type::Oak;
+    int anchor_radius = 1;
 
     switch (biome) {
-        case Biome_Id::Forest:       tree_frequency = 115; tree_type = Tree_Type::Oak; break;
-        case Biome_Id::Birch_Forest: tree_frequency = 115; tree_type = Tree_Type::Birch; break;
-        case Biome_Id::Taiga:        tree_frequency = 105; tree_type = Tree_Type::Spruce; break;
-        case Biome_Id::Jungle:       tree_frequency = 80;  tree_type = Tree_Type::Jungle; break;
-        case Biome_Id::Savanna:      tree_frequency = 145; tree_type = Tree_Type::Acacia; break;
-        case Biome_Id::Slime:        tree_frequency = 120; tree_type = Tree_Type::Slimewood; break;
+        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;       anchor_radius = 1; break;
+        case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;     anchor_radius = 1; break;
+        case Biome_Id::Taiga:        has_trees = true; tree_type = Tree_Type::Spruce;    anchor_radius = 3; break;
+        case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle;    anchor_radius = 3; break;
+        case Biome_Id::Savanna:      has_trees = true; tree_type = Tree_Type::Acacia;    anchor_radius = 2; break;
+        case Biome_Id::Slime:        has_trees = true; tree_type = Tree_Type::Slimewood; anchor_radius = 2; break;
         default: break;
     }
 
     // Дерево не растёт на обрыве — корень должен стоять на пологой земле.
-    if (column.slope > 4.0) tree_frequency = 0;
+    if (column.slope > 4.0) has_trees = false;
 
-    if (terrain_height >= kSeaLevel && tree_frequency > 0 && tree_roll < tree_frequency) {
+    if (terrain_height >= kSeaLevel && has_trees &&
+        is_tree_anchor(world_x, world_z, m_seed, anchor_radius)) {
         const auto setter = [&](int x, int y, int z, Block_Types type) {
             // Структура ставится только в уже пустой воксель, поэтому дерево
             // никогда не перезаписывает рельеф или столб воды.

@@ -69,6 +69,7 @@ set(SOURCES
         ${SRC_DIR}/world/blocks/Block_Entity_Store.cpp
         ${SRC_DIR}/world/crafting/Recipe.cpp
         ${SRC_DIR}/world/crafting/Crop_Manager.cpp
+        ${SRC_DIR}/world/crafting/Sapling_Manager.cpp
         ${SRC_DIR}/world/crafting/Smelting.cpp
         ${SRC_DIR}/world/storage/Region_File.cpp
         ${SRC_DIR}/world/storage/Chunk_IO.cpp

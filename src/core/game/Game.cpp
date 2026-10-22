@@ -489,6 +489,7 @@ void Game::teardown_world() {
     m_chat_input.clear();
     m_mobs.clear();
     m_crops_ptr.reset();
+    m_saplings_ptr.reset();
     m_iso_capture_ptr.reset(); // до Chunk_Manager: снимок держит на него ссылку
     if (m_chunk_manager_ptr) {
         m_chunk_manager_ptr->clear(); // сохраняет изменённые чанки
@@ -528,6 +529,10 @@ void Game::save_world() {
     if (m_crops_ptr) {
         std::ofstream crops(m_world_file.get_path().parent_path() / "crops.txt", std::ios::trunc);
         if (crops) crops << m_crops_ptr->serialize();
+    }
+    if (m_saplings_ptr) {
+        std::ofstream saplings(m_world_file.get_path().parent_path() / "saplings.txt", std::ios::trunc);
+        if (saplings) saplings << m_saplings_ptr->serialize();
     }
 }
 
@@ -584,6 +589,15 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
         if (crops) {
             const std::string text{std::istreambuf_iterator<char>(crops), std::istreambuf_iterator<char>()};
             m_crops_ptr->deserialize(text);
+        }
+    }
+    m_saplings_ptr = std::make_unique<Sapling_Manager>();
+    m_block_interaction_ptr->set_sapling_manager(m_saplings_ptr.get());
+    {
+        std::ifstream saplings(m_world_file.get_path().parent_path() / "saplings.txt");
+        if (saplings) {
+            const std::string text{std::istreambuf_iterator<char>(saplings), std::istreambuf_iterator<char>()};
+            m_saplings_ptr->deserialize(text);
         }
     }
 
@@ -1030,6 +1044,14 @@ void Game::register_tick_systems() {
             invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
         }
         });
+    m_tick.add("saplings", Phase::Simulate, 35, [this](float dt) {
+        if (!m_saplings_ptr) return;
+        std::vector<glm::ivec3> changed_blocks;
+        m_saplings_ptr->update(dt, *m_chunk_manager_ptr, changed_blocks);
+        for (const glm::ivec3& pos : changed_blocks) {
+            invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
+        }
+    });
     m_tick.add("dropped_items", Phase::Simulate, 40, [this](float dt) {
         // Подбирать предметы можно только в Survival и пока жив.
         const glm::vec3 player_pos = m_player_ptr->get_position();
@@ -1176,6 +1198,12 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
             if (m_crops_ptr) m_crops_ptr->remove(event.position);
             handle_crop_harvest(event.position, event.type);
             continue;
+        }
+        if (Sapling_Manager::is_sapling(event.type) && m_saplings_ptr) {
+            m_saplings_ptr->remove(event.position);
+        }
+        if (event.type == Block_Types::Spruce_Leaves) {
+            handle_leaf_drops(event.position);
         }
         // Руду без подходящей кирки разрушили впустую: падает только содержимое контейнера (если было).
         m_dropped_items_ptr->spawn_block_drops(event.position,
@@ -1801,8 +1829,25 @@ bool Game::set_block_at(int x, int y, int z, Block_Types type) {
         m_crops_ptr->plant(glm::ivec3(x, y, z), Crop_Manager::kind_of(type));
     }
     return ok;
+    if (ok && m_saplings_ptr && Sapling_Manager::is_sapling(type)) {
+        m_saplings_ptr->plant(glm::ivec3(x, y, z));
+    }
 }
 
+
+// Листва ели: 5% дают саженец, 2% — палку. Сама листва ничего не даёт.
+void Game::handle_leaf_drops(const glm::ivec3& pos) {
+    static std::mt19937 s_rng(std::random_device{}());
+    std::uniform_real_distribution<float> chance(0.0f, 1.0f);
+    std::uniform_real_distribution<float> jitter(-1.2f, 1.2f);
+    const glm::vec3 center(pos.x + 0.5f, pos.y + 0.3f, pos.z + 0.5f);
+    auto drop = [&](Block_Types type) {
+        m_dropped_items_ptr->spawn(Item_Stack{type, 1}, center,
+                                   glm::vec3(jitter(s_rng), 3.0f, jitter(s_rng)));
+    };
+    if (chance(s_rng) < 0.05f) drop(Block_Types::Spruce_Sapling);
+    if (chance(s_rng) < 0.02f) drop(Block_Types::Stick);
+}
 
 void Game::handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block) {
     static std::mt19937 s_rng(std::random_device{}());

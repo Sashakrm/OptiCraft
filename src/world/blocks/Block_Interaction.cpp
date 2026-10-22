@@ -11,6 +11,7 @@
 #include "utils/Config.h"
 #include "math/Math_Helpers.h"
 #include "world/crafting/Crop_Manager.h"
+#include "world/crafting/Sapling_Manager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -323,6 +324,16 @@ void Block_Interaction::update(float delta_time,
             return;
         }
 
+        // Саженец ели ставится только сверху на землю или дёрн.
+        if (Sapling_Manager::is_sapling(m_place_block)) {
+            const bool on_top = m_current_hit.place_x == m_current_hit.block_x &&
+                                m_current_hit.place_y == m_current_hit.block_y + 1 &&
+                                m_current_hit.place_z == m_current_hit.block_z;
+            if (!on_top || !Sapling_Manager::can_grow_on(m_current_hit.block_type)) {
+                return;
+            }
+        }
+
         const glm::vec3 place_pos(
             static_cast<float>(m_current_hit.place_x),
             static_cast<float>(m_current_hit.place_y),
@@ -373,6 +384,9 @@ void Block_Interaction::update(float delta_time,
             }
             if (survival) {
                 inventory.remove_resource(m_place_block, 1);
+            }
+            if (m_sapling_manager && Sapling_Manager::is_sapling(m_place_block)) {
+                m_sapling_manager->plant(glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z));
             }
             invalidate_chunk_and_neighbors(
                 m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z,

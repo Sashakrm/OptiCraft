@@ -373,6 +373,7 @@
     {
       "id": 20,
       "name": "Spruce Leaves",
+      "drop": "none",
       "solid": true,
       "opaque": false,
       "can_update": true,
@@ -2663,6 +2664,24 @@
       "impulse_speed": 3.0,
       "impulse_speed_water": 16.0,
       "impulse_cooldown": 0.5
+    },
+    {
+      "id": 124,
+      "name": "Spruce Sapling",
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "spruce_sapling",
+        "side": "spruce_sapling",
+        "bottom": "spruce_sapling"
+      }
     }
   ]
 }

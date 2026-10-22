@@ -4,28 +4,32 @@
 
 #include <algorithm>
 #include <atomic>
-#include <utility>
 #include <cmath>
+#include <queue>
+#include <utility>
 #include <vector>
 
 namespace {
 
 constexpr int kRegion = River_Network::kRegion;
 constexpr int kMargin = River_Network::kMargin;
-constexpr int kWin = kRegion + 2 * kMargin;     // сторона окна региона
+constexpr int kWin = kRegion + 2 * kMargin;     // сторона окна региона, колонок
 constexpr int kCoarse = 4;                       // шаг грубой сетки высот
 constexpr int kCoarseN = kWin / kCoarse + 1;     // точек грубой сетки на сторону
-constexpr int kBasinR = 6;                       // радиус усреднения местности, в клетках грубой сетки (24 блока)
-constexpr int kFar = 1000;                       // «далеко от моря» для клеток без моря в окне
 constexpr int kCacheRegions = 32;
 
-constexpr double kSlope = 0.12;                  // блоков уровня воды на блок расстояния до моря
-constexpr int kFallMin = 3;                      // перепад уровня русла для водопада
-constexpr int kFallReach = 4;                    // радиус поиска нижней клетки русла, блоков
-constexpr double kWarpFreq = 1.0 / 350.0;
-constexpr double kWarpAmp = 60.0;
-constexpr double kLineFreq = 1.0 / 420.0;
-constexpr double kBaseThreshold = 0.03;         // полуширина русла в единицах |noise|
+// Сглаживание рельефа перед стеканием воды: убирает микровпадины, на которых вода застревала бы.
+constexpr int kSmoothRadius = 2;
+
+// Водосбор (число колонок, стекающих через клетку), с которого начинается река.
+constexpr int kRiverArea = 400;
+// С этого водосбора река становится шире (захватывает соседей).
+constexpr int kWideArea = 1600;
+// Глубина озера растёт логарифмически от притока: на каждое удвоение притока (сверх kRiverArea).
+constexpr double kLakeDepthPerDoubling = 1.5;
+
+constexpr int kFallMin = 3;                      // перепад уровня воды для водопада
+constexpr int kFallReach = 4;                    // радиус поиска нижней клетки русла
 
 inline int floordiv(int a, int b) {
     return a >= 0 ? a / b : -((-a + b - 1) / b);
@@ -34,6 +38,9 @@ inline int floordiv(int a, int b) {
 inline int64_t region_key(int rx, int rz) {
     return (static_cast<int64_t>(rx) << 32) ^ static_cast<uint32_t>(rz);
 }
+
+constexpr int kNeighborDx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+constexpr int kNeighborDz[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
 } // namespace
 
@@ -73,48 +80,33 @@ std::shared_ptr<const River_Network::Region> River_Network::fetch_region(int rx,
                          [&]() { return build_region(rx, rz); });
 }
 
+// Гидрология окна региона:
+//  1) рельеф (как раньше: грубая сетка + билинейная интерполяция);
+//  2) сглаживание рельефа;
+//  3) заполнение низин (priority-flood): каждая клетка получает «родителя» — соседа, куда стекает вода;
+//     стоки — море и края окна;
+//  4) водосбор: сколько колонок стекает через клетку;
+//  5) низины, куда стекают реки, заполняются водой до уровня, который растёт с притоком — это озёра;
+//  6) реки — клетки с большим водосбором; их уровень воды чуть ниже рельефа, поэтому русло идёт
+//     по склону и не режет горы глубже нескольких блоков.
 std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int rz) const {
     auto region = std::make_shared<Region>();
     region->x0 = rx * kRegion;
     region->z0 = rz * kRegion;
     region->cols.assign(static_cast<size_t>(kRegion) * kRegion, Column{});
 
-    auto* env = static_cast<OpenSimplexEnv*>(m_env);
-    auto* grad = static_cast<OpenSimplexGradients*>(m_grad);
-
     const int wx0 = region->x0 - kMargin;
     const int wz0 = region->z0 - kMargin;
+    const size_t n_cells = static_cast<size_t>(kWin) * kWin;
 
-    // 1) Грубая сетка высот (шаг 4) и местность вокруг каждой её точки.
+    // 1) Грубая сетка высот и билинейная интерполяция в каждую колонку окна.
     std::vector<double> coarse(static_cast<size_t>(kCoarseN) * kCoarseN);
     for (int j = 0; j < kCoarseN; ++j)
         for (int i = 0; i < kCoarseN; ++i)
             coarse[static_cast<size_t>(j) * kCoarseN + i] =
                 m_height(wx0 + i * kCoarse, wz0 + j * kCoarse);
 
-    std::vector<double> basin(coarse.size());
-    for (int j = 0; j < kCoarseN; ++j) {
-        for (int i = 0; i < kCoarseN; ++i) {
-            double sum = 0.0;
-            int count = 0;
-            for (int dj = -kBasinR; dj <= kBasinR; ++dj) {
-                const int jj = j + dj;
-                if (jj < 0 || jj >= kCoarseN) continue;
-                for (int di = -kBasinR; di <= kBasinR; ++di) {
-                    const int ii = i + di;
-                    if (ii < 0 || ii >= kCoarseN) continue;
-                    sum += coarse[static_cast<size_t>(jj) * kCoarseN + ii];
-                    ++count;
-                }
-            }
-            const size_t k = static_cast<size_t>(j) * kCoarseN + i;
-            basin[k] = sum / count - coarse[k];   // > 0: мы в низине
-        }
-    }
-
-    // 2) Полнота окна: высота и местность в каждой клетке окна (билинейная интерполяция).
-    std::vector<int> height(static_cast<size_t>(kWin) * kWin);
-    std::vector<double> basin_full(height.size());
+    std::vector<int> height(n_cells);
     for (int lz = 0; lz < kWin; ++lz) {
         const int j0 = std::min(lz / kCoarse, kCoarseN - 2);
         const double tz = static_cast<double>(lz) / kCoarse - j0;
@@ -125,101 +117,212 @@ std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int r
             const size_t b = a + 1;
             const size_t c = a + kCoarseN;
             const size_t d = c + 1;
-            auto lerp2 = [&](const std::vector<double>& f) {
-                const double top = f[a] * (1 - tx) + f[b] * tx;
-                const double bot = f[c] * (1 - tx) + f[d] * tx;
-                return top * (1 - tz) + bot * tz;
-            };
-            const size_t idx = static_cast<size_t>(lz) * kWin + lx;
-            height[idx] = static_cast<int>(std::floor(lerp2(coarse) + 0.5));
-            basin_full[idx] = lerp2(basin);
+            const double top = coarse[a] * (1 - tx) + coarse[b] * tx;
+            const double bot = coarse[c] * (1 - tx) + coarse[d] * tx;
+            height[static_cast<size_t>(lz) * kWin + lx] =
+                static_cast<int>(std::floor(top * (1 - tz) + bot * tz + 0.5));
         }
     }
 
-    // 3) Расстояние до моря внутри окна (BFS по 8 соседям). Море — клетки с высотой <= уровня моря.
-    std::vector<int> dist(height.size(), -1);
-    std::vector<int> queue;
-    queue.reserve(height.size());
-    for (size_t k = 0; k < height.size(); ++k) {
-        if (height[k] <= m_sea_level) {
-            dist[k] = 0;
-            queue.push_back(static_cast<int>(k));
+    // 2) Сглаживание рельефа: box-фильтр, отдельно по X и по Z (разделимый).
+    std::vector<double> tmp(n_cells);
+    std::vector<double> smooth(n_cells);
+    for (int lz = 0; lz < kWin; ++lz) {
+        for (int lx = 0; lx < kWin; ++lx) {
+            double sum = 0.0;
+            for (int d = -kSmoothRadius; d <= kSmoothRadius; ++d) {
+                const int x = std::clamp(lx + d, 0, kWin - 1);
+                sum += height[static_cast<size_t>(lz) * kWin + x];
+            }
+            tmp[static_cast<size_t>(lz) * kWin + lx] = sum / (2 * kSmoothRadius + 1);
         }
     }
-    for (size_t head = 0; head < queue.size(); ++head) {
-        const int k = queue[head];
-        const int lx = k % kWin;
-        const int lz = k / kWin;
-        for (int dz = -1; dz <= 1; ++dz) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                if (dx == 0 && dz == 0) continue;
-                const int nx = lx + dx, nz = lz + dz;
-                if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
-                const size_t n = static_cast<size_t>(nz) * kWin + nx;
-                if (dist[n] != -1) continue;
-                dist[n] = dist[k] + 1;
-                queue.push_back(static_cast<int>(n));
+    for (int lz = 0; lz < kWin; ++lz) {
+        for (int lx = 0; lx < kWin; ++lx) {
+            double sum = 0.0;
+            for (int d = -kSmoothRadius; d <= kSmoothRadius; ++d) {
+                const int z = std::clamp(lz + d, 0, kWin - 1);
+                sum += tmp[static_cast<size_t>(z) * kWin + lx];
+            }
+            smooth[static_cast<size_t>(lz) * kWin + lx] = sum / (2 * kSmoothRadius + 1);
+        }
+    }
+
+    // 3) Заполнение низин. Стоки: море (высота <= уровня моря) и края окна (вода уходит из окна).
+    // filled — уровень, до которого поднимается вода в клетке (для не-низин совпадает с рельефом).
+    // parent — куда стекает клетка; order — порядок выхода из очереди (потомки после предков).
+    std::vector<double> filled(n_cells, 0.0);
+    std::vector<int> parent(n_cells, -1);
+    std::vector<uint8_t> visited(n_cells, 0);
+    std::vector<int> order;
+    order.reserve(n_cells);
+
+    using Entry = std::pair<double, int>;   // (filled, index)
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> queue;
+    for (int lz = 0; lz < kWin; ++lz) {
+        for (int lx = 0; lx < kWin; ++lx) {
+            const size_t k = static_cast<size_t>(lz) * kWin + lx;
+            const bool edge = lx == 0 || lz == 0 || lx == kWin - 1 || lz == kWin - 1;
+            if (height[k] <= m_sea_level || edge) {
+                visited[k] = 1;
+                filled[k] = smooth[k];
+                queue.emplace(filled[k], static_cast<int>(k));
             }
         }
     }
-    for (auto& d : dist) {
-        if (d == -1) d = kFar;
-    }
-
-    // 4) Русло: линия нулей шума с искажением координат. Ширина зависит от местности.
-    std::vector<uint8_t> channel(height.size(), 0);
-    std::vector<int> water(height.size(), 0);
-    for (int lz = 0; lz < kWin; ++lz) {
-        for (int lx = 0; lx < kWin; ++lx) {
-            const size_t idx = static_cast<size_t>(lz) * kWin + lx;
-            const int H = height[idx];
-            if (H <= m_sea_level) continue;
-
-            const double X = static_cast<double>(wx0 + lx);
-            const double Z = static_cast<double>(wz0 + lz);
-            const double dx = kWarpAmp * noise2(env, grad, X * kWarpFreq, Z * kWarpFreq + 17.3);
-            const double dz = kWarpAmp * noise2(env, grad, X * kWarpFreq + 31.7, Z * kWarpFreq);
-            const double v = std::fabs(noise2(env, grad,
-                                              (X + dx) * kLineFreq, (Z + dz) * kLineFreq));
-            const double widen = std::clamp(basin_full[idx] / 10.0, -0.5, 1.0);
-            const double threshold = kBaseThreshold * (1.0 + widen);
-            if (v >= threshold) continue;
-
-            channel[idx] = 1;
-            // 5) Уровень воды стекает к морю, но не выше земли.
-            const double target = m_sea_level + kSlope * dist[idx];
-            water[idx] = static_cast<int>(std::floor(std::min(target, static_cast<double>(H))));
+    while (!queue.empty()) {
+        const int c = queue.top().second;
+        queue.pop();
+        order.push_back(c);
+        const int cx = c % kWin;
+        const int cz = c / kWin;
+        for (int dir = 0; dir < 8; ++dir) {
+            const int nx = cx + kNeighborDx[dir];
+            const int nz = cz + kNeighborDz[dir];
+            if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
+            const size_t n = static_cast<size_t>(nz) * kWin + nx;
+            if (visited[n]) continue;
+            visited[n] = 1;
+            parent[n] = c;
+            filled[n] = std::max(smooth[n], filled[c]);
+            queue.emplace(filled[n], static_cast<int>(n));
         }
     }
 
-    // 6) Водопады: в радиусе kFallReach есть клетка русла ниже уровнем хотя бы на kFallMin блоков.
-    // Заполняем только интерьер региона; окрестность всегда внутри окна (kMargin > kFallReach).
+    // 4) Водосбор: сколько клеток стекает через каждую (сама клетка тоже). Потомки обрабатываются раньше
+    // предков: порядок обратный выходу из очереди.
+    std::vector<int> area(n_cells, 1);
+    for (size_t i = order.size(); i-- > 0;) {
+        const int k = order[i];
+        if (parent[k] >= 0) area[parent[k]] += area[k];
+    }
+
+    // 5) Низины: клетки, где вода поднята выше рельефа (filled > smooth). Связные области с одинаковым
+    // уровнем — это одна низина; её уровень заполнения (spill) — общий уровень области.
+    std::vector<int> basin(n_cells, -1);
+    struct Basin {
+        double spill = 0.0;
+        double bottom = 1e9;
+        long inflow = 0;
+        std::vector<int> cells;
+    };
+    std::vector<Basin> basins;
+    for (size_t start = 0; start < n_cells; ++start) {
+        if (basin[start] != -1) continue;
+        if (height[start] <= m_sea_level || filled[start] <= smooth[start] + 0.5) continue;
+        const int id = static_cast<int>(basins.size());
+        basins.emplace_back();
+        Basin& b = basins.back();
+        b.spill = filled[start];
+        std::vector<int> stack{static_cast<int>(start)};
+        basin[start] = id;
+        while (!stack.empty()) {
+            const int c = stack.back();
+            stack.pop_back();
+            b.cells.push_back(c);
+            b.bottom = std::min(b.bottom, smooth[c]);
+            const int cx = c % kWin;
+            const int cz = c / kWin;
+            for (int dir = 0; dir < 8; ++dir) {
+                const int nx = cx + kNeighborDx[dir];
+                const int nz = cz + kNeighborDz[dir];
+                if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
+                const size_t n = static_cast<size_t>(nz) * kWin + nx;
+                if (basin[n] != -1) continue;
+                if (height[n] <= m_sea_level || filled[n] <= smooth[n] + 0.5) continue;
+                if (std::fabs(filled[n] - b.spill) > 1e-9) continue;
+                basin[n] = id;
+                stack.push_back(static_cast<int>(n));
+            }
+        }
+    }
+
+    // Приток в низину: водосборы соседних клеток вне низины, которые стекают в неё.
+    for (size_t id = 0; id < basins.size(); ++id) {
+        Basin& b = basins[id];
+        for (const int c : b.cells) {
+            const int cx = c % kWin;
+            const int cz = c / kWin;
+            for (int dir = 0; dir < 8; ++dir) {
+                const int nx = cx + kNeighborDx[dir];
+                const int nz = cz + kNeighborDz[dir];
+                if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
+                const size_t n = static_cast<size_t>(nz) * kWin + nx;
+                if (basin[n] == static_cast<int>(id)) continue;
+                if (parent[n] == c) b.inflow += area[n];
+            }
+        }
+    }
+
+    // Уровень озера: глубина растёт с притоком. Без притока достаточной реки озера нет.
+    std::vector<uint8_t> lake(n_cells, 0);
+    std::vector<int> lake_level(n_cells, 0);
+    for (const Basin& b : basins) {
+        if (b.inflow < kRiverArea) continue;
+        const double doublings = std::log2(static_cast<double>(b.inflow) / kRiverArea);
+        const double depth = std::min(b.spill - b.bottom, kLakeDepthPerDoubling * (1.0 + doublings));
+        const double level = b.bottom + depth;
+        for (const int c : b.cells) {
+            if (smooth[c] < level) {
+                lake[c] = 1;
+                lake_level[c] = static_cast<int>(std::floor(level));
+            }
+        }
+    }
+
+    // 6) Реки: клетки с достаточным водосбором вне озёр. Вода — чуть ниже рельефа, поэтому русло
+    // стекает по склону. Вода не поднимается выше рельефа, ниже уровня моря не опускается.
+    std::vector<uint8_t> river(n_cells, 0);
+    for (size_t k = 0; k < n_cells; ++k) {
+        if (height[k] <= m_sea_level || lake[k]) continue;
+        if (area[k] < kRiverArea) continue;
+        river[k] = 1;
+        if (area[k] >= kWideArea) {
+            const int cx = static_cast<int>(k) % kWin;
+            const int cz = static_cast<int>(k) / kWin;
+            for (int dir = 0; dir < 8; ++dir) {
+                const int nx = cx + kNeighborDx[dir];
+                const int nz = cz + kNeighborDz[dir];
+                if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
+                const size_t n = static_cast<size_t>(nz) * kWin + nx;
+                if (height[n] > m_sea_level && !lake[n]) river[n] = 1;
+            }
+        }
+    }
+
+    std::vector<int> water(n_cells, 0);
+    for (size_t k = 0; k < n_cells; ++k) {
+        if (lake[k]) {
+            water[k] = lake_level[k];
+        } else if (river[k]) {
+            water[k] = std::max(height[k] - 1, m_sea_level);
+        }
+    }
+
+    // 7) Колонки региона (интерьер), водопады там, где уровень воды резко падает.
     for (int lz = kMargin; lz < kMargin + kRegion; ++lz) {
         for (int lx = kMargin; lx < kMargin + kRegion; ++lx) {
             const size_t idx = static_cast<size_t>(lz) * kWin + lx;
             Column col;
             col.top = height[idx];
-            if (channel[idx]) {
+            if (river[idx] || lake[idx]) {
                 col.river = true;
+                col.lake = lake[idx] != 0;
                 col.water = water[idx];
-                int lowest = 0;
-                bool has_lower = false;
-                // Ищем самую низкую клетку русла в радиусе kFallReach: перепад дна = водопад.
-                for (int dz = -kFallReach; dz <= kFallReach; ++dz) {
-                    for (int dx = -kFallReach; dx <= kFallReach; ++dx) {
-                        const size_t n = static_cast<size_t>(lz + dz) * kWin + (lx + dx);
-                        if (!channel[n]) continue;
-                        if (!has_lower || water[n] < lowest) {
-                            lowest = water[n];
-                            has_lower = true;
+                col.bed = std::min(col.top, col.water) - 2;
+                if (!col.lake) {
+                    int lowest = col.water;
+                    for (int dz = -kFallReach; dz <= kFallReach; ++dz) {
+                        for (int dx = -kFallReach; dx <= kFallReach; ++dx) {
+                            const size_t n = static_cast<size_t>(lz + dz) * kWin + (lx + dx);
+                            if (!river[n]) continue;
+                            lowest = std::min(lowest, water[n]);
                         }
                     }
-                }
-                if (has_lower && col.water - lowest >= kFallMin) {
-                    col.fall = lowest;
-                    col.bed = std::min(col.water, lowest) - 2;
-                } else {
-                    col.bed = col.water - 2;
+                    if (col.water - lowest >= kFallMin) {
+                        col.fall = lowest;
+                        col.bed = lowest - 2;
+                    }
                 }
             }
             region->cols[static_cast<size_t>(lz - kMargin) * kRegion + (lx - kMargin)] = col;
@@ -246,6 +349,8 @@ River_Network::Column River_Network::column_at(int world_x, int world_z) const {
 
 River_Kind River_Network::kind_at(int world_x, int world_y, int world_z) const {
     const Column col = column_at(world_x, world_z);
-    if (!col.river || world_y > col.top || world_y <= col.bed) return River_Kind::None;
-    return world_y <= col.water ? River_Kind::Water : River_Kind::Air;
+    if (!col.river || world_y <= col.bed) return River_Kind::None;
+    if (world_y <= col.water) return River_Kind::Water;   // вода в том числе над рельефом (озёра)
+    if (world_y > col.top) return River_Kind::None;
+    return River_Kind::Air;
 }

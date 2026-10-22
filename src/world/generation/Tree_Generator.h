@@ -26,6 +26,12 @@ public:
     static void place_acacia_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
     static void place_birch_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
     static void place_spruce_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    // Гигантские ели из саженцев (см. Sapling_Manager). cx/cz — центр ствола, base_y — блок земли
+    // под ним. Высота и ширина выбираются процедурно. Ствол квадратный: trunk_size 2 или 3.
+    static void place_spruce_medium(int cx, int base_y, int cz, Block_Setter setter, Fast_Rng& rng);
+    static void place_spruce_large(int cx, int base_y, int cz, Block_Setter setter, Fast_Rng& rng);
+    static void place_spruce_giant(int cx, int base_y, int cz, int trunk_size, int height, int max_radius,
+                                   Block_Setter setter, Fast_Rng& rng);
     static void place_jungle_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
     static void place_slimewood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
 };

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <sstream>
+#include <iomanip>
 
 namespace {
 
@@ -119,6 +120,7 @@ const Command_Info k_commands[] = {
     {"tpbiome",     "/tpbiome <biome>",                             "Teleport to nearest biome"},
     {"locatebiome", "/locatebiome <biome>",                         "Print coords of nearest biome"},
     {"time",        "/time set <day|noon|night|midnight|ticks>",    "Set time of day (also: add, query)"},
+    {"tick",        "/tick speed <multiplier>",                    "Change simulation speed"},
     {"killall",     "/killall",                                     "Kill all mobs"},
     {"kill",        "/kill",                                        "Kill yourself (respawn)"},
     {"spawn",       "/spawn",                                       "Teleport to world spawn"},
@@ -260,6 +262,30 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
 
         reply = "Usage: /time set <day|noon|night|midnight|ticks>  |  /time add <ticks>  |  /time query";
         return false;
+    }
+
+    // --- /tick -------------------------------------------------------------
+    if (cmd == "tick") {
+        if (args.size() == 2 && to_lower(args[1]) == "speed") {
+            std::ostringstream value;
+            value << std::setprecision(4) << game.get_tick_speed();
+            reply = "Tick speed: " + value.str() + "x";
+            return true;
+        }
+        if (args.size() != 3 || to_lower(args[1]) != "speed") {
+            reply = "Usage: /tick speed <multiplier>";
+            return false;
+        }
+        float speed = 0.0f;
+        if (!parse_coord(args[2], 0.0f, speed) || speed <= 0.0f || speed > 100.0f) {
+            reply = "Speed must be a number greater than 0 and at most 100";
+            return false;
+        }
+        game.set_tick_speed(speed);
+        std::ostringstream value;
+        value << std::setprecision(4) << speed;
+        reply = "Tick speed set to " + value.str() + "x";
+        return true;
     }
 
     // --- Мобы / игрок ----------------------------------------------------------
@@ -434,6 +460,8 @@ std::vector<std::string> get_command_completions(const std::string& raw_input) {
             candidates = {"creative", "survival"};
         } else if (cmd == "time" && word_index == 1) {
             candidates = {"set", "add", "query"};
+        } else if (cmd == "tick" && word_index == 1) {
+            candidates = {"speed"};
         } else if (cmd == "time" && word_index == 2 && to_lower(tokens[1]) == "set") {
             candidates = {"day", "noon", "sunset", "night", "midnight", "sunrise"};
         } else if (cmd == "summon" && word_index == 1) {

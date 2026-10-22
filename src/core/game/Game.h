@@ -29,6 +29,7 @@
 #include "mobs/Mobs_Update.h"
 #include "entities/player/Player_Model.h"
 #include "world/crafting/Crop_Manager.h"
+#include "world/crafting/Sapling_Manager.h"
 #include "entities/items/Dropped_Item.h"
 
 class Application;
@@ -60,6 +61,8 @@ private:
     void handle_tool_impulse(float delta_time);
     // Рост посевов на грядках (см. Crop_Manager.h); сохраняется в crops.txt рядом с миром.
     std::unique_ptr<Crop_Manager> m_crops_ptr;
+    // Рост еловых саженцев в деревья (см. Sapling_Manager.h); сохраняется в saplings.txt рядом с миром.
+    std::unique_ptr<Sapling_Manager> m_saplings_ptr;
     // Выпавшие предметы (блоки, мясо...). Не держит GL-ресурсов — рисуется через Renderer,
     // поэтому порядок объявления относительно окна не важен.
     std::unique_ptr<Dropped_Item_Manager> m_dropped_items_ptr;
@@ -132,6 +135,7 @@ private:
     bool is_camera_underwater() const;
     // Урожай: выпавшие предметы при сборе ростка и исчезновение дикой грядки.
     void handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block);
+    void handle_leaf_drops(const glm::ivec3& pos);
 
     // --- Чат и команды ----------------------------------------------------------
     static constexpr size_t k_chat_log_capacity = 100;   // хранится в логе
@@ -281,6 +285,8 @@ public:
     int get_day_time_ticks() const;
     void set_day_time_ticks(int ticks);
     void add_day_time_ticks(int ticks);
+    float get_tick_speed() const { return m_tick.speed(); }
+    void set_tick_speed(float speed) { m_tick.set_speed(speed); }
     int kill_all_mobs() { return m_mobs.kill_all(); }
     void kill_player();
     void goto_spawn() { teleport_player(m_spawn_position); }
