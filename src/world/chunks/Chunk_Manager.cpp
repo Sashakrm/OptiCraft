@@ -855,7 +855,12 @@ void Chunk_Manager::reprioritize_pending_meshes() {
         const int dx = std::abs(p.x - m_player_chunk.x);
         const int dz = std::abs(p.z - m_player_chunk.y);
         const int dy = std::abs(p.y - m_player_chunk_y);
-        const int priority = static_cast<int>(view_ring_of(p)) * 2048 + std::min(dx * dx + dz * dz + dy * dy * 4, 2047);
+        const int ring = static_cast<int>(view_ring_of(p));
+        const bool visible = m_visible_chunks.contains(p.x, p.y, p.z);
+        // 128 единиц на кольцо дают 64 отдельных кольца в каждом диапазоне очереди (раньше
+        // priority bucket queue насыщалась уже примерно на 8-м кольце). Видимые чанки
+        // получают первые 8192 единицы приоритета, невидимые — второй диапазон.
+        const int priority = (visible ? 0 : 8192) + ring * 128 + std::min(dx * dx + dz * dz + dy * dy * 4, 127);
         job->priority = priority;
         m_pending_mesh_jobs.push(std::move(job), priority);
         m_pending_mesh_count.fetch_add(1);
@@ -867,6 +872,15 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
     const glm::ivec3 position{cx, cy, cz};
     Chunk* target = get_chunk(cx, cy, cz);
     if (!target) {
+        return;
+    }
+
+    // Чанк целиком из воздуха ничего не рисует (грани на границе рисуют соседи) — задача мешинга
+    // с копированием 26 КБ снимка и проходом по воркерам ему не нужна, меш пустой.
+    if (!current_capture_clip().active && target->get_blocks().is_uniform() &&
+        target->get_blocks().uniform_block() == Block_Types::Air &&
+        !m_pending_mesh_rebuilds.contains(cx, cy, cz)) {
+        target->apply_mesh(Chunk_Meshes{});
         return;
     }
 
@@ -973,7 +987,9 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz) {
     const int dx = std::abs(cx - m_player_chunk.x);
     const int dz = std::abs(cz - m_player_chunk.y);
     const int dy = std::abs(cy - m_player_chunk_y);
-    job.priority = static_cast<int>(target->get_view_ring()) * 2048 + std::min(dx * dx + dz * dz + dy * dy * 4, 2047);
+    const bool visible = m_visible_chunks.contains(cx, cy, cz);
+    job.priority = (visible ? 0 : 8192) + static_cast<int>(target->get_view_ring()) * 128 +
+                   std::min(dx * dx + dz * dz + dy * dy * 4, 127);
 
     const int priority = job.priority;
     m_pending_mesh_jobs.push(std::make_unique<Mesh_Job>(std::move(job)), priority);
@@ -1212,37 +1228,61 @@ void Chunk_Manager::collect_finished_chunks() {
     // чанков, один раз, а не на каждой волне.
     if (capture_active()) return;
 
-    if (!m_columns_pending_sky_recompute.empty()) {
-        ++m_frames_since_sky_recompute;
+    // Свет неба считается ДО первого меша колонки: меш запекает свет, и чанк, собранный по нулевой
+    // сетке, потом приходится пересобирать (раньше это было 8 колонок раз в 30 кадров, и чанки
+    // дольше всего оставались тёмными). Колонка берётся, когда в ней не осталось запрошенных,
+    // но ещё не загруженных чанков; ближайшие к игроку — первыми, в пределах бюджета времени.
+    if (m_columns_pending_sky_recompute.empty()) return;
+
+    const bool have_player = m_player_chunk.x != std::numeric_limits<int>::min();
+    const int min_cy = have_player ? std::max(Config::world_min_chunk_y, m_player_chunk_y - m_vertical_half)
+                                   : Config::world_min_chunk_y;
+    const int max_cy = have_player ? std::min(Config::world_max_chunk_y, m_player_chunk_y + m_vertical_half)
+                                   : Config::world_max_chunk_y;
+    struct Column { uint64_t key; int score; };
+    std::vector<Column> ready;
+    for (const uint64_t key : m_columns_pending_sky_recompute) {
+        const int cx = static_cast<int>(static_cast<int32_t>(key >> 32));
+        const int cz = static_cast<int>(static_cast<int32_t>(key & 0xFFFFFFFFu));
+        bool settled = true;
+        if (!m_requested_chunks.empty()) {
+            for (int cy = min_cy; cy <= max_cy && settled; ++cy) {
+                if (m_requested_chunks.contains(cx, cy, cz)) settled = false;
+            }
+        }
+        if (!settled) continue;
+        int score = 0;
+        if (have_player) {
+            const int dx = cx - m_player_chunk.x;
+            const int dz = cz - m_player_chunk.y;
+            score = dx * dx + dz * dz;
+        }
+        ready.push_back({key, score});
     }
-    // "Queue fully drained" is the fast, ideal path for a normal-sized load — but with a
-    // large render distance, or a player who keeps walking (load_around keeps handing the
-    // queue new edge chunks as fast as it drains old ones), m_requested_chunks may not empty
-    // for a very long time, or ever, during a play session. Force a recompute after a bounded
-    // number of frames regardless, so newly loaded terrain is never stuck dark indefinitely.
-    // This is still cheap even at that cadence because recompute_sky_lighting is scoped to
-    // m_columns_pending_sky_recompute (just the columns that changed), not the whole loaded
-    // world - an earlier version forced a full-world recompute on this same timer, which at
-    // a few times a second is what made the game hang/get killed.
-    constexpr int sky_recompute_max_frame_delay = 30;
-    if (!m_columns_pending_sky_recompute.empty() &&
-        (m_requested_chunks.empty() || m_frames_since_sky_recompute >= sky_recompute_max_frame_delay)) {
-        // Обрабатываем небольшой пакет только вертикального света. Пустые чанки
-        // пропускаются, а горизонтальный flood-fill отложен до ручных изменений
-        // блоков, поэтому пакет не создаёт длинный стоп-кадр.
-        constexpr size_t sky_columns_per_frame = 8;
+    if (ready.empty()) return;
+    std::sort(ready.begin(), ready.end(), [](const Column& a, const Column& b) { return a.score < b.score; });
+
+    // Только вертикальный свет, пустые чанки пропускаются; горизонтальный flood-fill отложен до
+    // ручных изменений блоков. Бюджет по времени вместо фиксированного числа колонок.
+    constexpr double sky_budget_ms = 1.5;
+    constexpr size_t sky_columns_per_step = 2;
+    const auto sky_start = std::chrono::steady_clock::now();
+    bool any = false;
+    for (size_t i = 0; i < ready.size();) {
         std::unordered_set<uint64_t> batch;
-        for (auto it = m_columns_pending_sky_recompute.begin();
-             it != m_columns_pending_sky_recompute.end() &&
-             batch.size() < sky_columns_per_frame;) {
-            batch.insert(*it);
-            it = m_columns_pending_sky_recompute.erase(it);
+        for (size_t n = 0; n < sky_columns_per_step && i < ready.size(); ++n, ++i) {
+            batch.insert(ready[i].key);
+            m_columns_pending_sky_recompute.erase(ready[i].key);
         }
         recompute_sky_lighting(batch, false);
-        m_frames_since_sky_recompute = 0;
-        if (!m_light_sources.empty()) {
-            recompute_lighting();
-        }
+        any = true;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - sky_start).count();
+        if (elapsed_ms >= sky_budget_ms) break;
+    }
+    m_frames_since_sky_recompute = 0;
+    if (any && !m_light_sources.empty()) {
+        recompute_lighting();
     }
 }
 
@@ -1252,7 +1292,20 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
                                              : max_finished_meshes_per_frame;
     size_t processed_meshes = 0;
     std::vector<glm::ivec3> changed_chunks;
-    while (processed_meshes < mesh_cap) {
+    // Минимум mesh_cap результатов за вызов, дальше — пока не вышел бюджет времени (потолок 8x):
+    // фиксированные 4 штуки не успевали за воркерами, а дорогие кадры от этого не появляются.
+    constexpr double apply_budget_ms = 1.0;
+    const auto apply_start = std::chrono::steady_clock::now();
+    const size_t mesh_hard_cap = mesh_cap * 8;
+    while (processed_meshes < mesh_hard_cap) {
+        // Слияние на швах считаем пачками по mesh_cap результатов: так его стоимость входит в бюджет времени.
+        if (changed_chunks.size() >= mesh_cap) {
+            rebuild_cross_chunk_greedy_meshes(changed_chunks);
+            changed_chunks.clear();
+        }
+        if (processed_meshes >= mesh_cap &&
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - apply_start).count()
+                >= apply_budget_ms) break;
         Mesh_Result result;
         if (!m_completed_mesh_jobs.try_pop(result)) break;
         ++processed_meshes;
@@ -1360,28 +1413,14 @@ void Chunk_Manager::rebuild_cross_chunk_greedy_meshes(const std::vector<glm::ive
         if (a.z != b.z) return a.z < b.z;
         return a.x < b.x;
     });
-    std::vector<glm::ivec3> cpu_remesh;
-    const auto request_cpu_once = [&](const glm::ivec3& position) {
-        if (std::find(cpu_remesh.begin(), cpu_remesh.end(), position) == cpu_remesh.end()) {
-            cpu_remesh.push_back(position);
-        }
-    };
     const auto merge_or_request_cpu = [&](Chunk* lower, const glm::ivec3& lower_pos,
                                           Chunk* upper, const glm::ivec3& upper_pos, int axis) {
         if (!lower || !upper) return;
-        if (lower->get_meshes().solid_on_gpu || upper->get_meshes().solid_on_gpu) {
-            // Межчанковое совпадение квада пока обрабатывается CPU-мешером. GPU
-            // mesh pass не имеет общего списка quad-кандидатов соседних слотов.
-            if (lower->get_meshes().solid_on_gpu &&
-                !m_cpu_only_positions.contains(lower_pos.x, lower_pos.y, lower_pos.z)) {
-                request_cpu_once(lower_pos);
-            }
-            if (upper->get_meshes().solid_on_gpu &&
-                !m_cpu_only_positions.contains(upper_pos.x, upper_pos.y, upper_pos.z)) {
-                request_cpu_once(upper_pos);
-            }
-            return;
-        }
+        // GPU-меш не содержит CPU-квадов, поэтому межчанковое слияние к нему не применимо.
+        // Раньше такой чанк перебрасывали на CPU-мешер (каскад GPU -> CPU), и GPU-мешинг
+        // фактически не работал: процессор снова строил меши. Теперь GPU-чанк остаётся GPU,
+        // а слияние на шве делается только между двумя CPU-мешами.
+        if (lower->get_meshes().solid_on_gpu || upper->get_meshes().solid_on_gpu) return;
         merge_chunk_boundary_solids(*lower, *upper, axis);
     };
 
@@ -1412,20 +1451,25 @@ void Chunk_Manager::rebuild_cross_chunk_greedy_meshes(const std::vector<glm::ive
     for (const glm::ivec3& owner_pos : chain_owners) {
         Chunk* owner = get_chunk(owner_pos.x, owner_pos.y, owner_pos.z);
         if (!owner) continue;
+        // Цепочка продолжается, только пока квад владельца реально дотянулся до предыдущего шва:
+        // иначе дальше сливать нечего (раньше цепочку гнали до первого незагруженного чанка).
         for (int x = owner_pos.x + 1;; ++x) {
             const glm::ivec3 upper_pos{x, owner_pos.y, owner_pos.z};
             Chunk* upper = get_chunk(upper_pos.x, upper_pos.y, upper_pos.z);
             if (!upper) break;
+            if (x > owner_pos.x + 1 &&
+                owner->get_meshes().extends_pos_x_blocks < (x - owner_pos.x - 1) * Config::chunk_size) break;
             merge_or_request_cpu(owner, owner_pos, upper, upper_pos, 0);
         }
         for (int z = owner_pos.z + 1;; ++z) {
             const glm::ivec3 upper_pos{owner_pos.x, owner_pos.y, z};
             Chunk* upper = get_chunk(upper_pos.x, upper_pos.y, upper_pos.z);
             if (!upper) break;
+            if (z > owner_pos.z + 1 &&
+                owner->get_meshes().extends_pos_z_blocks < (z - owner_pos.z - 1) * Config::chunk_size) break;
             merge_or_request_cpu(owner, owner_pos, upper, upper_pos, 2);
         }
     }
-    if (!cpu_remesh.empty()) request_cpu_remesh(cpu_remesh);
 }
 
 void Chunk_Manager::rebuild_dirty_chunks() {
@@ -1433,21 +1477,60 @@ void Chunk_Manager::rebuild_dirty_chunks() {
     const size_t enqueue_cap = capture_active()
         ? capture_max_mesh_jobs_enqueued_per_frame
         : std::max(max_mesh_jobs_enqueued_per_frame, static_cast<size_t>(16.0f + speed / 4.0f));
-    size_t enqueued = 0;
-    m_chunks.for_each_until([&](const glm::ivec3& key, Chunk_Ptr& chunk) {
-        // Пересборка асинхронная (см. enqueue_mesh_rebuild) — старый меш чанка остаётся
-        // видимым до готовности нового, флаг is_mesh_dirty снимается в apply_mesh() уже
-        // на главном потоке, когда результат придёт. enqueue_mesh_rebuild сам дедуплицирует
-        // повторные вызовы для чанка, у которого пересборка уже летит, так что тут можно
-        // звать его безусловно на каждый dirty-чанк каждый кадр без риска заспамить очередь.
-        if (chunk->is_mesh_dirty()) {
-            enqueue_mesh_rebuild(key.x, key.y, key.z);
-            if (++enqueued >= enqueue_cap) {
-                return false; // хватит на этот кадр
+
+    // Раньше обход шёл в порядке хеш-таблицы: порядок мешинга выходил случайным, лимит тратился на
+    // чанки, у которых задача уже летела, а каждый такой вызов ещё и взводил requeue (лишняя
+    // пересборка). Теперь собираем только реальных кандидатов (грязные, без летящей задачи, с
+    // готовым окружением) и отдаём в работу ближайших к игроку; в лимит идут только настоящие постановки.
+    const bool have_player = m_player_chunk.x != std::numeric_limits<int>::min();
+    const bool stream_idle = m_requested_chunks.empty();
+    const int min_cy = Config::world_min_chunk_y;
+    const int max_cy = Config::world_max_chunk_y;
+    const auto neighbors_settled = [&](const glm::ivec3& p) {
+        if (capture_active() || stream_idle) return true;
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if ((dx | dy | dz) == 0) continue;
+                    const glm::ivec3 n = p + glm::ivec3(dx, dy, dz);
+                    if (n.y < min_cy || n.y > max_cy) continue;
+                    if (is_chunk_loaded(n.x, n.y, n.z)) continue;
+                    if (m_requested_chunks.contains(n.x, n.y, n.z)) return false;
+                    // Не загружен и не запрошен: либо вне окна (не будет никогда), либо ещё не запрошен.
+                    if (is_chunk_wanted(n)) return false;
+                }
             }
         }
         return true;
+    };
+
+    struct Candidate { glm::ivec3 pos; int score; };
+    std::vector<Candidate> candidates;
+    m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
+        if (!chunk->is_mesh_dirty()) return;
+        if (m_pending_mesh_rebuilds.contains(key.x, key.y, key.z)) return;
+        if (!capture_active() && !m_columns_pending_sky_recompute.empty() &&
+            m_columns_pending_sky_recompute.count(
+                (static_cast<uint64_t>(static_cast<uint32_t>(key.x)) << 32) |
+                static_cast<uint32_t>(key.z))) return;   // свет неба колонки ещё не посчитан
+        if (!neighbors_settled(key)) return;
+        int score = 0;
+        if (have_player) {
+            const int dx = key.x - m_player_chunk.x;
+            const int dz = key.z - m_player_chunk.y;
+            const int dy = key.y - m_player_chunk_y;
+            score = dx * dx + dz * dz + dy * dy * 4;
+        }
+        candidates.push_back({key, score});
     });
+    if (candidates.empty()) return;
+
+    const size_t take = std::min(enqueue_cap, candidates.size());
+    std::partial_sort(candidates.begin(), candidates.begin() + take, candidates.end(),
+                      [](const Candidate& a, const Candidate& b) { return a.score < b.score; });
+    for (size_t i = 0; i < take; ++i) {
+        enqueue_mesh_rebuild(candidates[i].pos.x, candidates[i].pos.y, candidates[i].pos.z);
+    }
 }
 
 void Chunk_Manager::request_cpu_remesh(const std::vector<glm::ivec3>& positions) {
@@ -2326,6 +2409,7 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     bool spectator
 ) const {
     std::vector<Renderable_Chunk> result;
+    m_visible_chunks.clear();
 
     // Все загруженные чанки, в том числе пустые: через пустой воздух обзор идёт дальше, и без них
     // обход секций оборвался бы.
@@ -2408,6 +2492,7 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
         }
 
         result.push_back(renderable);
+        m_visible_chunks.insert(key.x, key.y, key.z);
     }
 
     return result;

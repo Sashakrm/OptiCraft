@@ -39,7 +39,7 @@ namespace Config {
     // Допустимые значения дальности прорисовки (в чанках), которые перебирает
     // кнопка в меню настроек. chunk_load_radius — значение по умолчанию.
     constexpr int render_distance_min = 2;
-    constexpr int render_distance_max = 16;
+    constexpr int render_distance_max = 48;
     // Дальность прорисовки травы и цветов, в чанках. Флора — самая мелкая и самая
     // многочисленная геометрия, вдалеке она вырождается в пиксельный шум, поэтому
     // её радиус задаётся отдельно от общей дальности. -1 = без ограничения.
@@ -70,7 +70,7 @@ namespace Config {
     constexpr float player_crouch_height = 1.5f;
     constexpr float player_sneak_speed_multiplier = 0.3f;  // Shift: скорость ходьбы × это значение
     constexpr float player_sneak_edge_drop = 0.6f;         // Shift: не шагать туда, где под ногами пусто глубже этого
-    constexpr float player_fly_speed = 8.0f;
+    constexpr float player_fly_speed = 198.0f;
     // Бег: удержание Ctrl на земле при движении вперёд. Не работает при приседе и в полёте.
     constexpr float player_sprint_speed_multiplier = 1.3f;
     constexpr float exhaustion_sprint_per_meter = 0.1f;   // бег тратит сытость в 10 раз быстрее ходьбы

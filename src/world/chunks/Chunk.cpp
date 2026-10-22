@@ -1535,80 +1535,122 @@ bool merge_chunk_boundary_solids(Chunk& lower, Chunk& upper, int axis) {
     Chunk_Meshes& b_mesh = upper.get_meshes_mutable();
     if (a_mesh.solid_on_gpu || b_mesh.solid_on_gpu || a_mesh.solid.empty() || b_mesh.solid.empty()) return false;
 
+    // Слияние работает только с квадами, упирающимися в шов (нижний кончается на нём, верхний на нём
+    // начинается). Раньше для каждого вызова копировались ВСЕ квады обоих чанков по секциям и строился
+    // std::map, хотя по замерам 99 % вызовов ничего не сливали, а остальные трогали десяток квадов.
+    // Теперь: один линейный проход по вершинам находит кандидатов, ключ считается только для них,
+    // а меш переписывается, только если пара реально нашлась (и тогда b уплотняется за один проход).
+    const float boundary = static_cast<float>(
+        (axis == 0 ? upper.get_chunk_x() : upper.get_chunk_z()) * Config::chunk_size);
+    const auto coord = [axis](const Terrain_Vertex& v) { return axis == 0 ? v.x : v.z; };
+
+    struct Candidate {
+        Boundary_Quad_Key key;
+        size_t section;
+        size_t offset;   // индекс первой вершины квада в mesh.solid
+    };
+    const auto collect = [&](const Chunk_Meshes& mesh, bool lower_side, std::vector<Candidate>& out) {
+        for (size_t section_index = 0; section_index < mesh.sections.size(); ++section_index) {
+            const Chunk_Section_Range& section = mesh.sections[section_index];
+            const size_t end = section.solid_start + section.solid_count;
+            for (size_t i = section.solid_start; i + 6 <= end; i += 6) {
+                float lo = coord(mesh.solid[i]), hi = lo;
+                for (size_t k = 1; k < 6; ++k) {
+                    const float c = coord(mesh.solid[i + k]);
+                    lo = std::min(lo, c);
+                    hi = std::max(hi, c);
+                }
+                const bool touches = lower_side ? (near_value(hi, boundary) && lo < boundary - kQuad_Epsilon)
+                                                : (near_value(lo, boundary) && hi > boundary + kQuad_Epsilon);
+                if (!touches) continue;
+                const Solid_Quad q = describe_solid_quad(mesh.solid.data() + i);
+                if (!q.flat_attributes || q.normal_axis == axis) continue;
+                out.push_back({boundary_quad_key(q, axis), section_index, i});
+            }
+        }
+    };
+
+    std::vector<Candidate> a_cands, b_cands;
+    collect(a_mesh, true, a_cands);
+    if (a_cands.empty()) return false;
+    collect(b_mesh, false, b_cands);
+    if (b_cands.empty()) return false;
+
+    // Поиск пары: та же секция и тот же ключ; из нескольких равных берём первый по порядку в меше.
+    const auto less = [](const Candidate& l, const Candidate& r) {
+        if (l.section != r.section) return l.section < r.section;
+        if (l.key != r.key) return l.key < r.key;
+        return l.offset < r.offset;
+    };
+    std::sort(b_cands.begin(), b_cands.end(), less);
+    std::vector<bool> b_removed(b_cands.size(), false);
+
+    struct Merge_Pair { size_t a_offset; std::array<Terrain_Vertex, 6> extended; };
+    std::vector<Merge_Pair> pairs;
+    for (const Candidate& ac : a_cands) {
+        Candidate probe{ac.key, ac.section, 0};
+        auto it = std::lower_bound(b_cands.begin(), b_cands.end(), probe, less);
+        Solid_Quad a = describe_solid_quad(a_mesh.solid.data() + ac.offset);
+        for (; it != b_cands.end() && it->section == ac.section && it->key == ac.key; ++it) {
+            const size_t bi = static_cast<size_t>(it - b_cands.begin());
+            if (b_removed[bi]) continue;
+            const Solid_Quad b = describe_solid_quad(b_mesh.solid.data() + it->offset);
+            if (!b.flat_attributes || !near_value(b.lo[axis], boundary) || b.hi[axis] <= boundary) continue;
+
+            bool same_uv_direction = true;
+            for (int uv_axis = 0; uv_axis < 3; ++uv_axis) {
+                same_uv_direction = same_uv_direction &&
+                    near_value(a.uv_slope[uv_axis][0], b.uv_slope[uv_axis][0]) &&
+                    near_value(a.uv_slope[uv_axis][1], b.uv_slope[uv_axis][1]);
+            }
+            if (!same_uv_direction) continue;
+
+            extend_quad_across_seam(a, b, axis);
+            pairs.push_back({ac.offset, a.vertices});
+            b_removed[bi] = true;
+            break;
+        }
+    }
+    if (pairs.empty()) return false;
+
+    // Оригиналы для restore_unmerged_solid: снимаются до правки (cache_unmerged_solid копирует solid как есть).
     std::array<size_t, Config::chunk_section_count> a_original_counts{};
     std::array<size_t, Config::chunk_section_count> b_original_counts{};
     for (size_t i = 0; i < a_mesh.sections.size(); ++i) {
         a_original_counts[i] = a_mesh.sections[i].solid_count;
         b_original_counts[i] = b_mesh.sections[i].solid_count;
     }
-
-    const float boundary = static_cast<float>(
-        (axis == 0 ? upper.get_chunk_x() : upper.get_chunk_z()) * Config::chunk_size);
-    bool any_merged = false;
-    std::vector<Terrain_Vertex> new_a;
-    std::vector<Terrain_Vertex> new_b;
-
-    for (size_t section_index = 0; section_index < a_mesh.sections.size(); ++section_index) {
-        std::vector<std::array<Terrain_Vertex, 6>> a_quads, b_quads;
-        append_section_quads(a_mesh, section_index, a_quads);
-        append_section_quads(b_mesh, section_index, b_quads);
-        std::vector<bool> remove_b(b_quads.size(), false);
-
-        std::map<Boundary_Quad_Key, std::vector<size_t>> b_candidates;
-        for (size_t j = 0; j < b_quads.size(); ++j) {
-            const Solid_Quad q = describe_solid_quad(b_quads[j].data());
-            if (!q.flat_attributes || q.normal_axis == axis || !near_value(q.lo[axis], boundary)) continue;
-            b_candidates[boundary_quad_key(q, axis)].push_back(j);
-        }
-
-        for (auto& vertices : a_quads) {
-            Solid_Quad a = describe_solid_quad(vertices.data());
-            if (!a.flat_attributes || a.normal_axis == axis || !near_value(a.hi[axis], boundary)) continue;
-            const auto it = b_candidates.find(boundary_quad_key(a, axis));
-            if (it == b_candidates.end()) continue;
-
-            for (const size_t j : it->second) {
-                if (remove_b[j]) continue;
-                const Solid_Quad b = describe_solid_quad(b_quads[j].data());
-                if (!b.flat_attributes || !near_value(b.lo[axis], boundary) || b.hi[axis] <= boundary) continue;
-
-                bool same_uv_direction = true;
-                for (int uv_axis = 0; uv_axis < 3; ++uv_axis) {
-                    same_uv_direction = same_uv_direction &&
-                        near_value(a.uv_slope[uv_axis][0], b.uv_slope[uv_axis][0]) &&
-                        near_value(a.uv_slope[uv_axis][1], b.uv_slope[uv_axis][1]);
-                }
-                if (!same_uv_direction) continue;
-
-                extend_quad_across_seam(a, b, axis);
-                vertices = a.vertices;
-                remove_b[j] = true;
-                any_merged = true;
-                break;
-            }
-        }
-
-        const size_t a_start = new_a.size();
-        append_quads(new_a, a_quads);
-        a_mesh.sections[section_index].solid_start = a_start;
-        a_mesh.sections[section_index].solid_count = a_quads.size() * 6;
-
-        std::vector<std::array<Terrain_Vertex, 6>> kept_b;
-        kept_b.reserve(b_quads.size());
-        for (size_t j = 0; j < b_quads.size(); ++j) {
-            if (!remove_b[j]) kept_b.push_back(b_quads[j]);
-        }
-        const size_t b_start = new_b.size();
-        append_quads(new_b, kept_b);
-        b_mesh.sections[section_index].solid_start = b_start;
-        b_mesh.sections[section_index].solid_count = kept_b.size() * 6;
-    }
-
-    if (!any_merged) return false;
     lower.cache_unmerged_solid(a_original_counts);
     upper.cache_unmerged_solid(b_original_counts);
-    a_mesh.solid = std::move(new_a);
+
+    // Нижний меш: квады растягиваются на месте, число вершин и диапазоны секций не меняются.
+    for (const Merge_Pair& pair : pairs) {
+        std::copy(pair.extended.begin(), pair.extended.end(), a_mesh.solid.begin() + pair.a_offset);
+    }
+
+    // Верхний меш: выбросить поглощённые квады, секции пересчитать.
+    std::vector<size_t> removed_offsets;
+    removed_offsets.reserve(pairs.size());
+    for (size_t bi = 0; bi < b_cands.size(); ++bi) {
+        if (b_removed[bi]) removed_offsets.push_back(b_cands[bi].offset);
+    }
+    std::sort(removed_offsets.begin(), removed_offsets.end());
+    std::vector<Terrain_Vertex> new_b;
+    new_b.reserve(b_mesh.solid.size());
+    for (size_t section_index = 0; section_index < b_mesh.sections.size(); ++section_index) {
+        Chunk_Section_Range& section = b_mesh.sections[section_index];
+        const size_t start = section.solid_start;
+        const size_t end = start + section.solid_count;
+        const size_t new_start = new_b.size();
+        for (size_t i = start; i + 6 <= end; i += 6) {
+            if (std::binary_search(removed_offsets.begin(), removed_offsets.end(), i)) continue;
+            new_b.insert(new_b.end(), b_mesh.solid.begin() + i, b_mesh.solid.begin() + i + 6);
+        }
+        section.solid_start = new_start;
+        section.solid_count = new_b.size() - new_start;
+    }
     b_mesh.solid = std::move(new_b);
+
     for (Chunk_Section_Range& section : a_mesh.sections) {
         section.has_geometry = section.solid_count != 0 || section.flora_count != 0 || section.liquid_count != 0;
     }

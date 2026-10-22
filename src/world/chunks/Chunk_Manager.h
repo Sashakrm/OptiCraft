@@ -198,6 +198,9 @@ private:
     // Поколение вида: растёт при каждой смене чанка игрока. Кольца загруженных чанков пересчитываются
     // под него; меш ставится с приоритетом по кольцу, а кольца 0–1 без меша уходят сразу.
     uint32_t m_view_generation = 0;
+    // Чанки, чьи секции реально попали в текущий frustum/visibility traversal.
+    // Обновляется get_renderable_chunks на главном потоке и используется как приоритет мешинга.
+    mutable Chunk_Coord_Set m_visible_chunks;
     uint8_t view_ring_of(const glm::ivec3& position) const;
     void refresh_view_rings();
     Mpmc_Queue<Chunk_Result> m_completed_jobs;

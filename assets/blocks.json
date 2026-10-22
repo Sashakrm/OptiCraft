@@ -61,7 +61,7 @@
       "effective_tool": "shovel"
     },
     {
-      "id": 3,
+      "id": 5,
       "name": "Cobblestone",
       "solid": true,
       "opaque": true,
@@ -80,7 +80,7 @@
       "effective_tool": "pickaxe"
     },
     {
-      "id": 5,
+      "id": 3,
       "name": "Stone",
       "solid": true,
       "opaque": true,
