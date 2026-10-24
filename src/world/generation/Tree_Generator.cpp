@@ -2,8 +2,33 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace {
+    struct Placed {
+        int x, y, z;
+        Block_Types type;
+    };
+
+    // Шар листвы с рваным краем: часть граничных блоков пропускается, а низ кроны подрезан,
+    // поэтому крона выглядит как куст из нескольких шапок, а не как диск.
+    void leaf_blob(std::vector<Placed>& out, int cx, int cy, int cz, int r,
+                   Fast_Rng& rng, Block_Types leaves) {
+        std::uniform_int_distribution<int> pct(0, 99);
+        for (int dy = -r; dy <= r; ++dy) {
+            for (int dx = -r; dx <= r; ++dx) {
+                for (int dz = -r; dz <= r; ++dz) {
+                    const int d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > r * r) continue;
+                    const bool edge = d2 > (r - 1) * (r - 1);
+                    if (edge && pct(rng) < 35) continue;
+                    if (edge && dy == -r) continue;
+                    out.push_back({cx + dx, cy + dy, cz + dz, leaves});
+                }
+            }
+        }
+    }
+
     void log_line(int x, int y, int z, int dx, int dz, int length,
                   Tree_Generator::Block_Setter setter, Block_Types log) {
         for (int i = 0; i < length; ++i) {
@@ -45,21 +70,45 @@ void Tree_Generator::place_tree(Tree_Type type, int x, int y, int z,
     }
 }
 
-// Wide, asymmetric crown with a short branching trunk.
+// Дуб: прямой ствол, три ветки из верхней части в соседние стороны и несколько шаров листвы
+// с рваным краем вокруг конца каждой ветки и вокруг верхушки. Крона начинается высоко, поэтому
+// под ней можно пройти. Листва пишется раньше брёвен: там, где они пересекаются, побеждает ствол.
 void Tree_Generator::place_oak_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
-    std::uniform_int_distribution<int> hdist(5, 8);
+    std::uniform_int_distribution<int> hdist(6, 9);
+    std::uniform_int_distribution<int> dir_dist(0, 3);
+    std::uniform_int_distribution<int> len_dist(2, 3);
+    std::uniform_int_distribution<int> rad_dist(2, 3);
+    std::uniform_int_distribution<int> off_dist(-1, 1);
     const int h = hdist(rng);
 
-    for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Oak_Log);
+    constexpr int kDx[4] = {1, 0, -1, 0};
+    constexpr int kDz[4] = {0, 1, 0, -1};
 
-    branch(setter, x, y + h - 2, z,  1,  0, 2, Block_Types::Oak_Log);
-    branch(setter, x, y + h - 3, z, -1,  1, 2, Block_Types::Oak_Log);
-    branch(setter, x, y + h - 2, z,  0, -1, 2, Block_Types::Oak_Log);
+    std::vector<Placed> logs;
+    std::vector<Placed> leaves;
+    for (int i = 1; i <= h; ++i) logs.push_back({x, y + i, z, Block_Types::Oak_Log});
 
-    disk(setter, x, y + h, z, 2, Block_Types::Oak_Leaf);
-    disk(setter, x + 1, y + h - 1, z, 2, Block_Types::Oak_Leaf);
-    disk(setter, x - 1, y + h - 1, z + 1, 2, Block_Types::Oak_Leaf);
-    setter(x, y + h + 1, z, Block_Types::Oak_Leaf);
+    const int first = dir_dist(rng);
+    for (int b = 0; b < 3; ++b) {
+        const int d = (first + b) % 4;
+        const int start_y = y + h - 2 - (b % 2);
+        int px = x, py = start_y, pz = z;
+        const int len = len_dist(rng);
+        for (int k = 1; k <= len; ++k) {
+            px += kDx[d];
+            pz += kDz[d];
+            if (k % 2 == 0) ++py;               // ветка лезет вверх медленно: под ней проход
+            logs.push_back({px, py, pz, Block_Types::Oak_Log});
+        }
+        leaf_blob(leaves, px, py + 1, pz, rad_dist(rng), rng, Block_Types::Oak_Leaf);
+    }
+
+    // Главная крона: большой шар над стволом и один-два шара чуть в сторону.
+    leaf_blob(leaves, x, y + h + 1, z, 3, rng, Block_Types::Oak_Leaf);
+    leaf_blob(leaves, x + off_dist(rng), y + h, z + off_dist(rng), 2, rng, Block_Types::Oak_Leaf);
+
+    for (const Placed& p : leaves) setter(p.x, p.y, p.z, p.type);
+    for (const Placed& p : logs) setter(p.x, p.y, p.z, p.type);
 }
 
 // Birch is deliberately tall, thin and layered instead of being an oak recolor.
@@ -252,23 +301,81 @@ void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, F
 }
 
 // Slimewood: chunky, twisted trunk and a glowing-looking asymmetric crown.
+// Слизовое дерево — низкая плакучая ива: короткий ствол, четыре ветки (по одной на сторону света)
+// на разных высотах. Каждая ветка сначала поднимается на блок, затем идёт вбок. На её конце —
+// широкая плоская шапка листвы, с которой свисают две листовые нити. Сверху — широкая крона
+// на верхушке ствола. Листва пишется раньше брёвен, поэтому ствол и ветки не перекрываются.
 void Tree_Generator::place_slimewood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
-    std::uniform_int_distribution<int> hdist(6, 10);
+    std::uniform_int_distribution<int> hdist(3, 4);
+    std::uniform_int_distribution<int> len_dist(3, 4);
+    std::uniform_int_distribution<int> rad_dist(2, 3);
+    std::uniform_int_distribution<int> hang_dist(2, 4);
+    std::uniform_int_distribution<int> pct(0, 99);
     const int h = hdist(rng);
 
-    int cx = x;
-    int cz = z;
-    for (int i = 1; i <= h; ++i) {
-        if (i % 3 == 0) {
-            cx += (i & 1) ? 1 : -1;
-            cz += (i % 4 == 0) ? 1 : 0;
+    // Стороны света: север, восток, юг, запад.
+    constexpr int kDx[4] = {0, 1, 0, -1};
+    constexpr int kDz[4] = {-1, 0, 1, 0};
+
+    // Высоты отхода веток — все разные (от h-2 до h+1), порядок сторон случайный.
+    int heights[4] = {h - 2, h - 1, h, h + 1};
+    std::shuffle(heights, heights + 4, rng);
+
+    std::vector<Placed> logs;
+    std::vector<Placed> leaves;
+    for (int i = 1; i <= h; ++i) logs.push_back({x, y + i, z, Block_Types::Slimewood_Log});
+
+    for (int d = 0; d < 4; ++d) {
+        const int attach_y = y + heights[d];
+        int px = x, pz = z, py = attach_y;
+        const int len = len_dist(rng);
+        for (int k = 1; k <= len; ++k) {
+            px += kDx[d];
+            pz += kDz[d];
+            if (k == 1) ++py;                    // первый шаг поднимает ветку, дальше она идёт ровно
+            logs.push_back({px, py, pz, Block_Types::Slimewood_Log});
         }
-        setter(cx, y + i, cz, Block_Types::Slimewood_Log);
-        if (i > 2 && (i % 3 == 0)) setter(cx - 1, y + i, cz, Block_Types::Slimewood_Log);
+
+        // Шапка на конце ветки и нити, которые свисают с её краёв.
+        const int r = rad_dist(rng);
+        const int cap_y = py;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -r; dx <= r; ++dx) {
+                for (int dz = -r; dz <= r; ++dz) {
+                    const int d2 = dx * dx + dz * dz;
+                    if (d2 > r * r) continue;
+                    const bool edge = d2 > (r - 1) * (r - 1);
+                    if (edge && pct(rng) < 40) continue;   // рваный край
+                    if (dy == 1 && edge) continue;         // шапка плоская сверху
+                    leaves.push_back({px + dx, cap_y + dy, pz + dz, Block_Types::Slimewood_Leaves});
+                }
+            }
+        }
+        const int perp_x = kDz[d] != 0 ? 1 : 0;
+        const int perp_z = kDx[d] != 0 ? 1 : 0;
+        for (int side : {-1, 1}) {
+            const int sx = px + kDx[d] * 1 + perp_x * side * 2;
+            const int sz = pz + kDz[d] * 1 + perp_z * side * 2;
+            const int hang = hang_dist(rng);
+            for (int j = 0; j <= hang; ++j) {
+                leaves.push_back({sx, cap_y - 1 - j, sz, Block_Types::Slimewood_Leaves});
+            }
+        }
     }
 
-    disk(setter, cx, y + h, cz, 2, Block_Types::Slimewood_Leaves);
-    disk(setter, cx + 2, y + h - 1, cz, 2, Block_Types::Slimewood_Leaves, true);
-    disk(setter, cx - 1, y + h - 2, cz + 2, 2, Block_Types::Slimewood_Leaves, true);
-    disk(setter, cx, y + h + 1, cz, 1, Block_Types::Slimewood_Leaves);
+    // Широкая крона на верхушке ствола.
+    const int top_r = 3;
+    for (int dy = 0; dy <= 1; ++dy) {
+        for (int dx = -top_r; dx <= top_r; ++dx) {
+            for (int dz = -top_r; dz <= top_r; ++dz) {
+                const int d2 = dx * dx + dz * dz;
+                if (d2 > top_r * top_r) continue;
+                if (d2 > (top_r - 1) * (top_r - 1) && pct(rng) < 35) continue;
+                leaves.push_back({x + dx, y + h + dy, z + dz, Block_Types::Slimewood_Leaves});
+            }
+        }
+    }
+
+    for (const Placed& p : leaves) setter(p.x, p.y, p.z, p.type);
+    for (const Placed& p : logs) setter(p.x, p.y, p.z, p.type);
 }

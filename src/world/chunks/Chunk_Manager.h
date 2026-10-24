@@ -320,6 +320,8 @@ public:
     void set_world_generator(const World_Generator& generator) {
         m_world_generator = &generator;
     }
+    // Генератор мира (для запросов биома, например спавном мобов); nullptr, если не задан.
+    const World_Generator* world_generator() const { return m_world_generator; }
     // Загружает world_file/generation_folder И связанный с ним Block_Entity_Store
     // (содержимое сундуков/печей/верстаков этого пресета генерации) — раньше это
     // был тривиальный inline-сеттер двух полей, теперь ещё и файловый I/O, поэтому
@@ -419,6 +421,16 @@ public:
     void end_capture_region();
 
     size_t get_loaded_count() const { return m_chunks.size(); }
+
+    // Для отладочного оверлея (F3+F4): сколько чанков сейчас в работе.
+    struct Chunk_Work_Stats {
+        size_t mesh_pending = 0;     // чанки, ждущие пересборки меша
+        size_t mesh_requeued = 0;    // пересборки, отложенные до готовности соседей
+        size_t loads_requested = 0;  // чанки, запрошенные у генератора/диска, но ещё не пришедшие
+    };
+    Chunk_Work_Stats get_work_stats() const {
+        return {m_pending_mesh_rebuilds.size(), m_mesh_rebuild_requeue.size(), m_requested_chunks.size()};
+    }
 };
 
 #endif //OPTICRAFT_CHUNK_MANAGER_H

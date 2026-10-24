@@ -1,4 +1,5 @@
 #include "world/blocks/Block_Interaction.h"
+#include "world/blocks/Block_Shapes.h"
 #include <glad/gl.h>
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Entity.h"
@@ -12,6 +13,7 @@
 #include "math/Math_Helpers.h"
 #include "world/crafting/Crop_Manager.h"
 #include "world/crafting/Sapling_Manager.h"
+#include "world/logic/Logic_Manager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -271,6 +273,16 @@ void Block_Interaction::update(float delta_time,
             return;
         }
 
+        // Рычаг, кнопка, зажиматель, повторитель: ПКМ переключает/меняет, блок не ставится.
+        // Провод — нет: по нему ставят другие блоки.
+        if (Logic_Manager::is_node(m_current_hit.block_type) &&
+            !Logic_Manager::is_wire(m_current_hit.block_type)) {
+            m_redstone_interact = glm::ivec3(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z);
+            m_action_cooldown = k_action_delay;
+            m_current_hit.hit = false;
+            return;
+        }
+
         // --- Земледелие -----------------------------------------------------------------------
         {
             const Block_Properties& held_props = get_block_props(m_place_block);
@@ -371,6 +383,34 @@ void Block_Interaction::update(float delta_time,
                 } else {
                     placed_meta = to_player_z > 0.0f ? Block_Meta::facing_south : Block_Meta::facing_north;
                 }
+                // Ступеньки: высокая сторона — от игрока (по ней идут вверх, к игроку — вниз).
+                if (place_props.shape == Block_Shape::Stairs) {
+                    placed_meta = opposite_facing(placed_meta);
+                }
+            }
+
+            // Красная логика: рычаг/кнопка/зажиматель — на грань опоры, повторитель — выходом от игрока,
+            // провод — на твёрдую опору снизу. Без опоры не ставится (см. Logic_Manager::placement).
+            const bool is_redstone_node = Logic_Manager::is_node(m_place_block);
+            if (is_redstone_node) {
+                const float to_player_x = eye_position.x - (place_pos.x + 0.5f);
+                const float to_player_z = eye_position.z - (place_pos.z + 0.5f);
+                uint8_t toward_player = Block_Meta::facing_north;
+                if (std::abs(to_player_x) > std::abs(to_player_z)) {
+                    toward_player = to_player_x > 0.0f ? Block_Meta::facing_east : Block_Meta::facing_west;
+                } else {
+                    toward_player = to_player_z > 0.0f ? Block_Meta::facing_south : Block_Meta::facing_north;
+                }
+                auto world = make_chunk_world(chunk_manager);
+                uint8_t node_meta = 0;
+                if (!Logic_Manager::placement(
+                        m_place_block, world,
+                        glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z),
+                        glm::ivec3(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z),
+                        opposite_facing(toward_player), node_meta)) {
+                    return;
+                }
+                placed_meta = node_meta;
             }
 
             if (!chunk_manager.set_block_world(
@@ -382,11 +422,15 @@ void Block_Interaction::update(float delta_time,
             )) {
                 return;
             }
+            if (is_redstone_node) {
+                m_redstone_placed = glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z);
+            }
             if (survival) {
                 inventory.remove_resource(m_place_block, 1);
             }
             if (m_sapling_manager && Sapling_Manager::is_sapling(m_place_block)) {
-                m_sapling_manager->plant(glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z));
+                m_sapling_manager->plant(glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z),
+                                         m_place_block);
             }
             invalidate_chunk_and_neighbors(
                 m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z,

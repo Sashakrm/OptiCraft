@@ -5,6 +5,7 @@
 #include "world/chunks/Chunk.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Types.h"
+#include "world/blocks/Block_Shapes.h"
 #include "math/Math_Helpers.h"
 #include "world/generation/World_Generator.h"
 #include "rendering/atlas/Texture_Atlas.h"
@@ -362,10 +363,62 @@ namespace {
     // поверхности (уровень течения). ylo..yhi — вертикальный диапазон боковой грани внутри клетки
     // (0..h — вся стенка, hn..h — "ступенька" над более низким соседом); для верхней грани yhi —
     // высота поверхности, нижняя лежит на дне клетки.
+    // Грань жидкости. У поверхности высота задаётся в четырёх углах клетки (corner_h[cx][cz]),
+    // поэтому соседние клетки с разным уровнем сходятся плавным скосом, а не ступенькой. Боковая
+    // грань идёт от дна клетки (wy) до поверхности в углах ребра; её V-координата растягивается
+    // ровно по той части спрайта, которая попала в высоту (нижняя часть спрайта — у дна).
+    // Грани одного бокса формы. origin — мировая позиция клетки, box — в координатах клетки [0,1]^3.
+    // cull[d] — грань уходит в непрозрачный соседний куб и не нужна; light[d] — свет со стороны
+    // грани. Порядок граней: +X, -X, +Y, -Y, +Z, -Z. Каждая грань — два треугольника, обход против
+    // часовой стрелки снаружи (проверяется по нормали). Локальные UV идут 0..1 по граням бокса,
+    // текстура растягивается на форму; V: низ = 0, верх = 1 (как у push_face_impl).
+    void emit_shape_box(std::vector<Terrain_Vertex>& out, const glm::vec3& origin, const Shape_Box& box,
+                        const Block_Properties& props, const bool cull[6], const float light[6]) {
+        const glm::vec3 lo = origin + box.lo;
+        const glm::vec3 hi = origin + box.hi;
+        const glm::vec3 d = box.hi - box.lo;
+        static constexpr glm::vec3 normals[6] = {
+            {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+        };
+        const glm::vec3 c[6][4] = {
+            {{hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {hi.x, hi.y, hi.z}, {hi.x, lo.y, hi.z}},
+            {{lo.x, lo.y, lo.z}, {lo.x, lo.y, hi.z}, {lo.x, hi.y, hi.z}, {lo.x, hi.y, lo.z}},
+            {{lo.x, hi.y, lo.z}, {lo.x, hi.y, hi.z}, {hi.x, hi.y, hi.z}, {hi.x, hi.y, lo.z}},
+            {{lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, lo.y, hi.z}, {lo.x, lo.y, hi.z}},
+            {{lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z}},
+            {{lo.x, lo.y, lo.z}, {lo.x, hi.y, lo.z}, {hi.x, hi.y, lo.z}, {hi.x, lo.y, lo.z}},
+        };
+        for (int f = 0; f < 6; ++f) {
+            if (cull[f]) continue;
+            const glm::vec4& uv = props.get_uv(f == 2 ? 1 : (f == 3 ? -1 : 0));
+            const float ny = normals[f].y;
+            glm::vec3 corner[4];
+            float lu[4], lv[4];
+            for (int k = 0; k < 4; ++k) {
+                corner[k] = c[f][k];
+                const glm::vec3 r = (corner[k] - lo) / d;
+                if (f < 2)      { lu[k] = r.z; lv[k] = r.y; }
+                else if (f < 4) { lu[k] = r.x; lv[k] = r.z; }
+                else            { lu[k] = r.x; lv[k] = r.y; }
+            }
+            // Обход: если (c1-c0)x(c2-c0) смотрит внутрь, разворачиваем.
+            const glm::vec3 nrm = glm::cross(corner[1] - corner[0], corner[2] - corner[0]);
+            const bool flip = glm::dot(nrm, normals[f]) < 0.0f;
+            const int seq[6] = {0, 1, 2, 0, 2, 3};
+            const int seq_flip[6] = {0, 2, 1, 0, 3, 2};
+            for (int t = 0; t < 6; ++t) {
+                const int k = flip ? seq_flip[t] : seq[t];
+                out.push_back({corner[k].x, corner[k].y, corner[k].z,
+                               lu[k], lv[k], ny, light[f],
+                               uv.x, uv.y, uv.z, uv.w, 3.0f});
+            }
+        }
+    }
+
     void add_liquid_face_data(Chunk_Meshes& meshes,
                               int chunk_x, int chunk_y, int chunk_z,
                               int x, int y, int z, int dx, int dy, int dz, Block_Types block,
-                              float face_light, float ylo, float yhi) {
+                              float face_light, const float corner_h[2][2]) {
         const float wx = static_cast<float>(chunk_x * Config::chunk_size + x);
         const float wy = static_cast<float>(chunk_y * Config::chunk_height + y);
         const float wz = static_cast<float>(chunk_z * Config::chunk_size + z);
@@ -376,15 +429,17 @@ namespace {
         const size_t first = target.size();
         push_face_impl(target, uv, wx, wy, wz, dx, dy, dz, face_light);
 
-        if (dy > 0) {
-            for (size_t i = first; i < target.size(); ++i) target[i].y = wy + yhi;
-        } else if (dy == 0) {
-            const float v0 = uv.y, v1 = uv.w;
-            for (size_t i = first; i < target.size(); ++i) {
-                const float t = target[i].y - wy;           // 0 — низ клетки, 1 — верх
-                const float frac = ylo + t * (yhi - ylo);
-                target[i].y = wy + frac;
-                target[i].v = v0 + (v1 - v0) * frac;
+        for (size_t i = first; i < target.size(); ++i) {
+            Chunk_Vertex& v = target[i];
+            // Угол вершины внутри клетки: 0 или 1 по каждой горизонтальной оси.
+            const int rx = dx != 0 ? (dx > 0 ? 1 : 0) : static_cast<int>(v.x - wx + 0.5f);
+            const int rz = dz != 0 ? (dz > 0 ? 1 : 0) : static_cast<int>(v.z - wz + 0.5f);
+            if (dy > 0) {
+                v.y = wy + corner_h[rx][rz];
+            } else if (dy == 0) {
+                if (v.y > wy + 0.5f) v.y = wy + corner_h[rx][rz];   // верхние вершины стенки
+                const float frac = v.y - wy;
+                v.v = uv.y + (uv.w - uv.y) * frac;
             }
         }
     }
@@ -486,7 +541,9 @@ namespace {
         std::vector<uint8_t> cull_same = std::vector<uint8_t>(k_max_block_types, 0);
         // Непрозрачный полный куб (жадно-мешаемый и не прозрачный): такой блок закрывает AO соседних углов.
         std::vector<uint8_t> occludes = std::vector<uint8_t>(k_max_block_types, 0);
-        // Упакованный свет (sky<<4 | block) -> огрублённый до 6 уровней на канал (0,3,6,9,12,15).
+        // Упакованный свет (sky<<4 | block). Раньше огрубляли до 6 уровней на канал (0,3,6,9,12,15):
+        // соседние клетки разного света сливались в плоские полосы, а жадный мешер склеивал их в
+        // большие квадраты (видно как "квадраты" от камня солнца). Теперь — точные значения.
         std::array<uint8_t, 256> light_coarse{};
     };
     const Mesh_Tables& mesh_tables() {
@@ -495,17 +552,15 @@ namespace {
             for (size_t i = 0; i < k_max_block_types; ++i) {
                 const Block_Properties& p = *props_table()[i];
                 m.greedy[i] = (i != 0 && p.state != Block_State::Liquid &&
-                               p.mesh_style != Block_Mesh_Style::XStyle) ? 1 : 0;
+                               p.mesh_style != Block_Mesh_Style::XStyle &&
+                               p.shape == Block_Shape::None) ? 1 : 0;
                 m.transparent[i] = p.is_transparent ? 1 : 0;
                 m.uses_meta[i] = p.uses_meta ? 1 : 0;
                 m.cull_same[i] = (m.greedy[i] && p.is_transparent) ? 1 : 0;
                 m.occludes[i] = (m.greedy[i] && !p.is_transparent) ? 1 : 0;
             }
             for (int packed = 0; packed < 256; ++packed) {
-                const int sky = packed >> 4, blk = packed & 15;
-                const int sky_q = ((sky * 5 + 7) / 15) * 3;
-                const int blk_q = ((blk * 5 + 7) / 15) * 3;
-                m.light_coarse[static_cast<size_t>(packed)] = static_cast<uint8_t>((sky_q << 4) | blk_q);
+                m.light_coarse[static_cast<size_t>(packed)] = static_cast<uint8_t>(packed);
             }
             return m;
         }();
@@ -899,12 +954,30 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         return static_cast<float>(amount) / 9.0f;
     };
 
+    // Высота поверхности в углу между клетками (cx-1..cx, cz-1..cz) на уровне y: среднее по тем
+    // из этих четырёх клеток, которые содержат ту же жидкость. Соседние клетки делят углы, поэтому
+    // поверхность сходится без ступенек.
+    const auto liquid_corner = [&](int cx, int y, int cz, Block_ID id) -> float {
+        float sum = 0.0f;
+        int count = 0;
+        for (int ox = -1; ox <= 0; ++ox) {
+            for (int oz = -1; oz <= 0; ++oz) {
+                const int x = cx + ox, z = cz + oz;
+                if (block_at(x, y, z) != id) continue;
+                sum += liquid_height(x, y, z, id);
+                ++count;
+            }
+        }
+        return count > 0 ? sum / static_cast<float>(count) : 0.0f;
+    };
+
     for (int section_index = 0; section_index < Config::chunk_section_count; ++section_index) {
         Chunk_Section_Range& range = meshes.sections[section_index];
         range = Chunk_Section_Range{};
         range.solid_start = meshes.solid.size();
         range.flora_start = meshes.flora.size();
         range.liquid_start = meshes.liquid.size();
+        range.shaped_start = meshes.shaped.size();
 
         const int y_begin = section_index * Config::chunk_section_height;
         const int y_end = y_begin + Config::chunk_section_height;
@@ -1074,6 +1147,40 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                         const Block_Properties& bp = *props[id];
                         const Block_Types block = static_cast<Block_Types>(id);
 
+                        if (bp.shape != Block_Shape::None) {
+                            // Блок не-кубической формы: боксы в свой буфер.
+                            const uint8_t meta = meta_at(x, y, z);
+                            Shape_Box boxes[2];
+                            const int box_count = shape_boxes(bp.shape, meta, boxes);
+                            static constexpr int dirs[6][3] = {
+                                {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+                            };
+                            const glm::vec3 origin(static_cast<float>(base_x + x),
+                                                   static_cast<float>(base_y + y),
+                                                   static_cast<float>(base_z + z));
+                            for (int b = 0; b < box_count; ++b) {
+                                const Shape_Box& box = boxes[b];
+                                const float box_lo[3] = {box.lo.x, box.lo.y, box.lo.z};
+                                const float box_hi[3] = {box.hi.x, box.hi.y, box.hi.z};
+                                // Грань на границе клетки: сосед — непрозрачный куб, грань не рисуем.
+                                bool cull[6]{};
+                                float light[6]{};
+                                for (int f = 0; f < 6; ++f) {
+                                    const int nx = x + dirs[f][0], ny = y + dirs[f][1], nz = z + dirs[f][2];
+                                    const Block_ID nid = block_at(nx, ny, nz);
+                                    const Block_Properties& np = *props[nid];
+                                    // Грань лежит на стенке клетки: +X/+Y/+Z — верх бокса у 1, -X/-Y/-Z — низ у 0.
+                                    const bool on_boundary = (f % 2 == 0) ? (box_hi[f / 2] >= 1.0f - 1e-5f)
+                                                                          : (box_lo[f / 2] <= 1e-5f);
+                                    cull[f] = on_boundary && nid != 0 && np.shape == Block_Shape::None &&
+                                              np.state != Block_State::Liquid && !np.is_transparent;
+                                    light[f] = static_cast<float>(light_at(nx, ny, nz));
+                                }
+                                emit_shape_box(meshes.shaped, origin, box, bp, cull, light);
+                            }
+                            continue;
+                        }
+
                         if (bp.mesh_style == Block_Mesh_Style::XStyle) {
                             const float own_light = static_cast<float>(
                                 S.light[(static_cast<size_t>(y) * kN + z) * kN + x]);
@@ -1082,9 +1189,13 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                         }
                         if (bp.state != Block_State::Liquid) continue;
 
-                        // Высота поверхности клетки: источник — 8/9 блока, течение — меньше
-                        // (уровень лежит в метаданных блока), с жидкостью над собой — полный блок.
-                        const float h = liquid_height(x, y, z, id);
+                        // Высоты поверхности в четырёх углах клетки (см. liquid_corner).
+                        float corner_h[2][2];
+                        for (int cx = 0; cx < 2; ++cx) {
+                            for (int cz = 0; cz < 2; ++cz) {
+                                corner_h[cx][cz] = liquid_corner(x + cx, y, z + cz, id);
+                            }
+                        }
 
                         static constexpr int dirs[6][3] = {
                             {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
@@ -1094,24 +1205,14 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                             if (negative && only_positive_faces) continue;
                             const int nx = x + dirs[d][0], ny = y + dirs[d][1], nz = z + dirs[d][2];
                             const Block_ID nid = block_at(nx, ny, nz);
-
-                            float ylo = 0.0f, yhi = h;
-                            if (nid == id) {
-                                // Та же жидкость рядом: боковая грань нужна только как "ступенька" над
-                                // более низким соседом; вверх/вниз внутри жидкости граней нет.
-                                if (dirs[d][1] != 0) continue;
-                                const float hn = liquid_height(nx, ny, nz, nid);
-                                if (hn >= h - 1e-4f) continue;
-                                ylo = hn;
-                            } else {
-                                // Грань видна, только если с той стороны воздух или прозрачный
-                                // (не жидкий) блок: стенки против камня и дна не рисуем.
-                                if (props[nid]->state == Block_State::Liquid ||
-                                    !props[nid]->is_transparent) continue;
-                            }
+                            // Та же жидкость рядом: поверхности клеток совпадают по общим углам, поэтому
+                            // стенок и граней сверху/снизу между жидкими клетками не нужно.
+                            if (nid == id) continue;
+                            // Грань видна, только если с той стороны воздух или прозрачный (не жидкий) блок.
+                            if (props[nid]->state == Block_State::Liquid || !props[nid]->is_transparent) continue;
                             add_liquid_face_data(meshes, chunk_x, chunk_y, chunk_z, x, y, z,
                                                  dirs[d][0], dirs[d][1], dirs[d][2], block,
-                                                 static_cast<float>(light_at(nx, ny, nz)), ylo, yhi);
+                                                 static_cast<float>(light_at(nx, ny, nz)), corner_h);
                         }
                     }
                 }
@@ -1121,7 +1222,8 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         range.solid_count = meshes.solid.size() - range.solid_start;
         range.flora_count = meshes.flora.size() - range.flora_start;
         range.liquid_count = meshes.liquid.size() - range.liquid_start;
-        range.has_geometry = (range.solid_count + range.flora_count + range.liquid_count) > 0 || section_greedy;
+        range.shaped_count = meshes.shaped.size() - range.shaped_start;
+        range.has_geometry = (range.solid_count + range.flora_count + range.liquid_count + range.shaped_count) > 0 || section_greedy;
 
         if (range.has_geometry) {
             // GPU-секция: её квады лежат внутри Y-диапазона секции, поэтому он и есть границы.
@@ -1136,6 +1238,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
             expand(meshes.solid, range.solid_start, range.solid_count);
             expand(meshes.flora, range.flora_start, range.flora_count);
             expand(meshes.liquid, range.liquid_start, range.liquid_count);
+            expand(meshes.shaped, range.shaped_start, range.shaped_count);
         } else {
             range.min_y = static_cast<float>(base_y + y_begin);
             range.max_y = range.min_y;
@@ -1673,7 +1776,7 @@ bool merge_chunk_boundary_solids(Chunk& lower, Chunk& upper, int axis) {
 
 bool Chunk::is_empty() const {
     return !m_meshes.gpu_candidates && m_meshes.solid.empty() &&
-           m_meshes.flora.empty() && m_meshes.liquid.empty();
+           m_meshes.flora.empty() && m_meshes.liquid.empty() && m_meshes.shaped.empty();
 }
 
 Block_Types Chunk::get_block(int x, int y, int z) const {

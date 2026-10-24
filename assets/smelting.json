@@ -71,6 +71,18 @@
       "output": "Gold Ingot",
       "count": 1,
       "time": 10
+    },
+    {
+      "input": "Copper Ore",
+      "output": "Copper Ingot",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Raw Copper",
+      "output": "Copper Ingot",
+      "count": 1,
+      "time": 10
     }
   ],
   "fuels": [
@@ -133,6 +145,10 @@
     {
       "item": "Stick",
       "burn_time": 5
+    },
+    {
+      "item": "Coal",
+      "burn_time": 80
     }
   ]
 }

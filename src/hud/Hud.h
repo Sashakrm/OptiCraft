@@ -34,6 +34,20 @@ struct Hud_Debug_Stats {
     bool is_flying; // "призрак" (ghost/noclip-полёт) vs "странник" (ходит по земле)
     float day_night_normalized_time; // [0,1) — см. Day_Night_Cycle::get_normalized_time
     std::string biome_name; // текущий биом под игроком, см. World_Generator::get_biome_name
+    std::string effects_line; // активные эффекты игрока (пусто — без строки)
+
+    // --- Расширенный блок (F3 + F4) ---
+    bool extended = false;
+    float frame_min_ms = 0.0f;   // время кадра за последнюю полную секунду
+    float frame_avg_ms = 0.0f;
+    float frame_max_ms = 0.0f;
+    float tps = 0.0f;            // тиков симуляции в секунду (цель — 20)
+    int hostile_count = 0;       // живые враги
+    int passive_count = 0;       // живые мирные: свиньи, коровы, овцы, лошади
+    size_t chunk_mesh_pending = 0;
+    size_t chunk_mesh_requeued = 0;
+    size_t chunk_loads_requested = 0;
+    std::vector<std::string> target_lines; // подробности о цели прицела
 };
 
 struct Hud_Rect {

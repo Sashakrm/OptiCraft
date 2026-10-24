@@ -19,6 +19,7 @@
 #define OPTICRAFT_HORSE_H
 
 #include <glm/glm.hpp>
+#include "entities/effects/Status_Effects.h"
 #include <random>
 #include "entities/animals/ai/Horse_AI.h"
 #include "mobs/Mob.h"
@@ -120,6 +121,9 @@ public:
     // Урон среды (утопление): без отбрасывания. Возвращает true, если умерла.
     bool take_drowning_damage(float amount);
     float get_health() const { return m_health; }
+    Status_Effects& effects() { return m_effects; }
+    const Status_Effects& effects() const { return m_effects; }
+    float get_taming_progress() const { return m_taming_progress; }
     bool is_dying() const { return m_dying; }
     bool kill() {
         if (m_dying) return false;
@@ -155,6 +159,7 @@ private:
 
     // Характеристики/состояние.
     float m_health = Config::horse_max_health;
+    Status_Effects m_effects;
     float m_invulnerable_timer = 0.0f;
     float m_attack_cooldown = 0.0f;
     float m_hurt_flash_timer = 0.0f;

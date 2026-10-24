@@ -623,6 +623,10 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                     }
                 }
 
+                // Над верхней границей загруженного столба небо открыто (та же логика, что у
+                // прямого света в recompute_sky_lighting): иначе грани у края окна темнеют.
+                if (neighbor_index == 3) return 0xF0;
+
                 return 0;
             };
 
@@ -1176,6 +1180,48 @@ void Chunk_Manager::collect_finished_chunks() {
         m_columns_pending_sky_recompute.insert(
             (static_cast<uint64_t>(static_cast<uint32_t>(result.position.x)) << 32) |
             static_cast<uint32_t>(result.position.z));
+
+        // Источники света, которые пришли с чанком (в том числе из сохранённого мира): без этого
+        // факелы и солнечные камни с диска не попадали в m_light_sources и не участвовали в пересчёте.
+        // Та же проверка заодно ставит тики жидкостям: вода, пришедшая с чанком (например, река
+        // из генератора), соприкасается с воздухом и должна начать растекаться. Без тика такая вода
+        // стояла бы "блоками", пока её не тронут.
+        const uint8_t* emission = Block_Registry::get_instance().light_emission_table();
+        const Block_Types first_block = new_chunk->get_block(0, 0, 0);
+        const bool uniform_idle = new_chunk->get_blocks().is_uniform() &&
+            emission[static_cast<Block_ID>(first_block)] == 0 &&
+            get_block_props(first_block).state != Block_State::Liquid;
+        if (!uniform_idle) {
+            const int base_x = result.position.x * Config::chunk_size;
+            const int base_y = result.position.y * Config::chunk_height;
+            const int base_z = result.position.z * Config::chunk_size;
+            static constexpr glm::ivec3 k_open_side[5] = {
+                {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}
+            };
+            for (int ly = 0; ly < Config::chunk_height; ++ly) {
+                for (int lz = 0; lz < Config::chunk_size; ++lz) {
+                    for (int lx = 0; lx < Config::chunk_size; ++lx) {
+                        const Block_Types block = new_chunk->get_block(lx, ly, lz);
+                        const auto id = static_cast<Block_ID>(block);
+                        const glm::ivec3 pos{base_x + lx, base_y + ly, base_z + lz};
+                        if (emission[id] > 0 &&
+                            std::find(m_light_sources.begin(), m_light_sources.end(), pos) == m_light_sources.end()) {
+                            m_light_sources.push_back(pos);
+                        }
+                        const Block_Properties& props = get_block_props(block);
+                        if (props.state != Block_State::Liquid) continue;
+                        for (const glm::ivec3& d : k_open_side) {
+                            const Block_Types nb = get_block_world(pos.x + d.x, pos.y + d.y, pos.z + d.z);
+                            const Block_Properties& np = get_block_props(nb);
+                            if (nb == Block_Types::Air || (!np.is_solid && np.state != Block_State::Liquid)) {
+                                m_fluids.schedule(pos, props.fluid_tick_delay);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Чанк с текущей водой (метаданные жидкости хранятся только у течений): тики
         // не сохраняются, поэтому назначаем их заново — иначе течение, оставшееся без источника
@@ -1841,10 +1887,13 @@ void Chunk_Manager::recompute_sky_lighting(
 
         for (int lx = 0; lx < Config::chunk_size; ++lx) {
             for (int lz = 0; lz < Config::chunk_size; ++lz) {
-                // Start above the highest loaded chunk. The loaded world stack is finite
-                // from the renderer's point of view, so an unobstructed top cell is a
-                // direct sky source.
-                uint8_t sky = 15;
+                // Прямой свет неба идёт сверху вниз. Ближайший непрозрачный блок сверху
+                // (occluder_y) отбрасывает тень только если находится не дальше
+                // Config::sky_shadow_range; дальше тени нет, и клетка остаётся освещённой
+                // (например, земля под парящим островом). Скан не обрывается на первой
+                // крыше: ниже может снова встретиться открытое небо.
+                constexpr int no_occluder = std::numeric_limits<int>::max();
+                int occluder_y = no_occluder;
 
                 for (int cy = Config::world_max_chunk_y; cy >= Config::world_min_chunk_y; --cy) {
                     Chunk* chunk = get_chunk(cx, cy, cz);
@@ -1857,20 +1906,18 @@ void Chunk_Manager::recompute_sky_lighting(
 
                         const Block_ID block_id = static_cast<Block_ID>(chunk->get_block(lx, ly, lz));
                         if (!transparent[block_id]) {
-                            sky = 0;
-                            // Ниже первого непрозрачного блока прямого света
-                            // уже быть не может. Не сканируем весь подземный
-                            // объём до world_min_y.
-                            break;
+                            occluder_y = wy;
+                            continue;
                         }
+
+                        const bool shadowed = occluder_y != no_occluder &&
+                                              occluder_y - wy <= Config::sky_shadow_range;
+                        const uint8_t sky = shadowed ? 0 : 15;
 
                         if (chunk->get_sky_light(lx, ly, lz) != sky) {
                             chunk->set_sky_light(lx, ly, lz, sky);
                             touched_chunks.insert({cx, cy, cz});
                         }
-                    }
-                    if (sky == 0) {
-                        break;
                     }
                 }
             }

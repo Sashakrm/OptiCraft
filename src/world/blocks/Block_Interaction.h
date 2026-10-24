@@ -77,6 +77,18 @@ public:
         return pos;
     }
 
+    // Красная логика: ПКМ по рычагу/кнопке/повторителю и только что поставленный узел.
+    std::optional<glm::ivec3> take_redstone_interact() {
+        auto r = m_redstone_interact;
+        m_redstone_interact.reset();
+        return r;
+    }
+    std::optional<glm::ivec3> take_redstone_placed() {
+        auto r = m_redstone_placed;
+        m_redstone_placed.reset();
+        return r;
+    }
+
     // Блоки, сломанные с прошлого вызова (только Survival) — забирает Game каждый кадр.
     std::vector<Broken_Block_Event> take_broken_blocks() {
         std::vector<Broken_Block_Event> events;
@@ -100,6 +112,8 @@ private:
     Crop_Manager* m_crop_manager = nullptr;
     Sapling_Manager* m_sapling_manager = nullptr;
     std::optional<glm::ivec3> m_container_open_request;
+    std::optional<glm::ivec3> m_redstone_interact;
+    std::optional<glm::ivec3> m_redstone_placed;
 
     // Добыча в Survival
     bool m_is_mining = false;

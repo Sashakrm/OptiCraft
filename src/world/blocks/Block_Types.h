@@ -57,7 +57,7 @@ enum class Block_Types : Block_ID {
     Slime_Grass = 41,
     Slime_Block = 42,
     Deep_Stone = 43,
-    Lava_Stone = 44,
+    Lava = 44,              // лава: жидкость (см. blocks.json), светит уровнем 5
     Cave_Vine = 45,
     Mud = 46,
     Wet_Stone = 47,
@@ -107,7 +107,65 @@ enum class Block_Types : Block_ID {
     // Саженец ели: ставится игроком на землю/дёрн, растёт в 1x1 / 2x2 / 3x3 группы (Sapling_Manager).
     Spruce_Sapling = 124,
 
-    Count = 106
+    // Факел: тонкий светящийся блок (уровень света 10), не твёрдый, пропускает свет.
+    Torch = 125,
+
+    // Каменные ступеньки и полублок: не куб, а набор боксов (см. Block_Shapes.h).
+    Stone_Stairs = 126,
+    Stone_Slab = 127,
+
+    // Саженцы остальных деревьев: растут в одиночное дерево своего вида (Sapling_Manager).
+    Oak_Sapling = 128,
+    Birch_Sapling = 129,
+    Jungle_Sapling = 130,
+    Acacia_Sapling = 131,
+    Slimewood_Sapling = 132,
+    // Доски слизового дерева (раньше рецепт по ошибке давал доски дуба).
+    Slimewood_Planks = 133,
+    // Яблоко: падает с листвы дуба, съедобно.
+    Apple = 134,
+    // Зелья-шарики: бросаются ПКМ в мобов (или в землю). Эффект — см. Status_Effects.cpp.
+    Potion_Regeneration = 135,
+    Potion_Speed = 136,
+    Potion_Jump = 137,
+
+    // Уголь: предмет (топливо, рецепты) и руда (даёт Coal, кирка из дерева).
+    Coal = 138,
+    Coal_Ore = 139,
+    // Медь: руда (даёт сырую медь 2..8 штук) и сама сырая медь (самородок) и слиток.
+    Copper_Ore = 140,
+    Raw_Copper = 141,
+    Copper_Ingot = 142,
+    // Кожа (падает с коров и лошадей) и броня из неё, алмаза и золота.
+    Leather = 143,
+    Leather_Helmet = 144,
+    Leather_Chestplate = 145,
+    Leather_Leggings = 146,
+    Leather_Boots = 147,
+    Diamond_Helmet = 148,
+    Diamond_Chestplate = 149,
+    Diamond_Leggings = 150,
+    Diamond_Boots = 151,
+    Gold_Helmet = 152,
+    Gold_Chestplate = 153,
+    Gold_Leggings = 154,
+    Gold_Boots = 155,
+
+    // Медный провод: блок-пластинка 1/16 толщиной на всю клетку. Ставится только на твёрдую
+    // опору снизу (см. Logic_Manager); без опоры отрывается и падает предметом.
+    Copper_Wire = 156,
+    // Красная логика (см. Logic_Manager): рычаг и кнопка, зажиматель сигнала (инвертор) и
+    // повторитель. Пары On/Off — разные типы блоков, чтобы состояние было видно по текстуре.
+    Lever = 157,
+    Lever_On = 158,
+    Button = 159,
+    Button_Pressed = 160,
+    Signal_Clamp = 161,        // горит: выдаёт сигнал, пока опора без сигнала
+    Signal_Clamp_Off = 162,
+    Repeater = 163,            // выключен
+    Repeater_On = 164,         // выдаёт сигнал вперёд
+
+    Count = 165
 };
 
 // Максимальная ёмкость реестра блоков: данные из blocks.json могут занимать любые id в этом
@@ -128,7 +186,18 @@ constexpr size_t k_armor_slot_count = 4;
 enum class Block_Mesh_Type : uint8_t {
     Solid = 0,
     Flora = 1,
-    Liquid = 2
+    Liquid = 2,
+    // Не куб: геометрия из боксов формы (Block_Shape), отдельный буфер мешера.
+    Shaped = 3
+};
+
+// Форма блока с Mesh_Type::Shaped. Stairs: нижняя половина на всю клетку, верхняя половина
+// со стороны, куда направлен meta (Block_Meta::facing_*). Slab: только нижняя половина.
+enum class Block_Shape : uint8_t {
+    None = 0,
+    Slab = 1,
+    Stairs = 2,
+    Plate = 3   // пластинка 1/16 толщиной на всю клетку (провод)
 };
 
 enum class Block_Mesh_Style : uint8_t {
@@ -221,6 +290,9 @@ struct Block_Properties {
     // Что выпадает при добыче в Survival: -1 = сам блок, 0 = ничего, >0 = id другого блока/предмета.
     int drop_id = -1;
     int drop_count = 1;
+    // Если > drop_count: количество дропа — случайное от drop_count до drop_count_max (включительно).
+    // Из blocks.json: "drop_count_max" (медная руда: 2..8).
+    int drop_count_max = 0;
     float drop_chance = 1.0f;
     // Время добычи голыми руками в секундах. < 0 = считается из hardness
     // (см. Config::survival_break_seconds_per_hardness), 0 = мгновенно.
@@ -270,6 +342,8 @@ struct Block_Properties {
     // Нужно ли вообще читать метаданные при построении меша: у обычных блоков (камень, земля...)
     // ответ "нет", и мешинг идёт по прежнему быстрому пути без единого обращения к карте.
     bool uses_meta = false;
+    // Форма для Mesh_Type::Shaped (см. Block_Shapes.h). В конце: позиционная инициализация выше.
+    Block_Shape shape = Block_Shape::None;
     Block_Face_Textures textures;         // обычное состояние
     Block_Face_Textures active_textures;  // активное состояние (если has_active_state)
     // Иконка в инвентаре/хотбаре: лицо блока, если оно есть, иначе верхняя грань.

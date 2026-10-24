@@ -369,6 +369,8 @@ void Renderer::delete_chunk_resources(Chunk_GL_Resources& resources) {
     if (resources.solid_vbo != 0) glDeleteBuffers(1, &resources.solid_vbo);
     if (resources.flora_vbo != 0) glDeleteBuffers(1, &resources.flora_vbo);
     if (resources.liquid_vbo != 0) glDeleteBuffers(1, &resources.liquid_vbo);
+    if (resources.shaped_vao != 0) glDeleteVertexArrays(1, &resources.shaped_vao);
+    if (resources.shaped_vbo != 0) glDeleteBuffers(1, &resources.shaped_vbo);
     for (Section_Occlusion_State& state : resources.occlusion) {
         if (state.query != 0) glDeleteQueries(1, &state.query);
     }
@@ -920,7 +922,8 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
                             const glm::mat4& view,
                             const glm::mat4& projection,
                             float ambient_intensity,
-                            bool spectator) {
+                            bool spectator,
+                            const std::function<void()>& before_liquid) {
     m_last_rendered_chunk_count = 0;
     m_last_rendered_triangle_count = 0;
     m_last_rendered_section_count = 0;
@@ -979,6 +982,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
             upload_terrain_mesh(gl_res.solid_vao, gl_res.solid_vbo, gl_res.solid_count, chunk.meshes->solid);
             upload_mesh(gl_res.flora_vao, gl_res.flora_vbo, gl_res.flora_count, chunk.meshes->flora);
             upload_mesh(gl_res.liquid_vao, gl_res.liquid_vbo, gl_res.liquid_count, chunk.meshes->liquid);
+            upload_terrain_mesh(gl_res.shaped_vao, gl_res.shaped_vbo, gl_res.shaped_count, chunk.meshes->shaped);
             gl_res.mesh_version = chunk.mesh_version;
             gl_res.is_valid = true;
         }
@@ -1000,9 +1004,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         bool any_section_drawn = false;
         for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
             const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
-            if (!section.has_geometry || section.solid_count == 0 ||
+            if (!section.has_geometry || (section.solid_count == 0 && section.shaped_count == 0) ||
                 !chunk.section_visible[section_index]) {
-                if (section.has_geometry && section.solid_count > 0 &&
+                if (section.has_geometry && (section.solid_count > 0 || section.shaped_count > 0) &&
                     !chunk.section_visible[section_index]) {
                     ++m_last_culled_section_count;
                 }
@@ -1035,7 +1039,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
             }
 
             if (spectator || !m_occlusion_enabled || occ.visible) {
-                draw_mesh_range(gl_res.solid_vao, section.solid_start, section.solid_count);
+                if (section.solid_count > 0) draw_mesh_range(gl_res.solid_vao, section.solid_start, section.solid_count);
+                // Блоки формы (ступеньки, плиты): тот же шейдер и формат вершин, что у твёрдых.
+                if (section.shaped_count > 0) draw_mesh_range(gl_res.shaped_vao, section.shaped_start, section.shaped_count);
                 ++m_last_rendered_section_count;
                 any_section_drawn = true;
             } else {
@@ -1197,6 +1203,15 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // иначе при полёте сквозь блок камера видит сквозь его стенки.
     glEnable(GL_CULL_FACE);
 
+    // Непрозрачные объекты (мобы и т.п.) рисуются здесь — ДО полупрозрачной воды, а не после неё.
+    // Тогда вода, которая в depth-буфере ближе, смешивается поверх мобов, находящихся под ней.
+    // Блендинг на этот проход выключен, как и у остальной непрозрачной геометрии.
+    if (before_liquid) {
+        glDisable(GL_BLEND);
+        before_liquid();
+        glEnable(GL_CULL_FACE);
+    }
+
     // Жидкость — отдельный шейдер (анимация волны на вершинах + мерцание/скролл течения
     // на фрагментах, см. assets/shaders/liquid_*.glsl). glfwGetTime() — тот же самый общий
     // счётчик времени, что использует Game::run() для delta_time, поэтому не понадобилось
@@ -1212,6 +1227,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // чтобы скролл/мерцание в шейдере не выходили за её собственный кусок атласа.
     const glm::vec4& water_uv = get_block_props(Block_Types::Water).uv_side;
     m_liquid_shader_ptr->set_vec2("tile_size", glm::vec2(water_uv.z - water_uv.x, water_uv.w - water_uv.y));
+    m_liquid_shader_ptr->set_vec2("tile_origin", glm::vec2(water_uv.x, water_uv.y));
     m_liquid_shader_ptr->set_float("ambient", ambient_intensity);
     m_liquid_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
 
@@ -1220,6 +1236,8 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // the nearer surface fail GL_LESS, which is exactly the "far block covers near block"
     // artifact seen with overlapping semi-transparent blocks. Flora above remains a
     // depth-writing alpha-cutout pass, so solid-looking leaves/grass still occlude correctly.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
 
     for (const Renderable_Chunk* chunk : transparent_chunks) {

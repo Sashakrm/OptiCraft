@@ -18,6 +18,7 @@
 
 
 #include <glm/glm.hpp>
+#include "entities/effects/Status_Effects.h"
 #include <random>
 #include <string>
 #include "mobs/Mob.h"
@@ -89,6 +90,10 @@ public:
     // Тревога от товарища: видел игрока другой враг рядом — этот тоже идёт к нему.
     void alert(const glm::vec3& player_position);
     bool is_aggro() const { return m_memory_timer > 0.0f; }
+    float get_health() const { return m_health; }
+    Status_Effects& effects() { return m_effects; }
+    const Status_Effects& effects() const { return m_effects; }
+    float get_attack_cooldown() const { return m_attack_cooldown; }
 
     const glm::vec3& get_position() const { return m_mob.get_position(); }
     const std::string& get_name() const { return m_name; }
@@ -117,6 +122,7 @@ private:
     std::mt19937 m_rng;
 
     float m_health;
+    Status_Effects m_effects;
     float m_invulnerable_timer = 0.0f;
     float m_hurt_flash_timer = 0.0f;
     glm::vec3 m_knockback{0.0f};

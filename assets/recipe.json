@@ -5,7 +5,8 @@
       "Birch Planks",
       "Spruce Planks",
       "Jungle Planks",
-      "Acacia Planks"
+      "Acacia Planks",
+      "Slimewood Planks"
     ],
     "logs": [
       "Oak Log",
@@ -97,7 +98,7 @@
         }
       ],
       "output": {
-        "item": "Oak Planks",
+        "item": "Slimewood Planks",
         "count": 4
       }
     },
@@ -1040,6 +1041,353 @@
       },
       "output": {
         "item": "Diamond Trident",
+        "count": 1
+      }
+    },
+    {
+      "name": "torch",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Charcoal",
+          "count": 1
+        },
+        {
+          "item": "Stick",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Torch",
+        "count": 4
+      }
+    },
+    {
+      "name": "leather_helmet",
+      "type": "shaped",
+      "pattern": [
+        "LLL",
+        "L L"
+      ],
+      "key": {
+        "L": "Leather"
+      },
+      "output": {
+        "item": "Leather Helmet",
+        "count": 1
+      }
+    },
+    {
+      "name": "leather_chestplate",
+      "type": "shaped",
+      "pattern": [
+        "L L",
+        "LLL",
+        "LLL"
+      ],
+      "key": {
+        "L": "Leather"
+      },
+      "output": {
+        "item": "Leather Chestplate",
+        "count": 1
+      }
+    },
+    {
+      "name": "leather_leggings",
+      "type": "shaped",
+      "pattern": [
+        "LLL",
+        "L L",
+        "L L"
+      ],
+      "key": {
+        "L": "Leather"
+      },
+      "output": {
+        "item": "Leather Leggings",
+        "count": 1
+      }
+    },
+    {
+      "name": "leather_boots",
+      "type": "shaped",
+      "pattern": [
+        "L L",
+        "L L"
+      ],
+      "key": {
+        "L": "Leather"
+      },
+      "output": {
+        "item": "Leather Boots",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_helmet",
+      "type": "shaped",
+      "pattern": [
+        "DDD",
+        "D D"
+      ],
+      "key": {
+        "D": "Diamond"
+      },
+      "output": {
+        "item": "Diamond Helmet",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_chestplate",
+      "type": "shaped",
+      "pattern": [
+        "D D",
+        "DDD",
+        "DDD"
+      ],
+      "key": {
+        "D": "Diamond"
+      },
+      "output": {
+        "item": "Diamond Chestplate",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_leggings",
+      "type": "shaped",
+      "pattern": [
+        "DDD",
+        "D D",
+        "D D"
+      ],
+      "key": {
+        "D": "Diamond"
+      },
+      "output": {
+        "item": "Diamond Leggings",
+        "count": 1
+      }
+    },
+    {
+      "name": "diamond_boots",
+      "type": "shaped",
+      "pattern": [
+        "D D",
+        "D D"
+      ],
+      "key": {
+        "D": "Diamond"
+      },
+      "output": {
+        "item": "Diamond Boots",
+        "count": 1
+      }
+    },
+    {
+      "name": "gold_helmet",
+      "type": "shaped",
+      "pattern": [
+        "GGG",
+        "G G"
+      ],
+      "key": {
+        "G": "Gold Ingot"
+      },
+      "output": {
+        "item": "Gold Helmet",
+        "count": 1
+      }
+    },
+    {
+      "name": "gold_chestplate",
+      "type": "shaped",
+      "pattern": [
+        "G G",
+        "GGG",
+        "GGG"
+      ],
+      "key": {
+        "G": "Gold Ingot"
+      },
+      "output": {
+        "item": "Gold Chestplate",
+        "count": 1
+      }
+    },
+    {
+      "name": "gold_leggings",
+      "type": "shaped",
+      "pattern": [
+        "GGG",
+        "G G",
+        "G G"
+      ],
+      "key": {
+        "G": "Gold Ingot"
+      },
+      "output": {
+        "item": "Gold Leggings",
+        "count": 1
+      }
+    },
+    {
+      "name": "gold_boots",
+      "type": "shaped",
+      "pattern": [
+        "G G",
+        "G G"
+      ],
+      "key": {
+        "G": "Gold Ingot"
+      },
+      "output": {
+        "item": "Gold Boots",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_helmet",
+      "type": "shaped",
+      "pattern": [
+        "MMM",
+        "M M"
+      ],
+      "key": {
+        "M": "Iron Ingot"
+      },
+      "output": {
+        "item": "Iron Helmet",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_chestplate",
+      "type": "shaped",
+      "pattern": [
+        "M M",
+        "MMM",
+        "MMM"
+      ],
+      "key": {
+        "M": "Iron Ingot"
+      },
+      "output": {
+        "item": "Iron Chestplate",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_leggings",
+      "type": "shaped",
+      "pattern": [
+        "MMM",
+        "M M",
+        "M M"
+      ],
+      "key": {
+        "M": "Iron Ingot"
+      },
+      "output": {
+        "item": "Iron Leggings",
+        "count": 1
+      }
+    },
+    {
+      "name": "iron_boots",
+      "type": "shaped",
+      "pattern": [
+        "M M",
+        "M M"
+      ],
+      "key": {
+        "M": "Iron Ingot"
+      },
+      "output": {
+        "item": "Iron Boots",
+        "count": 1
+      }
+    },
+    {
+      "name": "copper_wire",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Copper Ingot",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Copper Wire",
+        "count": 4
+      }
+    },
+    {
+      "name": "lever",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Stick",
+          "count": 1
+        },
+        {
+          "item": "Cobblestone",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Lever",
+        "count": 1
+      }
+    },
+    {
+      "name": "button",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Stone",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Button",
+        "count": 1
+      }
+    },
+    {
+      "name": "signal_clamp",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Stick",
+          "count": 1
+        },
+        {
+          "item": "Copper Wire",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Signal Clamp",
+        "count": 1
+      }
+    },
+    {
+      "name": "repeater",
+      "type": "shaped",
+      "pattern": [
+        "CWC",
+        "SSS"
+      ],
+      "key": {
+        "C": "Signal Clamp",
+        "W": "Copper Wire",
+        "S": "Stone"
+      },
+      "output": {
+        "item": "Repeater",
         "count": 1
       }
     }

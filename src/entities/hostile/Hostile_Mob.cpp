@@ -169,6 +169,8 @@ bool Hostile_Mob::take_damage(float amount, const glm::vec3& attacker_position) 
 
 Hostile_Result Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager, const Hostile_Context& context) {
     const Hostile_Stats& s = stats();
+    const int regen_ticks = m_effects.update(dt);
+    if (!m_dying && regen_ticks > 0) m_health = std::min(s.max_health, m_health + static_cast<float>(regen_ticks));
     if (m_dying) {
         m_death_timer += dt;
         const float fall_t = std::clamp(m_death_timer / (s.death_seconds * 0.75f), 0.0f, 1.0f);
@@ -303,7 +305,7 @@ Hostile_Result Hostile_Mob::update(float dt, const Chunk_Manager& chunk_manager,
 
     horizontal += m_knockback;
     // В воде замедляется и сносится течением.
-    horizontal = horizontal * Liquid_Physics::horizontal_drag(wet) + wet.flow;
+    horizontal = horizontal * Liquid_Physics::horizontal_drag(wet) * m_effects.speed_factor() + wet.flow;
 
     // --- Физика: как у пассивных животных, с перепрыгиванием уступа при погоне -----------
     bool blocked = false;

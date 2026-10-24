@@ -6,6 +6,7 @@
 #include "utils/Config.h"
 #include "physics/Liquid_Physics.h"
 #include "world/blocks/Block_Types.h"
+#include "world/blocks/Block_Shapes.h"
 #include <cmath>
 #include <algorithm>
 
@@ -27,6 +28,8 @@ Player::Player()
 {}
 
 void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
+    if (m_health > 0) heal(m_effects.update(delta_time));
+
     if (m_is_riding) {
         // Сидит в седле: позицию выставляет лошадь, собственная физика не нужна.
         m_velocity = glm::vec3(0.0f);
@@ -65,7 +68,7 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
     const float current_speed = (m_is_flying ? m_fly_speed
     : (sneaking ? m_move_speed * Config::player_sneak_speed_multiplier
            : (sprinting ? m_move_speed * Config::player_sprint_speed_multiplier : m_move_speed)))
-        * Liquid_Physics::horizontal_drag(wet);
+        * Liquid_Physics::horizontal_drag(wet) * m_effects.speed_factor();
 
     if (m_pending_input.forward != 0.0f || m_pending_input.strafe != 0.0f) {
         glm::vec3 move_direction = forward * m_pending_input.forward + right * m_pending_input.strafe;
@@ -126,7 +129,7 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
 
     // Прыжок. В воде прыжок — гребок вверх, а не отскок от земли.
     if (m_pending_input.jump && m_on_ground && !wet.body_in_liquid) {
-        m_velocity.y = m_jump_force;
+        m_velocity.y = m_jump_force * m_effects.jump_factor();
         m_on_ground = false;
         add_exhaustion(Config::exhaustion_jump);
     }
@@ -156,11 +159,24 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
                !collides_at(p - glm::vec3(0.0f, Config::player_sneak_edge_drop, 0.0f), chunk_manager);
     };
 
+    // Подъём на полблока (ступеньки): упёрлись на земле — пробуем шагнуть на полблока выше,
+    // если над шагом свободно. Прыжок при этом не нужен.
+    auto try_step_up = [&](const glm::vec3& horizontal) -> bool {
+        if (!was_on_ground || sneaking) return false;
+        glm::vec3 raised = horizontal;
+        raised.y = m_position.y + Config::player_step_height;
+        if (collides_at(raised, chunk_manager)) return false;
+        m_position = raised;
+        return true;
+    };
+
     target.x += m_velocity.x * delta_time;
     if (collides_at(target, chunk_manager) || leaves_ground(target)) {
-        target.x = m_position.x;
-        m_velocity.x = 0.0f;
-        m_impulse.x = 0.0f;
+        if (!try_step_up(target)) {
+            target.x = m_position.x;
+            m_velocity.x = 0.0f;
+            m_impulse.x = 0.0f;
+        }
     } else {
         m_position.x = target.x;
     }
@@ -184,9 +200,11 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
     target = m_position;
     target.z += m_velocity.z * delta_time;
     if (collides_at(target, chunk_manager) || leaves_ground(target)) {
-        target.z = m_position.z;
-        m_velocity.z = 0.0f;
-        m_impulse.z = 0.0f;
+        if (!try_step_up(target)) {
+            target.z = m_position.z;
+            m_velocity.z = 0.0f;
+            m_impulse.z = 0.0f;
+        }
     } else {
         m_position.z = target.z;
     }
@@ -264,16 +282,43 @@ bool Player::collides_at(const glm::vec3& position, const Chunk_Manager& chunk_m
     const int min_z = static_cast<int>(std::floor(position.z - half_width + epsilon));
     const int max_z = static_cast<int>(std::floor(position.z + half_width - epsilon));
 
+    const glm::vec3 pmin(position.x - half_width, position.y, position.z - half_width);
+    const glm::vec3 pmax(position.x + half_width, position.y + m_size.y, position.z + half_width);
     for (int y = min_y; y <= max_y; ++y) {
         for (int z = min_z; z <= max_z; ++z) {
             for (int x = min_x; x <= max_x; ++x) {
-                if (is_solid_block_at(glm::vec3(x, y, z), chunk_manager)) {
+                if (block_hits_box(x, y, z, pmin, pmax, chunk_manager)) {
                     return true;
                 }
             }
         }
     }
 
+    return false;
+}
+
+bool Player::block_hits_box(int x, int y, int z, const glm::vec3& pmin, const glm::vec3& pmax,
+                            const Chunk_Manager& chunk_manager) const {
+    const Block_Types type = chunk_manager.get_block_world(x, y, z);
+    const Block_Properties& props = get_block_props(type);
+    if (!props.is_solid) return false;
+
+    constexpr float eps = 1e-4f;
+    if (props.shape == Block_Shape::None) {
+        return true;
+    }
+    Shape_Box boxes[2];
+    const int count = shape_boxes(props.shape, chunk_manager.get_block_meta_world(x, y, z), boxes);
+    const glm::vec3 cell(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    for (int b = 0; b < count; ++b) {
+        const glm::vec3 lo = cell + boxes[b].lo;
+        const glm::vec3 hi = cell + boxes[b].hi;
+        if (pmin.x < hi.x - eps && pmax.x > lo.x + eps &&
+            pmin.y < hi.y - eps && pmax.y > lo.y + eps &&
+            pmin.z < hi.z - eps && pmax.z > lo.z + eps) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -328,10 +373,12 @@ bool Player::would_fit_at_height(float height, const Chunk_Manager& chunk_manage
     const int min_z = static_cast<int>(std::floor(m_position.z - half_width + epsilon));
     const int max_z = static_cast<int>(std::floor(m_position.z + half_width - epsilon));
 
+    const glm::vec3 pmin(m_position.x - half_width, m_position.y, m_position.z - half_width);
+    const glm::vec3 pmax(m_position.x + half_width, m_position.y + height, m_position.z + half_width);
     for (int y = min_y; y <= max_y; ++y) {
         for (int z = min_z; z <= max_z; ++z) {
             for (int x = min_x; x <= max_x; ++x) {
-                if (is_solid_block_at(glm::vec3(x, y, z), chunk_manager)) {
+                if (block_hits_box(x, y, z, pmin, pmax, chunk_manager)) {
                     return false;
                 }
             }
@@ -364,6 +411,7 @@ void Player::respawn(const glm::vec3& position) {
     m_position = position;
     m_velocity = glm::vec3(0.0f);
     m_health = m_max_health;
+    m_effects.clear();
     m_fall_start_height = position.y;
     // После смерти голод тоже начинается заново.
     m_food_level = Config::player_max_food;

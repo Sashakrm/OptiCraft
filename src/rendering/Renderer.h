@@ -7,6 +7,7 @@
 
 #include <glad/gl.h>
 #include <array>
+#include <functional>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -58,6 +59,9 @@ private:
         unsigned int solid_vao = 0;
         unsigned int flora_vao = 0;
         unsigned int liquid_vao = 0;
+        unsigned int shaped_vbo = 0;
+        unsigned int shaped_vao = 0;
+        size_t shaped_count = 0;
         size_t solid_count = 0;
         size_t flora_count = 0;
         size_t liquid_count = 0;
@@ -209,7 +213,8 @@ public:
                        const glm::mat4& view,
                        const glm::mat4& projection,
                        float ambient_intensity,
-                       bool spectator = false);
+                       bool spectator = false,
+                       const std::function<void()>& before_liquid = {});
 
     // Рисует солнце и луну как billboard-диски в небе (процедурный шейдер, без текстуры —
     // см. assets/shaders/sky_object_*.glsl). Вызывать ДО render_chunks — рисуется без записи

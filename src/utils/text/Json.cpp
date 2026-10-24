@@ -1,4 +1,8 @@
 #include "utils/text/Json.h"
+#include "utils/binary/Binary_Json.h"
+#include "utils/logging/Logger.h"
+#include <filesystem>
+#include <string_view>
 
 #include <algorithm>
 #include <cctype>
@@ -174,7 +178,44 @@ Json_Value Json_Parser::parse_null() {
     return {};
 }
 
+namespace {
+    // Путь бинарной версии: x.json -> x.ocb. Пусто, если путь не *.json.
+    std::string binary_sibling(const std::string& json_path) {
+        constexpr std::string_view k_ext = ".json";
+        if (json_path.size() < k_ext.size() ||
+            json_path.compare(json_path.size() - k_ext.size(), k_ext.size(), k_ext) != 0) {
+            return {};
+        }
+        return json_path.substr(0, json_path.size() - k_ext.size()) + ".ocb";
+    }
+
+    // Бинарный файл берём, если он есть и не старее JSON. Так отредактированный JSON не
+    // перекрывается устаревшим .ocb.
+    bool binary_is_fresh(const std::string& json_path, const std::string& bin_path) {
+        std::error_code ec;
+        if (!std::filesystem::exists(bin_path, ec)) return false;
+        if (!std::filesystem::exists(json_path, ec)) return true;
+        return std::filesystem::last_write_time(bin_path, ec) >= std::filesystem::last_write_time(json_path, ec);
+    }
+} // namespace
+
+bool json_asset_exists(const std::string& json_path) {
+    std::error_code ec;
+    if (std::filesystem::exists(json_path, ec)) return true;
+    const std::string bin = binary_sibling(json_path);
+    return !bin.empty() && std::filesystem::exists(bin, ec);
+}
+
 Json_Value parse_json_file(const std::string& path) {
+    const std::string bin = binary_sibling(path);
+    if (!bin.empty() && binary_is_fresh(path, bin)) {
+        try {
+            return Binary_Json::load_file(bin);
+        } catch (const std::exception& e) {
+            // Битый бинарник не должен ломать загрузку: откатываемся на исходный JSON.
+            Logger::warning("binary asset rejected, using JSON: " + bin + " (" + e.what() + ")");
+        }
+    }
     std::ifstream file(path);
     if (!file) {
         throw std::runtime_error("cannot open file: " + path);

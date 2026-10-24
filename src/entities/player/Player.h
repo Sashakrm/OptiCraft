@@ -10,6 +10,7 @@
 #include "input/Input_Manager.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "physics/Liquid_Physics.h"
+#include "entities/effects/Status_Effects.h"
 
 class Player {
 private:
@@ -46,6 +47,7 @@ private:
     // Голод (Survival). Модель как в Minecraft 1.8: еда (0..max) + насыщение + истощение,
     // см. константы в Config.h и update_hunger(). В Creative не тратится (m_hunger_enabled).
     int m_food_level = Config::player_max_food;
+    Status_Effects m_effects;
     float m_saturation = Config::player_initial_saturation;
     float m_exhaustion = 0.0f;
     float m_hunger_regen_timer = 0.0f;
@@ -82,6 +84,10 @@ private:
     // Полёт с коллизиями: движение по осям по очереди, упёрся — гасим скорость по этой оси.
     void move_flying_with_collision(float delta_time, const Chunk_Manager& chunk_manager);
     bool is_solid_block_at(const glm::vec3& world_pos, const Chunk_Manager& chunk_manager) const;
+    // Пересекает ли AABB игрока [pmin,pmax] твёрдую часть блока в клетке (x,y,z): для кубов — весь блок,
+    // для блоков формы — их боксы (см. Block_Shapes.h).
+    bool block_hits_box(int x, int y, int z, const glm::vec3& pmin, const glm::vec3& pmax,
+                        const Chunk_Manager& chunk_manager) const;
 
     bool would_fit_at_height(float height, const Chunk_Manager& chunk_manager) const;
     void update_crouch(const Chunk_Manager& chunk_manager);
@@ -123,6 +129,10 @@ public:
     bool is_alive() const { return m_health > 0; }
     void take_damage(int amount);
     void heal(int amount);
+
+    // Эффекты зелий (регенерация, скорость, сила прыжка). Тикают в update().
+    Status_Effects& effects() { return m_effects; }
+    const Status_Effects& effects() const { return m_effects; }
 
     // Голод. update_hunger зовётся каждый кадр из Game (только в Survival и пока игрок жив):
     // переводит истощение в потерю насыщения/еды, лечит при сытости и бьёт при полном голоде.

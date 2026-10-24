@@ -637,12 +637,33 @@ void Hud::draw_debug_overlay(int window_width, int window_height, const Hud_Debu
     lines.emplace_back(buffer);
     lines.emplace_back(stats.is_flying ? "State: ghost (flying)" : "State: walker");
     lines.emplace_back("Biome: " + stats.biome_name);
+    if (!stats.effects_line.empty()) lines.emplace_back(stats.effects_line);
 
     const float hours_float = std::fmod(stats.day_night_normalized_time * 24.0f + 6.0f, 24.0f);
     const int hh = static_cast<int>(hours_float);
     const int mm = static_cast<int>((hours_float - static_cast<float>(hh)) * 60.0f);
     std::snprintf(buffer, sizeof(buffer), "Time: %02d:%02d", hh, mm);
     lines.emplace_back(buffer);
+
+    if (stats.extended) {
+        lines.emplace_back("");
+        std::snprintf(buffer, sizeof(buffer), "Frame (last s): min %.2f / avg %.2f / max %.2f ms",
+                      stats.frame_min_ms, stats.frame_avg_ms, stats.frame_max_ms);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "TPS: %.1f (target 20)", stats.tps);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "Mobs alive: hostile %d / passive %d",
+                      stats.hostile_count, stats.passive_count);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "Chunks updating: mesh %d (requeued %d), loading %d",
+                      static_cast<int>(stats.chunk_mesh_pending), static_cast<int>(stats.chunk_mesh_requeued),
+                      static_cast<int>(stats.chunk_loads_requested));
+        lines.emplace_back(buffer);
+        lines.emplace_back("");
+        for (const auto& target_line : stats.target_lines) {
+            lines.push_back(target_line);
+        }
+    }
 
     const float line_h = 10.0f * s;
     float y = 2.0f * s;

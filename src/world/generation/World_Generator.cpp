@@ -70,6 +70,27 @@ inline int floordiv_int(int a, int b) {
         return true;
     }
 
+    // Редкие деревья (слизовые ивы): мир разбит на ячейки 60x60, в каждой не больше одного
+    // кандидата, смещённого от центра ячейки не далее чем на ±5. Кандидаты соседних ячеек
+    // отстоят не меньше чем на 60 - 2*5 = 50 блоков, поэтому два дерева ближе 50 не встречаются.
+    constexpr int kSparseCell = 60;
+    constexpr int kSparseJitter = 5;
+    constexpr int kSparseSalt = 0x5C1F;
+    constexpr uint64_t kSparseExistPercent = 40;   // какая доля ячеек вообще получает дерево
+
+    bool is_sparse_tree_anchor(int x, int z, uint32_t seed) {
+        const int cell_x = static_cast<int>(std::floor(static_cast<double>(x) / kSparseCell));
+        const int cell_z = static_cast<int>(std::floor(static_cast<double>(z) / kSparseCell));
+        const uint64_t h = hash_position(cell_x, cell_z, seed, kSparseSalt);
+        if ((h >> 32) % 100 >= kSparseExistPercent) return false;
+        const int span = 2 * kSparseJitter + 1;
+        const int jx = static_cast<int>(h % span) - kSparseJitter;
+        const int jz = static_cast<int>((h >> 16) % span) - kSparseJitter;
+        const int tx = cell_x * kSparseCell + kSparseCell / 2 + jx;
+        const int tz = cell_z * kSparseCell + kSparseCell / 2 + jz;
+        return x == tx && z == tz;
+    }
+
     double interval_distance(double value, double min_value, double max_value) {
         if (value < min_value) return min_value - value;
         if (value > max_value) return value - max_value;
@@ -854,12 +875,22 @@ Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int 
         if (ore > 0.76) return Block_Types::Diamond_Ore;
         return Block_Types::Deep_Stone;
     }
+    // Уголь и медь — свой шум (другое смещение и частота), чтобы жилы не совпадали с железом.
+    const auto vein = [&](double offset_x, double offset_y, double offset_z) {
+        return normalize_noise(m_caves.noise3(world_x * 0.13 + offset_x,
+                                              world_y * 0.13 + offset_y,
+                                              world_z * 0.13 + offset_z));
+    };
     if (below_surface >= 90.0) {
         if (ore > 0.915) return Block_Types::Diamond_Ore;
         if (ore > 0.86) return Block_Types::Gold_Ore;
+        if (vein(31.7, -4.2, 9.9) > 0.86) return Block_Types::Copper_Ore;
+        if (vein(-17.3, 12.6, 5.1) > 0.80) return Block_Types::Coal_Ore;
         if (ore > 0.74) return Block_Types::Iron_Ore;
         return Block_Types::Stone;
     }
+    if (vein(31.7, -4.2, 9.9) > 0.86) return Block_Types::Copper_Ore;
+    if (vein(-17.3, 12.6, 5.1) > 0.80) return Block_Types::Coal_Ore;
     if (ore > 0.82) return Block_Types::Iron_Ore;
     if (ore > 0.70 && column.biome == Biome_Id::Forest) return Block_Types::Mossy_Stone;
     return Block_Types::Stone;
@@ -1015,6 +1046,14 @@ World_Sample World_Generator::sample_with_connections(int world_x, int world_y, 
     s.water_connection = clamp01(water_connection);
     s.surface_connection = clamp01(surface_connection);
     return s;
+}
+
+Biome_Id World_Generator::biome_id(int world_x, int world_y, int world_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise) return m_biome;
+    const Column column = column_at(world_x, world_z);
+    const Cave_Kind cave = m_dimension->caves
+        ? m_cave_network->kind_at(world_x, world_y, world_z) : Cave_Kind::None;
+    return biome_at(column, world_y, cave);
 }
 
 std::string World_Generator::get_biome_name(int world_x, int world_y, int world_z) const {
@@ -1297,12 +1336,14 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     int anchor_radius = 1;
 
     switch (biome) {
-        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;       anchor_radius = 1; break;
+        // Лес проходимый: дубы стоят реже (радиус 2 между стволами), между кронами остаются просветы.
+        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;       anchor_radius = 2; break;
         case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;     anchor_radius = 1; break;
         case Biome_Id::Taiga:        has_trees = true; tree_type = Tree_Type::Spruce;    anchor_radius = 3; break;
         case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle;    anchor_radius = 3; break;
         case Biome_Id::Savanna:      has_trees = true; tree_type = Tree_Type::Acacia;    anchor_radius = 2; break;
-        case Biome_Id::Slime:        has_trees = true; tree_type = Tree_Type::Slimewood; anchor_radius = 2; break;
+                // Слизовые ивы редкие: расстояние между ними 50+ блоков (см. is_sparse_tree_anchor).
+        case Biome_Id::Slime:        has_trees = true; tree_type = Tree_Type::Slimewood; anchor_radius = 4; break;
         default: break;
     }
 
@@ -1310,7 +1351,9 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     if (column.slope > 4.0) has_trees = false;
 
     if (terrain_height >= kSeaLevel && has_trees &&
-        is_tree_anchor(world_x, world_z, m_seed, anchor_radius)) {
+        (tree_type == Tree_Type::Slimewood
+            ? is_sparse_tree_anchor(world_x, world_z, m_seed)
+            : is_tree_anchor(world_x, world_z, m_seed, anchor_radius))) {
         const auto setter = [&](int x, int y, int z, Block_Types type) {
             // Структура ставится только в уже пустой воксель, поэтому дерево
             // никогда не перезаписывает рельеф или столб воды.

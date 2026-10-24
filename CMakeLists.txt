@@ -61,6 +61,7 @@ set(SOURCES
         # utils
         ${SRC_DIR}/utils/logging/Logger.cpp
         ${SRC_DIR}/utils/text/Json.cpp
+        ${SRC_DIR}/utils/binary/Binary_Json.cpp
         ${SRC_DIR}/utils/text/Localization.cpp
 
         # world
@@ -70,6 +71,7 @@ set(SOURCES
         ${SRC_DIR}/world/crafting/Recipe.cpp
         ${SRC_DIR}/world/crafting/Crop_Manager.cpp
         ${SRC_DIR}/world/crafting/Sapling_Manager.cpp
+        ${SRC_DIR}/world/logic/Logic_Manager.cpp
         ${SRC_DIR}/world/crafting/Smelting.cpp
         ${SRC_DIR}/world/storage/Region_File.cpp
         ${SRC_DIR}/world/storage/Chunk_IO.cpp
@@ -108,6 +110,8 @@ set(SOURCES
         ${SRC_DIR}/entities/hostile/Hostile_Mob.cpp
         ${SRC_DIR}/entities/animals/ai/Horse_AI.cpp
         ${SRC_DIR}/entities/animals/Horse.cpp
+        src/world/blocks/Block_Shapes.cpp
+        src/entities/effects/Status_Effects.cpp
 )
 
 set(PLATFORM_SOURCES
@@ -121,6 +125,16 @@ set(THIRD_PARTY_SOURCES
         # шум для генерации мира (OpenSimplex2S, C)
         ${CMAKE_CURRENT_SOURCE_DIR}/external/opensimplex/OpenSimplex2S.c
 )
+
+# =============== Инструмент json -> OCJB (tools/json2bin) ===============
+# Переводит ассеты (blocks.json, рецепты, атласы, ...) в бинарный формат *.ocb и читает их обратно.
+add_executable(json2bin
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/json2bin/json2bin.cpp
+        ${SRC_DIR}/utils/binary/Binary_Json.cpp
+        ${SRC_DIR}/utils/text/Json.cpp
+        ${SRC_DIR}/utils/logging/Logger.cpp
+)
+target_include_directories(json2bin PRIVATE ${SRC_DIR})
 
 # =============== Создаём исполняемый файл ===============
 add_executable(${PROJECT_NAME}

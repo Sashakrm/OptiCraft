@@ -130,6 +130,8 @@ public:
                                          double water_connection,
                                          double surface_connection) const;
     std::string get_biome_name(int world_x, int world_y, int world_z) const;
+    // Биом в точке — тот же, что показывает F3 и что используют спавн мобов.
+    Biome_Id biome_id(int world_x, int world_y, int world_z) const;
     bool cave_at(int world_x, int world_y, int world_z) const;
 
 private:

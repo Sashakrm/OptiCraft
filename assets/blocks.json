@@ -61,7 +61,7 @@
       "effective_tool": "shovel"
     },
     {
-      "id": 5,
+      "id": 3,
       "name": "Cobblestone",
       "solid": true,
       "opaque": true,
@@ -77,27 +77,8 @@
         "side": "cobblestone",
         "bottom": "cobblestone"
       },
-      "effective_tool": "pickaxe"
-    },
-    {
-      "id": 3,
-      "name": "Stone",
-      "solid": true,
-      "opaque": true,
-      "can_update": false,
-      "hardness": 2.0,
-      "blast_resistance": 6,
-      "mesh_type": "Solid",
-      "mesh_style": "Block",
-      "state": "Solid",
-      "texture": {
-        "atlas": "blocks_main",
-        "top": "stone",
-        "side": "stone",
-        "bottom": "stone"
-      },
-      "drop": "Cobblestone",
-      "effective_tool": "pickaxe"
+      "effective_tool": "pickaxe",
+      "harvest_tier": 1
     },
     {
       "id": 4,
@@ -117,6 +98,27 @@
         "bottom": "sand"
       },
       "effective_tool": "shovel"
+    },
+    {
+      "id": 5,
+      "name": "Stone",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 6,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "stone",
+        "side": "stone",
+        "bottom": "stone"
+      },
+      "drop": "Cobblestone",
+      "effective_tool": "pickaxe",
+      "harvest_tier": 1
     },
     {
       "id": 6,
@@ -329,7 +331,8 @@
         "top": "birch_leaves",
         "side": "birch_leaves",
         "bottom": "birch_leaves"
-      }
+      },
+      "drop": "none"
     },
     {
       "id": 18,
@@ -444,7 +447,8 @@
         "top": "jungle_leaves",
         "side": "jungle_leaves",
         "bottom": "jungle_leaves"
-      }
+      },
+      "drop": "none"
     },
     {
       "id": 24,
@@ -501,7 +505,8 @@
         "top": "acacia_leaves",
         "side": "acacia_leaves",
         "bottom": "acacia_leaves"
-      }
+      },
+      "drop": "none"
     },
     {
       "id": 27,
@@ -539,7 +544,8 @@
         "top": "slimewood_leaves",
         "side": "slimewood_leaves",
         "bottom": "slimewood_leaves"
-      }
+      },
+      "drop": "none"
     },
     {
       "id": 29,
@@ -830,23 +836,26 @@
     },
     {
       "id": 44,
-      "name": "Lava Stone",
-      "solid": true,
-      "opaque": true,
+      "name": "Lava",
+      "solid": false,
+      "opaque": false,
       "can_update": false,
-      "hardness": 3.5,
-      "blast_resistance": 6,
-      "mesh_type": "Solid",
+      "hardness": 100.0,
+      "blast_resistance": 100,
+      "fluid_tick_delay": 15,
+      "fluid_drop_off": 2,
+      "fluid_slope_distance": 2,
+      "fluid_infinite": false,
+      "mesh_type": "Liquid",
       "mesh_style": "Block",
-      "state": "Solid",
+      "state": "Liquid",
+      "light_emission": 5,
       "texture": {
         "atlas": "blocks_main",
         "top": "lava_stone",
         "side": "lava_stone",
         "bottom": "lava_stone"
-      },
-      "effective_tool": "pickaxe",
-      "harvest_tier": 2
+      }
     },
     {
       "id": 45,
@@ -1125,7 +1134,8 @@
         "top": "oak_leaves",
         "side": "oak_leaves",
         "bottom": "oak_leaves"
-      }
+      },
+      "drop": "none"
     },
     {
       "id": 59,
@@ -2682,6 +2692,826 @@
         "side": "spruce_sapling",
         "bottom": "spruce_sapling"
       }
+    },
+    {
+      "id": 125,
+      "name": "Torch",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "break_time": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "light_emission": 10,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "torch",
+        "side": "torch",
+        "bottom": "torch"
+      }
+    },
+    {
+      "id": 126,
+      "name": "Stone Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 6,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "pickaxe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "stone",
+        "side": "stone",
+        "bottom": "stone"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 127,
+      "name": "Stone Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 6,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "pickaxe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "stone",
+        "side": "stone",
+        "bottom": "stone"
+      }
+    },
+    {
+      "id": 128,
+      "name": "Oak Sapling",
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "oak_sapling",
+        "side": "oak_sapling",
+        "bottom": "oak_sapling"
+      }
+    },
+    {
+      "id": 129,
+      "name": "Birch Sapling",
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "birch_sapling",
+        "side": "birch_sapling",
+        "bottom": "birch_sapling"
+      }
+    },
+    {
+      "id": 130,
+      "name": "Jungle Sapling",
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "jungle_sapling",
+        "side": "jungle_sapling",
+        "bottom": "jungle_sapling"
+      }
+    },
+    {
+      "id": 131,
+      "name": "Acacia Sapling",
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "acacia_sapling",
+        "side": "acacia_sapling",
+        "bottom": "acacia_sapling"
+      }
+    },
+    {
+      "id": 132,
+      "name": "Slimewood Sapling",
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "slimewood_sapling",
+        "side": "slimewood_sapling",
+        "bottom": "slimewood_sapling"
+      }
+    },
+    {
+      "id": 133,
+      "name": "Slimewood Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "slimewood_planks",
+        "side": "slimewood_planks",
+        "bottom": "slimewood_planks"
+      },
+      "effective_tool": "axe"
+    },
+    {
+      "id": 134,
+      "name": "Apple",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "food": 4,
+      "saturation": 2.4,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_apple",
+        "side": "item_apple",
+        "bottom": "item_apple"
+      }
+    },
+    {
+      "id": 135,
+      "name": "Regeneration Ball",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_potion_regeneration",
+        "side": "item_potion_regeneration",
+        "bottom": "item_potion_regeneration"
+      }
+    },
+    {
+      "id": 136,
+      "name": "Speed Ball",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_potion_speed",
+        "side": "item_potion_speed",
+        "bottom": "item_potion_speed"
+      }
+    },
+    {
+      "id": 137,
+      "name": "Jump Ball",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_potion_jump",
+        "side": "item_potion_jump",
+        "bottom": "item_potion_jump"
+      }
+    },
+    {
+      "id": 138,
+      "name": "Coal",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_coal",
+        "side": "item_coal",
+        "bottom": "item_coal"
+      }
+    },
+    {
+      "id": 139,
+      "name": "Coal Ore",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 3.0,
+      "blast_resistance": 3,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "coal_ore",
+        "side": "coal_ore",
+        "bottom": "coal_ore"
+      },
+      "effective_tool": "pickaxe",
+      "harvest_tier": 0,
+      "drop": "Coal"
+    },
+    {
+      "id": 140,
+      "name": "Copper Ore",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 3.0,
+      "blast_resistance": 3,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "copper_ore",
+        "side": "copper_ore",
+        "bottom": "copper_ore"
+      },
+      "effective_tool": "pickaxe",
+      "harvest_tier": 1,
+      "drop": "Raw Copper",
+      "drop_count": 2,
+      "drop_count_max": 8
+    },
+    {
+      "id": 141,
+      "name": "Raw Copper",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_raw_copper",
+        "side": "item_raw_copper",
+        "bottom": "item_raw_copper"
+      }
+    },
+    {
+      "id": 142,
+      "name": "Copper Ingot",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_copper_ingot",
+        "side": "item_copper_ingot",
+        "bottom": "item_copper_ingot"
+      }
+    },
+    {
+      "id": 143,
+      "name": "Leather",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "item_leather",
+        "side": "item_leather",
+        "bottom": "item_leather"
+      }
+    },
+    {
+      "id": 144,
+      "name": "Leather Helmet",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_leather_helmet",
+        "side": "armor_leather_helmet",
+        "bottom": "armor_leather_helmet"
+      },
+      "armor_slot": "head",
+      "armor_points": 1,
+      "durability": 55
+    },
+    {
+      "id": 145,
+      "name": "Leather Chestplate",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_leather_chestplate",
+        "side": "armor_leather_chestplate",
+        "bottom": "armor_leather_chestplate"
+      },
+      "armor_slot": "chest",
+      "armor_points": 3,
+      "durability": 80
+    },
+    {
+      "id": 146,
+      "name": "Leather Leggings",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_leather_leggings",
+        "side": "armor_leather_leggings",
+        "bottom": "armor_leather_leggings"
+      },
+      "armor_slot": "legs",
+      "armor_points": 2,
+      "durability": 75
+    },
+    {
+      "id": 147,
+      "name": "Leather Boots",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_leather_boots",
+        "side": "armor_leather_boots",
+        "bottom": "armor_leather_boots"
+      },
+      "armor_slot": "feet",
+      "armor_points": 1,
+      "durability": 65
+    },
+    {
+      "id": 148,
+      "name": "Diamond Helmet",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_diamond_helmet",
+        "side": "armor_diamond_helmet",
+        "bottom": "armor_diamond_helmet"
+      },
+      "armor_slot": "head",
+      "armor_points": 3,
+      "durability": 363
+    },
+    {
+      "id": 149,
+      "name": "Diamond Chestplate",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_diamond_chestplate",
+        "side": "armor_diamond_chestplate",
+        "bottom": "armor_diamond_chestplate"
+      },
+      "armor_slot": "chest",
+      "armor_points": 8,
+      "durability": 528
+    },
+    {
+      "id": 150,
+      "name": "Diamond Leggings",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_diamond_leggings",
+        "side": "armor_diamond_leggings",
+        "bottom": "armor_diamond_leggings"
+      },
+      "armor_slot": "legs",
+      "armor_points": 6,
+      "durability": 495
+    },
+    {
+      "id": 151,
+      "name": "Diamond Boots",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_diamond_boots",
+        "side": "armor_diamond_boots",
+        "bottom": "armor_diamond_boots"
+      },
+      "armor_slot": "feet",
+      "armor_points": 3,
+      "durability": 429
+    },
+    {
+      "id": 152,
+      "name": "Gold Helmet",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_gold_helmet",
+        "side": "armor_gold_helmet",
+        "bottom": "armor_gold_helmet"
+      },
+      "armor_slot": "head",
+      "armor_points": 2,
+      "durability": 77
+    },
+    {
+      "id": 153,
+      "name": "Gold Chestplate",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_gold_chestplate",
+        "side": "armor_gold_chestplate",
+        "bottom": "armor_gold_chestplate"
+      },
+      "armor_slot": "chest",
+      "armor_points": 5,
+      "durability": 112
+    },
+    {
+      "id": 154,
+      "name": "Gold Leggings",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_gold_leggings",
+        "side": "armor_gold_leggings",
+        "bottom": "armor_gold_leggings"
+      },
+      "armor_slot": "legs",
+      "armor_points": 3,
+      "durability": 105
+    },
+    {
+      "id": 155,
+      "name": "Gold Boots",
+      "item": true,
+      "solid": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "armor_gold_boots",
+        "side": "armor_gold_boots",
+        "bottom": "armor_gold_boots"
+      },
+      "armor_slot": "feet",
+      "armor_points": 1,
+      "durability": 91
+    },
+    {
+      "id": 156,
+      "name": "Copper Wire",
+      "solid": true,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "plate",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "copper_wire",
+        "side": "copper_wire",
+        "bottom": "copper_wire"
+      }
+    },
+    {
+      "id": 157,
+      "name": "Lever",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "lever_off",
+        "side": "lever_off",
+        "bottom": "lever_off"
+      },
+      "drop": "self"
+    },
+    {
+      "id": 158,
+      "name": "Lever On",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "lever_on",
+        "side": "lever_on",
+        "bottom": "lever_on"
+      },
+      "drop": "Lever",
+      "creative": false
+    },
+    {
+      "id": 159,
+      "name": "Button",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "button",
+        "side": "button",
+        "bottom": "button"
+      },
+      "drop": "self"
+    },
+    {
+      "id": 160,
+      "name": "Button Pressed",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "button_pressed",
+        "side": "button_pressed",
+        "bottom": "button_pressed"
+      },
+      "drop": "Button",
+      "creative": false
+    },
+    {
+      "id": 161,
+      "name": "Signal Clamp",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "signal_clamp_on",
+        "side": "signal_clamp_on",
+        "bottom": "signal_clamp_on"
+      },
+      "drop": "self"
+    },
+    {
+      "id": 162,
+      "name": "Signal Clamp Off",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "signal_clamp_off",
+        "side": "signal_clamp_off",
+        "bottom": "signal_clamp_off"
+      },
+      "drop": "Signal Clamp",
+      "creative": false
+    },
+    {
+      "id": 163,
+      "name": "Repeater",
+      "solid": true,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "plate",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "repeater_off",
+        "side": "repeater_off",
+        "bottom": "repeater_off"
+      },
+      "drop": "self"
+    },
+    {
+      "id": 164,
+      "name": "Repeater On",
+      "solid": true,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.5,
+      "blast_resistance": 0,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "plate",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "repeater_on",
+        "side": "repeater_on",
+        "bottom": "repeater_on"
+      },
+      "drop": "Repeater",
+      "creative": false
     }
   ]
 }

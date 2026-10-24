@@ -8,6 +8,8 @@
 #define GLFW_INCLUDE_NONE
 
 #include "core/app/Window.h"
+#include "world/logic/Logic_Manager.h"
+#include <cstdint>
 #include <string>
 #include "input/Input_Manager.h"
 #include "entities/player/Camera.h"
@@ -63,6 +65,9 @@ private:
     std::unique_ptr<Crop_Manager> m_crops_ptr;
     // Рост еловых саженцев в деревья (см. Sapling_Manager.h); сохраняется в saplings.txt рядом с миром.
     std::unique_ptr<Sapling_Manager> m_saplings_ptr;
+    // Красная логика (рычаги, кнопки, зажиматели, повторители, провод). Сбрасывается при смене мира.
+    Logic_Manager m_logic;
+    float m_logic_scan_timer = 0.0f;   // раз в секунду ищем узлы вокруг игрока
     // Выпавшие предметы (блоки, мясо...). Не держит GL-ресурсов — рисуется через Renderer,
     // поэтому порядок объявления относительно окна не важен.
     std::unique_ptr<Dropped_Item_Manager> m_dropped_items_ptr;
@@ -120,6 +125,18 @@ private:
     int m_fps_frame_count{0};
     float m_current_fps{0.0f};
     bool m_show_debug_hud{false};
+    // F4 внутри F3: расширенный блок (кадры за секунду, TPS, мобы, чанки, цель прицела).
+    bool m_show_debug_extended{false};
+    // Окно «последняя полная секунда»: сбор времени кадров и TPS.
+    float m_frame_window_min_ms{0.0f};
+    float m_frame_window_max_ms{0.0f};
+    float m_frame_window_sum_ms{0.0f};
+    int m_frame_window_count{0};
+    float m_last_frame_min_ms{0.0f};
+    float m_last_frame_avg_ms{0.0f};
+    float m_last_frame_max_ms{0.0f};
+    float m_current_tps{0.0f};
+    std::uint64_t m_tps_tick_mark{0};
 
     bool m_is_running;
     bool m_is_shutdown{false};
@@ -135,7 +152,7 @@ private:
     bool is_camera_underwater() const;
     // Урожай: выпавшие предметы при сборе ростка и исчезновение дикой грядки.
     void handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block);
-    void handle_leaf_drops(const glm::ivec3& pos);
+    void handle_leaf_drops(const glm::ivec3& pos, Block_Types leaves);
 
     // --- Чат и команды ----------------------------------------------------------
     static constexpr size_t k_chat_log_capacity = 100;   // хранится в логе

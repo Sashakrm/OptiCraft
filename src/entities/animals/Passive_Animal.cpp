@@ -158,6 +158,8 @@ void Passive_Animal::seek_towards(const glm::vec3& target) {
 
 void Passive_Animal::update(float dt, const Chunk_Manager& chunk_manager) {
     const Passive_Stats& s = stats();
+    const int regen_ticks = m_effects.update(dt);
+    if (!m_dying && regen_ticks > 0) m_health = std::min(s.max_health, m_health + static_cast<float>(regen_ticks));
     if (m_dying) {
         m_death_timer += dt;
         const float fall_t = std::clamp(m_death_timer / (s.death_seconds * 0.75f), 0.0f, 1.0f);
@@ -213,7 +215,7 @@ void Passive_Animal::update(float dt, const Chunk_Manager& chunk_manager) {
     if (glm::length(m_knockback) < 0.05f) m_knockback = glm::vec3(0.0f);
 
     // В воде замедляется и сносится течением.
-    velocity = velocity * Liquid_Physics::horizontal_drag(wet) + wet.flow;
+    velocity = velocity * Liquid_Physics::horizontal_drag(wet) * m_effects.speed_factor() + wet.flow;
 
     bool blocked = false;
     glm::vec3 target = position;

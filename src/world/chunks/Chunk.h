@@ -90,6 +90,7 @@ struct Chunk_Section_Range {
     size_t solid_start = 0, solid_count = 0;
     size_t flora_start = 0, flora_count = 0;
     size_t liquid_start = 0, liquid_count = 0;
+    size_t shaped_start = 0, shaped_count = 0;   // блоки не-кубической формы (Mesh_Type::Shaped)
     float min_y = 0.0f;
     float max_y = 0.0f;
     bool has_geometry = false;
@@ -171,6 +172,8 @@ struct Chunk_Meshes {
     std::vector<Terrain_Vertex> solid;
     std::vector<Chunk_Vertex> flora;
     std::vector<Chunk_Vertex> liquid;
+    // Боксы формы (ступеньки, плиты): свой буфер, без жадного слияния и без склейки швов.
+    std::vector<Terrain_Vertex> shaped;
     std::array<Chunk_Section_Range, Config::chunk_section_count> sections;
 
     // --- GPU-путь непрозрачной геометрии (см. Renderer::draw_solid_gpu) ---

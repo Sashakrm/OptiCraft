@@ -47,6 +47,7 @@
 #include "entities/animals/Horse.h"
 #include "entities/hostile/Hostile_Mob.h"
 #include "entities/items/Dropped_Item.h"
+#include "entities/effects/Status_Effects.h"
 #include "entities/player/Inventory.h"
 #include "world/blocks/Block_Types.h"
 
@@ -140,14 +141,30 @@ public:
     // /breed: сразу «влюбляет» взрослых животных вида (pig|cow|sheep|horse). Возвращает число затронутых.
     int breed_all(const std::string& species);
 
+    // Брошенный зельем шарик разбился в center: эффект получают все живые мобы в радиусе.
+    // Возвращает число мобов, которые получили эффект.
+    int splash_potion(const glm::vec3& center, float radius, const Potion_Info& potion);
+    // Есть ли живой моб, чьё тело (центр на высоте пояса) ближе radius к point.
+    bool mob_near(const glm::vec3& point, float radius) const;
+
+    // --- Отладка (F3+F4) ---------------------------------------------------------------------
+    // Сколько живых (не умирающих) врагов и мирных животных сейчас в мире.
+    struct Mob_Debug_Counts {
+        int hostile = 0;
+        int passive = 0;   // свиньи, коровы, овцы и лошади вместе
+    };
+    Mob_Debug_Counts debug_counts() const;
+    // Подробности о текущей цели прицела (HP, состояние, возраст, размножение). Пусто, если цели нет.
+    std::vector<std::string> debug_target_lines() const;
+
     // --- Отрисовка --------------------------------------------------------------------------
     void render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient) const;
 
 private:
     enum class Target_Kind { None, Pig, Passive, Horse, Hostile };
 
-    void spawn_missing_pigs(const glm::vec3& player_position);
-    void spawn_missing_passive(Passive_Kind kind, const glm::vec3& player_position);
+    void spawn_missing_pigs(const glm::vec3& player_position, Chunk_Manager& chunks);
+    void spawn_missing_passive(Passive_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks);
     int summon_passive(Passive_Kind kind, int count, const glm::vec3& around);
     int summon_hostile(Hostile_Kind kind, int count, const glm::vec3& around);
     void spawn_missing_horses(const glm::vec3& player_position, Chunk_Manager& chunks);

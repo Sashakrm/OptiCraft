@@ -89,6 +89,7 @@ namespace {
             if (type == "solid") return Block_Mesh_Type::Solid;
             if (type == "flora") return Block_Mesh_Type::Flora;
             if (type == "liquid") return Block_Mesh_Type::Liquid;
+            if (type == "shaped") return Block_Mesh_Type::Shaped;
         }
         return fallback;
     }
@@ -264,17 +265,12 @@ void Block_Registry::load_defaults() {
 }
 
 void Block_Registry::load_from_file(const std::string& path) {
-    std::ifstream file(path);
-    if (!file) {
+    if (!json_asset_exists(path)) {
         return;
     }
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-
     try {
-        Json_Parser parser(buffer.str());
-        Json_Value root = parser.parse();
+        Json_Value root = parse_json_file(path);   // бинарный .ocb, если он свежее JSON (см. Json.h)
         if (!root.is_object()) {
             return;
         }
@@ -431,6 +427,9 @@ void Block_Registry::load_from_file(const std::string& path) {
             if (const auto* v = entry.find("drop_count")) {
                 properties.drop_count = std::max(0, read_int(*v, properties.drop_count));
             }
+            if (const auto* v = entry.find("drop_count_max")) {
+                properties.drop_count_max = std::max(0, read_int(*v, properties.drop_count_max));
+            }
             if (const auto* v = entry.find("drop_chance")) {
                 properties.drop_chance = std::clamp(read_float(*v, properties.drop_chance), 0.0f, 1.0f);
             }
@@ -445,6 +444,13 @@ void Block_Registry::load_from_file(const std::string& path) {
             }
             if (const auto* v = entry.find("mesh_type")) {
                 properties.mesh_type = parse_mesh_type(*v, properties.mesh_type);
+            }
+            if (const auto* v = entry.find("shape"); v && v->is_string()) {
+                const std::string sh = lower(trim(v->string_value));
+                if (sh == "slab") properties.shape = Block_Shape::Slab;
+                else if (sh == "stairs") properties.shape = Block_Shape::Stairs;
+                else if (sh == "plate") properties.shape = Block_Shape::Plate;
+                else if (sh != "none") LOG_WARN("Block_Registry: unknown shape '" + sh + "' for '" + properties.name + "'");
             }
             if (const auto* v = entry.find("mesh_style")) {
                 properties.mesh_style = parse_mesh_style(*v, properties.mesh_style);
