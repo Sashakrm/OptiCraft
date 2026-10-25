@@ -290,6 +290,8 @@ void Renderer::upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t&
         glEnableVertexAttribArray(4);
         glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ao)));
         glEnableVertexAttribArray(5);
+        glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, sky)));
+        glEnableVertexAttribArray(6);
         glBindVertexArray(0);
     }
 
@@ -593,7 +595,7 @@ void Renderer::grow_gpu_slots(int needed) {
     const int new_capacity = std::max(needed, std::max(256, m_gpu_slot_capacity * 2));
     const size_t capacity = static_cast<size_t>(new_capacity);
     const size_t old_capacity = static_cast<size_t>(m_gpu_slot_capacity);
-    const size_t quad_bytes_per_slot = static_cast<size_t>(4) * kGpuQuadCap * sizeof(glm::uvec2);
+    const size_t quad_bytes_per_slot = static_cast<size_t>(4) * kGpuQuadCap * sizeof(glm::uvec4);
 
     const std::vector<uint32_t> zero_counts(4 * capacity, 0u);
     const std::vector<glm::vec4> zero_origins(capacity, glm::vec4(0.0f));
@@ -797,7 +799,7 @@ std::vector<glm::ivec3> Renderer::take_cpu_fallback_requests() {
 }
 
 bool Renderer::debug_gpu_section_quads(const glm::ivec3& chunk_position, int section,
-                                       std::vector<glm::uvec2>& out) {
+                                       std::vector<glm::uvec4>& out) {
     out.clear();
     const auto it = m_chunk_gl_cache.find(chunk_position);
     if (!m_gpu_enabled || it == m_chunk_gl_cache.end() || it->second.gpu_slot < 0) return false;
@@ -808,8 +810,8 @@ bool Renderer::debug_gpu_section_quads(const glm::ivec3& chunk_position, int sec
     if (count > 0) {
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_quads_ssbo);
         glGetBufferSubData(GL_SHADER_STORAGE_BUFFER,
-                           static_cast<GLintptr>(index * kGpuQuadCap * sizeof(glm::uvec2)),
-                           static_cast<GLsizeiptr>(count * sizeof(glm::uvec2)), out.data());
+                           static_cast<GLintptr>(index * kGpuQuadCap * sizeof(glm::uvec4)),
+                           static_cast<GLsizeiptr>(count * sizeof(glm::uvec4)), out.data());
     }
     return true;
 }
@@ -1227,7 +1229,6 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // чтобы скролл/мерцание в шейдере не выходили за её собственный кусок атласа.
     const glm::vec4& water_uv = get_block_props(Block_Types::Water).uv_side;
     m_liquid_shader_ptr->set_vec2("tile_size", glm::vec2(water_uv.z - water_uv.x, water_uv.w - water_uv.y));
-    m_liquid_shader_ptr->set_vec2("tile_origin", glm::vec2(water_uv.x, water_uv.y));
     m_liquid_shader_ptr->set_float("ambient", ambient_intensity);
     m_liquid_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
 

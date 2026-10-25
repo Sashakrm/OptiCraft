@@ -7,15 +7,15 @@
 // Вход — упакованные каналы чанка (палитры + биты, см. pack_channel в Chunk.cpp). Выход — 8-байтные
 // записи квадов в пул (раскладка записи — в декодере terrain_gpu_vertex.glsl), по CAP записей на секцию.
 //
-// Ключ среза: UV-прямоугольник/поворот и атрибуты освещения/AO. Соседние блоки разных
-// типов с одной текстурой сливаются; освещение и AO берутся из первой клетки прямоугольника.
+// Ключ среза: UV-прямоугольник/поворот, AO и свет четырёх углов. Соседние блоки разных типов с одной
+// текстурой сливаются, только если совпадают AO и свет всех углов (как в CPU-мешере).
 layout(local_size_x = 64) in;
 
 // Заголовок чанка: kGpuHeaderStride = 17 uvec4 (см. Chunk.h). [0].x = слот пула; [1 + ch] = (палитра,
 // слова, биты, 0) канала ch.
 layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
 layout(std430, binding = 1) readonly buffer Payload { uint payload[]; };
-layout(std430, binding = 2) writeonly buffer Quads { uvec2 quads[]; };
+layout(std430, binding = 2) writeonly buffer Quads { uvec4 quads[]; };
 layout(std430, binding = 3) buffer Counts { uint counts[]; };
 // (id * 6 + грань) * 256 + метаданные -> индекс прямоугольника UV | поворот << 15.
 layout(std430, binding = 4) readonly buffer Lut { uint rect_lut[]; };
@@ -119,9 +119,50 @@ uint face_ao(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
     return code;
 }
 
-// Ключ грани: .x = индекс UV-прямоугольника | поворот<<15; .y = свет | AO<<8 | присутствие<<16.
-// Для слияния сравнивается только .x.
-uvec2 mask[1024];
+// Ключ грани: .x = индекс UV-прямоугольника | поворот<<15; .y = AO<<8 | присутствие<<16;
+// .z = свет четырёх углов (байт угла: sky<<4 | blk). Для слияния сравнивается ВЕСЬ ключ.
+uvec3 mask[1024];
+
+// Свет четырёх углов грани (как face_corner_light в Chunk.cpp): среднее по клетке перед гранью и по
+// трём клеткам слоя, непрозрачные клетки не учитываются, клетки за двумя границами чанка тоже.
+uint face_corner_light(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
+    ivec3 base = cell;
+    base[axis] += sign;
+    uint code = 0u;
+    for (int fv = 0; fv < 2; ++fv) {
+        for (int fu = 0; fu < 2; ++fu) {
+            const int du = fu != 0 ? 1 : -1;
+            const int dv = fv != 0 ? 1 : -1;
+            ivec3 pts[4];
+            pts[0] = base;
+            pts[1] = base;
+            pts[2] = base;
+            pts[3] = base;
+            pts[1][ua] += du;
+            pts[2][va] += dv;
+            pts[3][ua] += du;
+            pts[3][va] += dv;
+            uint sky_sum = 0u;
+            uint blk_sum = 0u;
+            uint n = 0u;
+            for (int i = 0; i < 4; ++i) {
+                const ivec3 p = pts[i];
+                const int out_axes = int(p.x < 0 || p.x >= 32) + int(p.y < 0 || p.y >= 32) +
+                                     int(p.z < 0 || p.z >= 32);
+                if (out_axes >= 2) continue;
+                if (i > 0 && occludes(hb, p.x, p.y, p.z)) continue;
+                const uint packed = light_at(hb, p.x, p.y, p.z);
+                sky_sum += packed >> 4u;
+                blk_sum += packed & 15u;
+                ++n;
+            }
+            const uint sky = (sky_sum + n / 2u) / n;
+            const uint blk = (blk_sum + n / 2u) / n;
+            code |= ((sky << 4u) | blk) << uint(8 * (fu + 2 * fv));
+        }
+    }
+    return code;
+}
 
 void main() {
     const uint g = gl_GlobalInvocationID.x;
@@ -164,7 +205,7 @@ void main() {
             c[axis] = s;
             c[ua] = u;
             c[va] = v_base + v;
-            uvec2 key = uvec2(0u);
+            uvec3 key = uvec3(0u);
             const uint cur = block_at(hb, c.x, c.y, c.z);
             const uint fc = block_flags[cur];
             if ((fc & FLAG_GREEDY) != 0u) {
@@ -178,10 +219,8 @@ void main() {
                         meta = read_channel(hb, 1u, uint((c.y * 32 + c.z) * 32 + c.x));
                     }
                     const uint material = rect_lut[(cur * 6u + face) * 256u + meta] & 0xFFFFu;
-                    uint fl = light_at(hb, nc.x, nc.y, nc.z);
-                    if (cull_same) fl = light_coarse[fl];
                     const uint ao = face_ao(hb, c, axis, dir, ua, va);
-                    key = uvec2(material, fl | (ao << 8u) | (1u << 16u));
+                    key = uvec3(material, (ao << 8u) | (1u << 16u), face_corner_light(hb, c, axis, dir, ua, va));
                     any_key = true;
                 }
             }
@@ -194,8 +233,8 @@ void main() {
     for (int v = 0; v < v_count; ++v) {
         int u = 0;
         while (u < 32) {
-            const uvec2 key = mask[v * 32 + u];
-            if (key == uvec2(0u)) {
+            const uvec3 key = mask[v * 32 + u];
+            if (key == uvec3(0u)) {
                 ++u;
                 continue;
             }
@@ -205,11 +244,11 @@ void main() {
             int w = 1;
             int h = 1;
             if (!rotate) {
-                while (u + w < 32 && mask[v * 32 + u + w].x == key.x) ++w;
+                while (u + w < 32 && mask[v * 32 + u + w] == key) ++w;
                 bool grow = true;
                 while (v + h < v_count && grow) {
                     for (int i = 0; i < w; ++i) {
-                        if (mask[(v + h) * 32 + u + i].x != key.x) {
+                        if (mask[(v + h) * 32 + u + i] != key) {
                             grow = false;
                             break;
                         }
@@ -219,7 +258,7 @@ void main() {
             }
             for (int dv = 0; dv < h; ++dv) {
                 for (int du = 0; du < w; ++du) {
-                    mask[(v + dv) * 32 + u + du] = uvec2(0u);
+                    mask[(v + dv) * 32 + u + du] = uvec3(0u);
                 }
             }
 
@@ -228,19 +267,18 @@ void main() {
             o[ua] = u;
             o[va] = v_base + v;
             const uint rect = lut & 0x7FFFu;
-            const uint light = key.y & 0xFFu;
             const uint ao = (key.y >> 8u) & 0xFFu;
             const uint w0 = uint(o.x) | (uint(o.y) << 5u) | (uint(o.z) << 10u) |
                             (uint(axis) << 15u) | ((pos ? 1u : 0u) << 17u) |
                             (uint(w - 1) << 18u) | (uint(h - 1) << 23u) |
                             (rotate ? (1u << 28u) : 0u);
-            // w1: индекс прямоугольника (15 бит), свет (8 бит), AO (8 бит).
-            const uint w1 = rect | (light << 16u) | (ao << 24u);
+            // w1: индекс прямоугольника (15 бит), AO (8 бит). w2: свет четырёх углов.
+            const uint w1 = rect | (ao << 24u);
 
             const uint gsec = slot * 4u + sec;
             const uint idx = atomicAdd(counts[gsec], 1u);
             if (idx < uint(u_quad_cap)) {
-                quads[gsec * uint(u_quad_cap) + idx] = uvec2(w0, w1);
+                quads[gsec * uint(u_quad_cap) + idx] = uvec4(w0, w1, key.z, 0u);
             }
             u += w;
         }

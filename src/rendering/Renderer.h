@@ -188,7 +188,7 @@ public:
     std::vector<glm::ivec3> take_cpu_fallback_requests();
     // Только для проверок (harness): квады секции из пула GPU как лежат в видеопамяти (8-байтные записи).
     // false, если чанк сейчас не на GPU (фолбэк на CPU или ещё не загружен). Читает видеопамять, вне кадра.
-    bool debug_gpu_section_quads(const glm::ivec3& chunk_position, int section, std::vector<glm::uvec2>& out);
+    bool debug_gpu_section_quads(const glm::ivec3& chunk_position, int section, std::vector<glm::uvec4>& out);
     bool is_occlusion_enabled() const { return m_occlusion_enabled; }
 
     Renderer();

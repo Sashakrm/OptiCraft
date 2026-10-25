@@ -34,7 +34,8 @@ struct Terrain_Vertex {
     float x, y, z;
     float local_u, local_v;
     float ny;
-    float light;
+    float light;   // свет блока в вершине, 0..15 (интерполируется по квадру)
+    float sky;     // небесный свет в вершине, 0..15 (интерполируется по квадру)
     float rect_u_min, rect_v_min, rect_u_max, rect_v_max;
     // Вершинный AO: 0 — угол закрыт со всех сторон, 3 — открыт. Интерполируется по квадру.
     float ao;

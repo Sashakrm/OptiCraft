@@ -408,8 +408,9 @@ namespace {
             const int seq_flip[6] = {0, 2, 1, 0, 3, 2};
             for (int t = 0; t < 6; ++t) {
                 const int k = flip ? seq_flip[t] : seq[t];
+                const int pk = static_cast<int>(light[f] + 0.5f);
                 out.push_back({corner[k].x, corner[k].y, corner[k].z,
-                               lu[k], lv[k], ny, light[f],
+                               lu[k], lv[k], ny, static_cast<float>(pk & 15), static_cast<float>(pk >> 4),
                                uv.x, uv.y, uv.z, uv.w, 3.0f});
             }
         }
@@ -583,6 +584,7 @@ namespace {
         std::array<Block_ID, Chunk_Ring::kSize> ring_block;
         std::array<uint8_t, Chunk_Ring::kSize> ring_known;
         std::array<uint64_t, kLayer> mask;   // ключ слияния граней, см. kKey* ниже
+        std::array<uint32_t, kLayer> corner; // свет четырёх углов грани (байт угла: sky<<4 | blk)
         // Обход компонент прозрачных клеток одной секции (см. compute_section_connectivity).
         std::array<uint8_t, kLayer * Config::chunk_section_height> section_seen;
         std::array<uint16_t, kLayer * Config::chunk_section_height> section_stack;
@@ -756,7 +758,7 @@ namespace {
     void emit_terrain_quad(std::vector<Terrain_Vertex>& out,
                            float wx, float wy, float wz,
                            int axis, int sign, int w, int h,
-                           const glm::vec4& uv, float light, bool rotate, uint32_t ao_code) {
+                           const glm::vec4& uv, uint32_t corner_light, bool rotate, uint32_t ao_code) {
         const float ny = axis == 1 ? static_cast<float>(sign) : 0.0f;
         const float fw = static_cast<float>(w);
         const float fh = static_cast<float>(h);
@@ -784,7 +786,9 @@ namespace {
                 lv = 1.0f - a;
             }
             const float ao = static_cast<float>((ao_code >> (2 * code)) & 3u);
-            out.push_back({x, y, z, lu, lv, ny, light, uv.x, uv.y, uv.z, uv.w, ao});
+            const uint32_t cl = (corner_light >> (8u * static_cast<uint32_t>(code))) & 0xFFu;
+            out.push_back({x, y, z, lu, lv, ny, static_cast<float>(cl & 15u), static_cast<float>(cl >> 4u),
+                           uv.x, uv.y, uv.z, uv.w, ao});
         }
     }
 
@@ -926,6 +930,45 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
         return code;
     };
 
+    // Свет четырёх углов грани (как face_ao): угол получает среднее по клетке перед гранью и по трём
+    // клеткам слоя, если они не закрывают свет. Клетки за двумя границами чанка не учитываются
+    // (как на GPU, там нет данных света для рёбер). Байт угла fu + 2*fv: sky<<4 | blk.
+    const auto face_corner_light = [&](const int c[3], int axis, int sign, int ua, int va) -> uint32_t {
+        int base[3] = {c[0], c[1], c[2]};
+        base[axis] += sign;
+        uint32_t code = 0;
+        for (int fv = 0; fv < 2; ++fv) {
+            for (int fu = 0; fu < 2; ++fu) {
+                const int du = fu ? 1 : -1;
+                const int dv = fv ? 1 : -1;
+                int p1[3] = {base[0], base[1], base[2]};
+                int p2[3] = {base[0], base[1], base[2]};
+                int p3[3] = {base[0], base[1], base[2]};
+                p1[ua] += du;
+                p2[va] += dv;
+                p3[ua] += du;
+                p3[va] += dv;
+                const int* cells[4] = {base, p1, p2, p3};
+                uint32_t sky_sum = 0, blk_sum = 0, n = 0;
+                for (int i = 0; i < 4; ++i) {
+                    const int* p = cells[i];
+                    const int out_axes = int(p[0] < 0 || p[0] >= kN) + int(p[1] < 0 || p[1] >= kH) +
+                                         int(p[2] < 0 || p[2] >= kN);
+                    if (out_axes >= 2) continue;
+                    if (i > 0 && occludes_at(p[0], p[1], p[2])) continue;
+                    const uint32_t packed = light_at(p[0], p[1], p[2]);
+                    sky_sum += packed >> 4;
+                    blk_sum += packed & 15u;
+                    ++n;
+                }
+                const uint32_t sky = (sky_sum + n / 2) / n;
+                const uint32_t blk = (blk_sum + n / 2) / n;
+                code |= ((sky << 4) | blk) << (8u * static_cast<uint32_t>(fu + 2 * fv));
+            }
+        }
+        return code;
+    };
+
     // Метаданные клетки в чанке или за его границей (для уровня жидкости).
     const auto meta_at = [&](int x, int y, int z) -> uint8_t {
         if (static_cast<unsigned>(x) < static_cast<unsigned>(kN) &&
@@ -1029,6 +1072,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                             const int row = s * s_stride + (v_begin + v) * v_stride;
                             for (int u = 0; u < kN; ++u) {
                                 uint64_t key = 0;
+                                uint32_t corner_word = 0;
                                 const int idx = row + u * u_stride;
                                 const Block_ID cur = S.blocks[idx];
                                 if (tab.greedy[cur]) {
@@ -1048,23 +1092,18 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                         if (tab.uses_meta[cur]) {
                                             meta = blocks.get_meta(c[0], c[1], c[2]);
                                         }
-                                        uint8_t face_light = inside
-                                            ? S.light[idx + sign * s_stride]
-                                            : light_at(c[0] + (axis == 0 ? sign : 0),
-                                                       c[1] + (axis == 1 ? sign : 0),
-                                                       c[2] + (axis == 2 ? sign : 0));
-                                        if (tab.cull_same[cur]) face_light = tab.light_coarse[face_light];
+                                        corner_word = face_corner_light(c, axis, sign, ua, va);
                                         const uint32_t ao = face_ao(c, axis, sign, ua, va);
                                         // В маске храним id/meta как представителя для UV-резолва;
                                         // соседние клетки с той же UV-областью могут слиться независимо от id.
                                         key = static_cast<uint64_t>(cur) |
                                               (static_cast<uint64_t>(meta) << 16) |
-                                              (static_cast<uint64_t>(face_light) << 24) |
                                               (static_cast<uint64_t>(ao) << 32);
                                         any = true;
                                     }
                                 }
                                 S.mask[static_cast<size_t>(v) * kN + u] = key;
+                                S.corner[static_cast<size_t>(v) * kN + u] = corner_word;
                             }
                         }
                         if (!any) continue;
@@ -1088,8 +1127,11 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                 const glm::vec4& key_uv = key_props.uses_meta
                                     ? key_props.resolve_face_uv(face, meta, key_rotate)
                                     : key_props.get_uv(axis == 1 ? sign : 0);
-                                const auto same_surface = [&](uint64_t candidate) {
+                                const uint32_t key_corner = S.corner[static_cast<size_t>(v) * kN + u];
+                                const auto same_surface = [&](size_t idx) {
+                                    const uint64_t candidate = S.mask[idx];
                                     if (candidate == 0) return false;
+                                    if ((candidate >> 32) != (key >> 32) || S.corner[idx] != key_corner) return false;
                                     const Block_Properties& candidate_props = *props[candidate & 0xFFFFu];
                                     const uint8_t candidate_meta = static_cast<uint8_t>((candidate >> 16) & 0xFFu);
                                     bool candidate_rotate = false;
@@ -1102,11 +1144,11 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                 };
                                 if (!rotate) {
                                     while (u + w < kN &&
-                                           same_surface(S.mask[static_cast<size_t>(v) * kN + u + w])) ++w;
+                                           same_surface(static_cast<size_t>(v) * kN + u + w)) ++w;
                                     bool grow = true;
                                     while (v + h < v_count && grow) {
                                         for (int i = 0; i < w; ++i) {
-                                            if (!same_surface(S.mask[static_cast<size_t>(v + h) * kN + u + i])) {
+                                            if (!same_surface(static_cast<size_t>(v + h) * kN + u + i)) {
                                                 grow = false;
                                                 break;
                                             }
@@ -1127,7 +1169,7 @@ Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
                                                   static_cast<float>(base_y + c[1]),
                                                   static_cast<float>(base_z + c[2]),
                                                   axis, sign, w, h, uv,
-                                                  static_cast<float>((key >> 24) & 0xFFu), rotate,
+                                                  key_corner, rotate,
                                                   (key >> 32) & 0xFFu);
                                 u += w;
                             }
@@ -1567,12 +1609,13 @@ namespace {
             q.flat_attributes = q.flat_attributes &&
                 near_value(a.rect_u_min, b.rect_u_min) && near_value(a.rect_v_min, b.rect_v_min) &&
                 near_value(a.rect_u_max, b.rect_u_max) && near_value(a.rect_v_max, b.rect_v_max) &&
-                near_value(a.light, b.light) && near_value(a.ao, b.ao) && near_value(a.ny, b.ny);
+                near_value(a.light, b.light) && near_value(a.sky, b.sky) &&
+                near_value(a.ao, b.ao) && near_value(a.ny, b.ny);
         }
         return q;
     }
 
-    using Boundary_Quad_Key = std::array<float, 14>;
+    using Boundary_Quad_Key = std::array<float, 15>;
 
     Boundary_Quad_Key boundary_quad_key(const Solid_Quad& q, int seam_axis) {
         Boundary_Quad_Key key{};
@@ -1591,6 +1634,7 @@ namespace {
         key[out++] = v.rect_u_max;
         key[out++] = v.rect_v_max;
         key[out++] = v.light;
+        key[out++] = v.sky;
         key[out++] = v.ao;
         key[out++] = v.ny;
         return key;
