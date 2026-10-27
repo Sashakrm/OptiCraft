@@ -112,9 +112,9 @@ private:
         // только к нему: на позиции мог появиться другой чанк, пока задача летала в воркере.
         uint64_t instance_id = 0;
         Capture_Clip clip;
-        // true — непрозрачные квады строит GPU (нагрузка в Chunk_Meshes, см. build_gpu_solid_payload);
-        // false — классический CPU-мешер (тогда в solid лежат готовые вершины).
-        bool solid_on_gpu = false;
+        // Срочная пересборка (правка блока игроком): идёт первой в очереди и возвращается по отдельной очереди результатов.
+        bool urgent = false;
+        uint64_t seq = 0;
     };
 
     struct Mesh_Result {
@@ -123,6 +123,8 @@ private:
         Chunk_Meshes meshes;
         uint64_t dirty_epoch = 0;
         uint64_t instance_id = 0;
+        uint64_t seq = 0;
+        bool urgent = false;
     };
 
     // Хранилище загруженных чанков: open-addressing (Robin Hood) вместо chaining hash map —
@@ -214,16 +216,28 @@ private:
     Priority_Bucket_Queue<std::unique_ptr<Mesh_Job>, 16, 2176, 64> m_pending_mesh_jobs;
     std::atomic<size_t> m_pending_mesh_count{0};
     Mpmc_Queue<Mesh_Result> m_completed_mesh_jobs;
+    // Результаты срочных пересборок (правка блока): применяются раньше обычных и без лимита на кадр.
+    Mpmc_Queue<Mesh_Result> m_completed_urgent_mesh_jobs;
+    // Чанки, которые игрок правил в этом кадре: пересборка ставится один раз за кадр после всех правок.
+    Chunk_Coord_Set m_urgent_mesh_set;
+    std::vector<glm::ivec3> m_urgent_mesh_list;
+    void request_urgent_mesh_rebuild(int cx, int cy, int cz);
+    void flush_urgent_mesh_rebuilds();
+    // Наименьшее кольцо, где ещё есть нужный, но незагруженный чанк. Меши строятся строго от центра к краю.
+    int first_incomplete_ring();
+    uint64_t m_ring_cache_epoch = ~0ull;
+    uint32_t m_ring_cache_view = ~0u;
+    int m_ring_cache_half = -1;
+    size_t m_ring_cache_inflight = ~size_t(0);
+    int m_ring_cache_value = 0;
+    // Осталась ли выгрузка, не уложившаяся в лимит кадра.
+    bool m_unload_backlog = false;
     // Чанки, для которых задача пересборки меша прямо сейчас в очереди/выполняется воркером —
     // не даём поставить вторую задачу поверх (бессмысленно дублирует работу).
     Chunk_Coord_Set m_pending_mesh_rebuilds;
     // Если чанк опять поменялся, пока его пересборка уже была в полёте — не теряем правку:
     // помечаем "досчитать ещё раз" и переставляем задачу заново, когда текущая завершится.
     Chunk_Coord_Set m_mesh_rebuild_requeue;
-    // Чанки, у которых GPU-мешер переполнил секцию: их меш дальше строится только на CPU.
-    Chunk_Coord_Set m_cpu_only_positions;
-    // Процесс-глобально: включает GPU-путь для всех менеджеров (см. set_gpu_solid_meshing).
-    static inline bool s_gpu_solid_meshing = false;
     std::mutex m_job_mutex;
     std::condition_variable m_job_available;
     bool m_stop_workers = false;
@@ -285,7 +299,7 @@ private:
     // То же для задач мешинга: приоритет пересчитывается по текущему кольцу и расстоянию (задачи не снимаются).
     void reprioritize_pending_meshes();
     bool save_chunk_to_disk(const Chunk& chunk) const;
-    void enqueue_mesh_rebuild(int cx, int cy, int cz);
+    void enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent = false);
     bool is_chunk_wanted(const glm::ivec3& position) const;
     void start_workers();
     void disk_reader_loop();
@@ -308,7 +322,6 @@ private:
     // loaded world - see the comment at the implementation and at m_columns_pending_sky_recompute.
     void recompute_sky_lighting(const std::unordered_set<uint64_t>& changed_chunk_columns,
                                 bool propagate_horizontal = true);
-    void rebuild_cross_chunk_greedy_meshes(const std::vector<glm::ivec3>& changed_chunks);
 
 public:
     // Загружен ли чанк (нужен менеджеру посевов: вне загруженной зоны ничего не растёт).
@@ -373,14 +386,6 @@ public:
         bool spectator = false
     ) const;
     std::vector<glm::ivec3> take_unloaded_chunk_positions();
-
-    // GPU-путь непрозрачной геометрии (см. Renderer::draw_solid_gpu). Включается рендерером, когда он
-    // подтвердил GL 4.3 и скомпилировал шейдеры; действует на все последующие пересборки.
-    static void set_gpu_solid_meshing(bool enabled) { s_gpu_solid_meshing = enabled; }
-    static bool gpu_solid_meshing() { return s_gpu_solid_meshing; }
-    // Чанки, которые GPU-мешер не уместил в секции: пересобрать их на CPU. Уже загруженные
-    // позиции; незагруженные молча пропускаются.
-    void request_cpu_remesh(const std::vector<glm::ivec3>& positions);
 
     // Block_Entity блока-контейнера в этой позиции, если он там есть (nullptr иначе).
     // Неконстантная версия — для открытого контейнера (кладём/берём предметы), константная —

@@ -80,9 +80,7 @@ namespace {
     }
 }
 
-Renderer::Renderer()
-    : m_shader_ptr(nullptr)
-{}
+Renderer::Renderer() = default;
 
 Renderer::~Renderer() {
     for (auto& [key, res] : m_chunk_gl_cache) {
@@ -90,9 +88,6 @@ Renderer::~Renderer() {
     }
     shutdown_gpu_mesher();
 
-    delete m_shader_ptr;
-    delete m_liquid_shader_ptr;
-    delete m_flora_shader_ptr;
     delete m_sky_shader_ptr;
     delete m_occlusion_shader_ptr;
     delete m_mob_shader_ptr;
@@ -105,31 +100,7 @@ Renderer::~Renderer() {
     if (m_occlusion_cube_vbo) glDeleteBuffers(1, &m_occlusion_cube_vbo);
 }
 
-bool Renderer::initialize(const std::string& vertex_shader_path,
-                         const std::string& fragment_shader_path,
-                         const std::string& blocks_atlas_name) {
-    m_shader_ptr = new Shader(vertex_shader_path, fragment_shader_path);
-    if (m_shader_ptr->get_id() == 0) {
-        LOG_ERROR("Failed to create shader program");
-        return false;
-    }
-
-    // Отдельный шейдер для жидкости (анимация волны/течения) — жёстко зашитый путь, как и
-    // у HUD-шейдеров в Hud.cpp: это фиксированная пара файлов конкретно под liquid-проход,
-    // а не параметр, который вызывающий код мог бы разумно захотеть подменить.
-    m_liquid_shader_ptr = new Shader("assets/shaders/liquid_vertex.glsl", "assets/shaders/liquid_fragment.glsl");
-    if (m_liquid_shader_ptr->get_id() == 0) {
-        LOG_ERROR("Failed to create liquid shader program");
-        return false;
-    }
-
-    // Отдельный шейдер для флоры (покачивание на ветру) — тот же принцип, что у liquid выше.
-    m_flora_shader_ptr = new Shader("assets/shaders/flora_vertex.glsl", "assets/shaders/flora_fragment.glsl");
-    if (m_flora_shader_ptr->get_id() == 0) {
-        LOG_ERROR("Failed to create flora shader program");
-        return false;
-    }
-
+bool Renderer::initialize(const std::string& blocks_atlas_name) {
     // Солнце/луна — процедурные billboard-диски, см. draw_sky().
     m_sky_shader_ptr = new Shader("assets/shaders/sky_object_vertex.glsl", "assets/shaders/sky_object_fragment.glsl");
     if (m_sky_shader_ptr->get_id() == 0) {
@@ -211,8 +182,11 @@ bool Renderer::initialize(const std::string& vertex_shader_path,
         return false;
     }
 
-    // GPU-мешер необязателен: без GL 4.3 или при ошибке шейдеров мешинг остаётся на CPU.
-    initialize_gpu_mesher();
+    // Геометрия мира строится только на видеокарте: без GL 4.3 (compute-шейдеры) игра не запускается.
+    if (!initialize_gpu_mesher()) {
+        LOG_ERROR("The GPU mesher failed to start: OpenGL 4.3 with compute shaders is required");
+        return false;
+    }
 
     LOG_INFO("Renderer initialized");
     return true;
@@ -223,81 +197,6 @@ void Renderer::clear_screen(float r, float g, float b, float a) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDepthMask(GL_TRUE);
     glDepthFunc(GL_LESS);
-}
-
-void Renderer::upload_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, const std::vector<Vertex>& vertices) {
-    if (vertices.empty()) {
-        if (vao != 0) glDeleteVertexArrays(1, &vao);
-        if (vbo != 0) glDeleteBuffers(1, &vbo);
-        vao = 0;
-        vbo = 0;
-        count = 0;
-        return;
-    }
-
-    if (vbo == 0) {
-        glGenBuffers(1, &vbo);
-    }
-    if (vao == 0) {
-        glGenVertexArrays(1, &vao);
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), nullptr);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(5 * sizeof(float)));
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(8 * sizeof(float)));
-        glEnableVertexAttribArray(3);
-        glBindVertexArray(0);
-    }
-
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
-    count = vertices.size();
-}
-
-// Непрозрачная геометрия чанка (жадный меш): вершина Terrain_Vertex, см. terrain_vertex.glsl.
-void Renderer::upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t& count,
-                                   const std::vector<Terrain_Vertex>& vertices) {
-    if (vertices.empty()) {
-        if (vao != 0) glDeleteVertexArrays(1, &vao);
-        if (vbo != 0) glDeleteBuffers(1, &vbo);
-        vao = 0;
-        vbo = 0;
-        count = 0;
-        return;
-    }
-
-    if (vbo == 0) {
-        glGenBuffers(1, &vbo);
-    }
-    if (vao == 0) {
-        glGenVertexArrays(1, &vao);
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        const GLsizei stride = sizeof(Terrain_Vertex);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, x)));
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, local_u)));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ny)));
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, light)));
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, rect_u_min)));
-        glEnableVertexAttribArray(4);
-        glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, ao)));
-        glEnableVertexAttribArray(5);
-        glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(Terrain_Vertex, sky)));
-        glEnableVertexAttribArray(6);
-        glBindVertexArray(0);
-    }
-
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Terrain_Vertex), vertices.data(), GL_STATIC_DRAW);
-    count = vertices.size();
 }
 
 void Renderer::render_dropped_items(const std::vector<Vertex>& vertices,
@@ -349,30 +248,8 @@ void Renderer::render_dropped_items(const std::vector<Vertex>& vertices,
     glBindVertexArray(0);
 }
 
-void Renderer::draw_mesh(unsigned int vao, size_t count) {
-    if (count == 0 || vao == 0) return;
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(count));
-    m_last_rendered_triangle_count += count / 3;
-}
-
-void Renderer::draw_mesh_range(unsigned int vao, size_t start, size_t count) {
-    if (count == 0 || vao == 0) return;
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLES, static_cast<GLint>(start), static_cast<GLsizei>(count));
-    m_last_rendered_triangle_count += count / 3;
-}
-
 void Renderer::delete_chunk_resources(Chunk_GL_Resources& resources) {
-    release_gpu_slot(resources);
-    if (resources.solid_vao != 0) glDeleteVertexArrays(1, &resources.solid_vao);
-    if (resources.flora_vao != 0) glDeleteVertexArrays(1, &resources.flora_vao);
-    if (resources.liquid_vao != 0) glDeleteVertexArrays(1, &resources.liquid_vao);
-    if (resources.solid_vbo != 0) glDeleteBuffers(1, &resources.solid_vbo);
-    if (resources.flora_vbo != 0) glDeleteBuffers(1, &resources.flora_vbo);
-    if (resources.liquid_vbo != 0) glDeleteBuffers(1, &resources.liquid_vbo);
-    if (resources.shaped_vao != 0) glDeleteVertexArrays(1, &resources.shaped_vao);
-    if (resources.shaped_vbo != 0) glDeleteBuffers(1, &resources.shaped_vbo);
+    release_gpu_chunk(resources);
     for (Section_Occlusion_State& state : resources.occlusion) {
         if (state.query != 0) glDeleteQueries(1, &state.query);
     }
@@ -454,40 +331,43 @@ void Renderer::issue_occlusion_query(Section_Occlusion_State& state, const glm::
     state.query_in_flight = true;
 }
 
+
 bool Renderer::initialize_gpu_mesher() {
-    // Диагностика: OPTICRAFT_CPU_MESH=1 выключает GPU-мешер, все чанки мешатся на CPU.
-    // Сравнение картинки с этим флагом и без него показывает, в каком пути лежит ошибка.
-    if (const char* forced = std::getenv("OPTICRAFT_CPU_MESH"); forced && forced[0] == '1') {
-        LOG_INFO("GPU meshing disabled by OPTICRAFT_CPU_MESH=1");
-        return false;
-    }
     if (!GLAD_GL_VERSION_4_3) {
-        LOG_INFO("GPU meshing disabled: OpenGL 4.3 is not available");
+        LOG_ERROR("OpenGL 4.3 is not available");
         return false;
     }
 
     m_gpu_greedy_program = compile_compute_program("assets/shaders/mesh_greedy.comp");
+    m_gpu_misc_program = compile_compute_program("assets/shaders/mesh_misc.comp");
     m_gpu_finalize_program = compile_compute_program("assets/shaders/mesh_finalize.comp");
     m_gpu_terrain_shader_ptr = new Shader("assets/shaders/terrain_gpu_vertex.glsl",
                                           "assets/shaders/terrain_gpu_fragment.glsl");
+    m_gpu_misc_shader_ptr = new Shader("assets/shaders/terrain_gpu_misc_vertex.glsl",
+                                       "assets/shaders/terrain_gpu_misc_fragment.glsl");
     // Shader не бросает исключений при ошибке линковки, поэтому статус проверяем явно.
-    GLint terrain_linked = GL_FALSE;
-    if (m_gpu_terrain_shader_ptr->get_id() != 0) {
-        glGetProgramiv(m_gpu_terrain_shader_ptr->get_id(), GL_LINK_STATUS, &terrain_linked);
-    }
-    if (m_gpu_greedy_program == 0 || m_gpu_finalize_program == 0 || terrain_linked != GL_TRUE) {
-        LOG_ERROR("GPU meshing disabled: shader setup failed, meshing stays on CPU");
+    const auto linked = [](const Shader* shader) {
+        GLint ok = GL_FALSE;
+        if (shader && shader->get_id() != 0) glGetProgramiv(shader->get_id(), GL_LINK_STATUS, &ok);
+        return ok == GL_TRUE;
+    };
+    if (m_gpu_greedy_program == 0 || m_gpu_misc_program == 0 || m_gpu_finalize_program == 0 ||
+        !linked(m_gpu_terrain_shader_ptr) || !linked(m_gpu_misc_shader_ptr)) {
+        LOG_ERROR("GPU mesher shader setup failed");
         shutdown_gpu_mesher();
         return false;
     }
-    m_gpu_loc_chunk_count = glGetUniformLocation(m_gpu_greedy_program, "u_chunk_count");
-    m_gpu_loc_greedy_quad_cap = glGetUniformLocation(m_gpu_greedy_program, "u_quad_cap");
-    m_gpu_loc_section_total = glGetUniformLocation(m_gpu_finalize_program, "u_section_total");
-    m_gpu_loc_finalize_quad_cap = glGetUniformLocation(m_gpu_finalize_program, "u_quad_cap");
+    m_gpu_loc_greedy_chunk_count = glGetUniformLocation(m_gpu_greedy_program, "u_chunk_count");
+    m_gpu_loc_misc_chunk_count = glGetUniformLocation(m_gpu_misc_program, "u_chunk_count");
+    m_gpu_loc_finalize_entries = glGetUniformLocation(m_gpu_finalize_program, "u_entry_count");
+    m_gpu_loc_finalize_kind = glGetUniformLocation(m_gpu_finalize_program, "u_kind");
+    m_gpu_loc_finalize_order_offset = glGetUniformLocation(m_gpu_finalize_program, "u_order_offset");
+    m_gpu_loc_finalize_cmd_offset = glGetUniformLocation(m_gpu_finalize_program, "u_cmd_offset");
 
-    // Таблица правил и UV строится теми же resolve_face_uv/get_uv, что и CPU-мешер, поэтому
-    // совпадение с CPU не зависит от того, что видеокарта "знает" о блоках сама.
-    // LUT растёт с реально зарегистрированными id (а не с потолком 65536): 6 граней x 256 meta на id.
+    // Таблица UV строится теми же resolve_face_uv/get_uv, по которым когда-то мешил CPU, поэтому
+    // картинка не зависит от того, что видеокарта "знает" о блоках сама. LUT растёт с реально
+    // зарегистрированными id (а не с потолком 65536): 6 граней x 256 meta на id.
+    // Блоки формы, флора и жидкость всегда берут спрайт по get_uv (верх/низ/бок) без учёта метаданных.
     const size_t id_count = Block_Registry::get_instance().id_capacity();
     std::vector<uint32_t> lut(id_count * 6 * 256, 0u);
     std::vector<glm::vec4> rects;
@@ -503,10 +383,12 @@ bool Renderer::initialize_gpu_mesher() {
     };
     for (size_t id = 0; id < id_count; ++id) {
         const Block_Properties& props = get_block_props(static_cast<Block_ID>(id));
+        const bool misc = props.shape != Block_Shape::None || props.mesh_style == Block_Mesh_Style::XStyle ||
+                          props.state == Block_State::Liquid;
         for (int face = 0; face < 6; ++face) {
             for (int meta = 0; meta < 256; ++meta) {
                 uint32_t entry = 0;
-                if (props.uses_meta) {
+                if (props.uses_meta && !misc) {
                     bool rotate = false;
                     const glm::vec4& uv = props.resolve_face_uv(face, static_cast<uint8_t>(meta), rotate);
                     entry = intern_rect(uv) | (rotate ? 0x8000u : 0u);
@@ -519,7 +401,7 @@ bool Renderer::initialize_gpu_mesher() {
         }
     }
     if (rects.size() > 0x7FFFu) {
-        LOG_ERROR("GPU meshing disabled: too many UV rectangles for the 15-bit index");
+        LOG_ERROR("GPU mesher: too many UV rectangles for the 15-bit index");
         shutdown_gpu_mesher();
         return false;
     }
@@ -533,19 +415,24 @@ bool Renderer::initialize_gpu_mesher() {
 
     m_gpu_lut_ssbo = create_ssbo(lut.size() * sizeof(uint32_t), lut.data(), GL_STATIC_DRAW);
     m_gpu_tables_ssbo = create_ssbo(table_words.size() * sizeof(uint32_t), table_words.data(), GL_STATIC_DRAW);
+    m_gpu_shape_index_ssbo = create_ssbo(tables.shape_index.size() * sizeof(uint32_t), tables.shape_index.data(), GL_STATIC_DRAW);
+    m_gpu_shape_boxes_ssbo = create_ssbo(tables.shape_boxes.size() * sizeof(uint32_t), tables.shape_boxes.data(), GL_STATIC_DRAW);
     m_gpu_rects_ssbo = create_ssbo(rects.size() * sizeof(glm::vec4), rects.data(), GL_STATIC_DRAW);
     m_gpu_headers_ssbo = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * kGpuHeaderStride * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
     m_gpu_payload_capacity = size_t{1} << 20;
     m_gpu_payload_ssbo = create_ssbo(m_gpu_payload_capacity, nullptr, GL_STREAM_DRAW);
     for (Gpu_Readback& rb : m_gpu_readbacks) {
-        rb.buffer = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * 4 * sizeof(uint32_t), nullptr, GL_STREAM_READ);
+        rb.buffer = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * kGpuStreams * sizeof(uint32_t), nullptr, GL_STREAM_READ);
     }
     glGenVertexArrays(1, &m_gpu_section_vao);
-    grow_gpu_slots(256);
+    m_gpu_pool.total_blocks = 0;
+    m_gpu_pool.free_runs.clear();
+    grow_gpu_pool(kGpuInitialPoolBlocks);
+    grow_gpu_handles(256);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    m_gpu_enabled = true;
-    LOG_INFO("GPU meshing enabled (OpenGL 4.3 compute, quad cap per section: " + std::to_string(kGpuQuadCap) + ")");
+    m_gpu_ready = true;
+    LOG_INFO("GPU mesher ready (OpenGL 4.3 compute, unified quad pool)");
     return true;
 }
 
@@ -556,56 +443,126 @@ void Renderer::shutdown_gpu_mesher() {
         rb = Gpu_Readback{};
     }
     unsigned int buffers[] = {
-        m_gpu_lut_ssbo, m_gpu_tables_ssbo, m_gpu_rects_ssbo, m_gpu_headers_ssbo, m_gpu_payload_ssbo,
-        m_gpu_quads_ssbo, m_gpu_counts_ssbo, m_gpu_origins_ssbo, m_gpu_vis_ssbo, m_gpu_cmd_ssbo,
-        m_gpu_section_ids_vbo
+        m_gpu_lut_ssbo, m_gpu_tables_ssbo, m_gpu_shape_index_ssbo, m_gpu_shape_boxes_ssbo, m_gpu_rects_ssbo,
+        m_gpu_headers_ssbo, m_gpu_payload_ssbo, m_gpu_quads_ssbo, m_gpu_counts_ssbo, m_gpu_ranges_ssbo,
+        m_gpu_origins_ssbo, m_gpu_order_ssbo, m_gpu_cmd_ssbo, m_gpu_section_ids_vbo
     };
     for (unsigned int id : buffers) {
         if (id != 0) glDeleteBuffers(1, &id);
     }
     if (m_gpu_section_vao != 0) glDeleteVertexArrays(1, &m_gpu_section_vao);
     if (m_gpu_greedy_program != 0) glDeleteProgram(m_gpu_greedy_program);
+    if (m_gpu_misc_program != 0) glDeleteProgram(m_gpu_misc_program);
     if (m_gpu_finalize_program != 0) glDeleteProgram(m_gpu_finalize_program);
     delete m_gpu_terrain_shader_ptr;
+    delete m_gpu_misc_shader_ptr;
 
     m_gpu_terrain_shader_ptr = nullptr;
-    m_gpu_greedy_program = 0;
-    m_gpu_finalize_program = 0;
+    m_gpu_misc_shader_ptr = nullptr;
+    m_gpu_greedy_program = m_gpu_misc_program = m_gpu_finalize_program = 0;
     m_gpu_section_vao = 0;
     m_gpu_section_ids_vbo = 0;
-    m_gpu_lut_ssbo = m_gpu_tables_ssbo = m_gpu_rects_ssbo = 0;
+    m_gpu_lut_ssbo = m_gpu_tables_ssbo = m_gpu_shape_index_ssbo = m_gpu_shape_boxes_ssbo = m_gpu_rects_ssbo = 0;
     m_gpu_headers_ssbo = m_gpu_payload_ssbo = 0;
-    m_gpu_quads_ssbo = m_gpu_counts_ssbo = m_gpu_origins_ssbo = m_gpu_vis_ssbo = m_gpu_cmd_ssbo = 0;
+    m_gpu_quads_ssbo = m_gpu_counts_ssbo = m_gpu_ranges_ssbo = m_gpu_origins_ssbo = 0;
+    m_gpu_order_ssbo = m_gpu_cmd_ssbo = 0;
     m_gpu_payload_capacity = 0;
-    m_gpu_slot_capacity = 0;
-    m_gpu_slot_high_water = 0;
-    m_gpu_free_slots.clear();
-    m_gpu_vis_cpu.clear();
-    m_gpu_quad_counts.clear();
+    m_gpu_order_capacity = m_gpu_cmd_capacity = 0;
+    m_gpu_handle_capacity = 0;
+    m_gpu_handle_high_water = 0;
+    m_gpu_free_handles.clear();
+    m_gpu_pool = Gpu_Pool_Allocator{};
+    m_gpu_stream_counts.clear();
     m_gpu_headers_cpu.clear();
     m_gpu_payload_cpu.clear();
+    m_gpu_order_cpu.clear();
     m_gpu_readback_head = 0;
     m_gpu_readback_count = 0;
-    m_gpu_fallback_requests.clear();
-    m_gpu_enabled = false;
+    m_gpu_ready = false;
 }
 
-void Renderer::grow_gpu_slots(int needed) {
-    if (needed <= m_gpu_slot_capacity) return;
-    const int new_capacity = std::max(needed, std::max(256, m_gpu_slot_capacity * 2));
-    const size_t capacity = static_cast<size_t>(new_capacity);
-    const size_t old_capacity = static_cast<size_t>(m_gpu_slot_capacity);
-    const size_t quad_bytes_per_slot = static_cast<size_t>(4) * kGpuQuadCap * sizeof(glm::uvec4);
+// Пул квадов растёт без потери содержимого: новый буфер получает копию старого, а добавленные блоки
+// уходят в список свободных (сливаясь с последним свободным участком, если он упирался в конец).
+void Renderer::grow_gpu_pool(uint32_t extra_blocks) {
+    const uint32_t old_total = m_gpu_pool.total_blocks;
+    const uint32_t new_total = old_total + std::max(extra_blocks, old_total / 2);
+    const size_t block_bytes = static_cast<size_t>(kGpuBlockQuads) * sizeof(glm::uvec4);
+    const unsigned int quads = create_ssbo(static_cast<size_t>(new_total) * block_bytes, nullptr, GL_DYNAMIC_DRAW);
+    if (m_gpu_quads_ssbo != 0) {
+        glBindBuffer(GL_COPY_READ_BUFFER, m_gpu_quads_ssbo);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, quads);
+        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0,
+                            static_cast<GLsizeiptr>(static_cast<size_t>(old_total) * block_bytes));
+        glDeleteBuffers(1, &m_gpu_quads_ssbo);
+    }
+    m_gpu_quads_ssbo = quads;
 
-    const std::vector<uint32_t> zero_counts(4 * capacity, 0u);
+    // Добавленный хвост сливается с последним свободным участком, если тот доходил до старого конца.
+    uint32_t start = old_total;
+    uint32_t length = new_total - old_total;
+    if (!m_gpu_pool.free_runs.empty()) {
+        const auto last = std::prev(m_gpu_pool.free_runs.end());
+        if (last->first + last->second == old_total) {
+            start = last->first;
+            length += last->second;
+            m_gpu_pool.free_runs.erase(last);
+        }
+    }
+    m_gpu_pool.free_runs[start] = length;
+    m_gpu_pool.total_blocks = new_total;
+}
+
+// Первый квад непрерывного участка на `quads` квадов (с округлением вверх до блока); пул растёт, если места нет.
+uint32_t Renderer::allocate_quads(uint32_t quads) {
+    const uint32_t blocks = (quads + kGpuBlockQuads - 1) / kGpuBlockQuads;
+    for (;;) {
+        for (auto it = m_gpu_pool.free_runs.begin(); it != m_gpu_pool.free_runs.end(); ++it) {
+            if (it->second < blocks) continue;
+            const uint32_t start = it->first;
+            const uint32_t length = it->second;
+            m_gpu_pool.free_runs.erase(it);
+            if (length > blocks) m_gpu_pool.free_runs[start + blocks] = length - blocks;
+            return start * kGpuBlockQuads;
+        }
+        grow_gpu_pool(std::max(blocks, kGpuInitialPoolBlocks));
+    }
+}
+
+void Renderer::free_quads(uint32_t first, uint32_t quads) {
+    if (quads == 0) return;
+    uint32_t start = first / kGpuBlockQuads;
+    uint32_t length = (quads + kGpuBlockQuads - 1) / kGpuBlockQuads;
+    auto next = m_gpu_pool.free_runs.lower_bound(start);
+    if (next != m_gpu_pool.free_runs.begin()) {
+        const auto prev = std::prev(next);
+        if (prev->first + prev->second == start) {
+            start = prev->first;
+            length += prev->second;
+            m_gpu_pool.free_runs.erase(prev);
+        }
+    }
+    if (next != m_gpu_pool.free_runs.end() && start + length == next->first) {
+        length += next->second;
+        m_gpu_pool.free_runs.erase(next);
+    }
+    m_gpu_pool.free_runs[start] = length;
+}
+
+// Таблицы по ручкам чанка: счётчики, диапазоны потоков, мировые углы. Растут вдвое с переносом содержимого.
+void Renderer::grow_gpu_handles(int needed) {
+    if (needed <= m_gpu_handle_capacity) return;
+    const int new_capacity = std::max(needed, std::max(256, m_gpu_handle_capacity * 2));
+    const size_t capacity = static_cast<size_t>(new_capacity);
+    const size_t old_capacity = static_cast<size_t>(m_gpu_handle_capacity);
+
+    const std::vector<uint32_t> zero_counts(kGpuStreams * capacity, 0u);
+    const std::vector<glm::uvec2> zero_ranges(kGpuStreams * capacity, glm::uvec2(0u));
     const std::vector<glm::vec4> zero_origins(capacity, glm::vec4(0.0f));
-    const unsigned int quads = create_ssbo(quad_bytes_per_slot * capacity, nullptr, GL_DYNAMIC_DRAW);
     const unsigned int counts = create_ssbo(zero_counts.size() * sizeof(uint32_t), zero_counts.data(), GL_DYNAMIC_DRAW);
+    const unsigned int ranges = create_ssbo(zero_ranges.size() * sizeof(glm::uvec2), zero_ranges.data(), GL_DYNAMIC_DRAW);
     const unsigned int origins = create_ssbo(zero_origins.size() * sizeof(glm::vec4), zero_origins.data(), GL_DYNAMIC_DRAW);
-    const unsigned int vis = create_ssbo(capacity * sizeof(uint32_t), nullptr, GL_DYNAMIC_DRAW);
-    const unsigned int cmd = create_ssbo(4 * capacity * sizeof(glm::uvec4), nullptr, GL_DYNAMIC_DRAW);
-    // Тождественные номера секций для атрибута aSection (см. terrain_gpu_vertex.glsl).
-    std::vector<uint32_t> section_ids(4 * capacity);
+    // Тождественные номера для атрибута aSection (baseInstance = ручка*4 + секция).
+    std::vector<uint32_t> section_ids(static_cast<size_t>(Config::chunk_section_count) * capacity);
     std::iota(section_ids.begin(), section_ids.end(), 0u);
     unsigned int ids = 0;
     glGenBuffers(1, &ids);
@@ -614,27 +571,23 @@ void Renderer::grow_gpu_slots(int needed) {
                  section_ids.data(), GL_STATIC_DRAW);
 
     if (old_capacity > 0) {
-        // Между кадрами живут квады, счётчики и origins: переносим их в новые буферы.
         const auto copy_bytes = [](unsigned int src, unsigned int dst, size_t bytes) {
             glBindBuffer(GL_COPY_READ_BUFFER, src);
             glBindBuffer(GL_COPY_WRITE_BUFFER, dst);
             glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, static_cast<GLsizeiptr>(bytes));
         };
-        copy_bytes(m_gpu_quads_ssbo, quads, quad_bytes_per_slot * old_capacity);
-        copy_bytes(m_gpu_counts_ssbo, counts, static_cast<size_t>(4) * old_capacity * sizeof(uint32_t));
+        copy_bytes(m_gpu_counts_ssbo, counts, kGpuStreams * old_capacity * sizeof(uint32_t));
+        copy_bytes(m_gpu_ranges_ssbo, ranges, kGpuStreams * old_capacity * sizeof(glm::uvec2));
         copy_bytes(m_gpu_origins_ssbo, origins, old_capacity * sizeof(glm::vec4));
     }
 
-    unsigned int old_buffers[] = {m_gpu_quads_ssbo, m_gpu_counts_ssbo, m_gpu_origins_ssbo, m_gpu_vis_ssbo, m_gpu_cmd_ssbo};
+    unsigned int old_buffers[] = {m_gpu_counts_ssbo, m_gpu_ranges_ssbo, m_gpu_origins_ssbo, m_gpu_section_ids_vbo};
     for (unsigned int old_id : old_buffers) {
         if (old_id != 0) glDeleteBuffers(1, &old_id);
     }
-    m_gpu_quads_ssbo = quads;
     m_gpu_counts_ssbo = counts;
+    m_gpu_ranges_ssbo = ranges;
     m_gpu_origins_ssbo = origins;
-    m_gpu_vis_ssbo = vis;
-    m_gpu_cmd_ssbo = cmd;
-    if (m_gpu_section_ids_vbo != 0) glDeleteBuffers(1, &m_gpu_section_ids_vbo);
     m_gpu_section_ids_vbo = ids;
     glBindVertexArray(m_gpu_section_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_gpu_section_ids_vbo);
@@ -642,30 +595,47 @@ void Renderer::grow_gpu_slots(int needed) {
     glEnableVertexAttribArray(0);
     glVertexAttribDivisor(0, 1);
     glBindVertexArray(0);
-    m_gpu_slot_capacity = new_capacity;
-    m_gpu_vis_cpu.resize(capacity, 0u);
-    m_gpu_quad_counts.resize(4 * capacity, 0u);
+    m_gpu_handle_capacity = new_capacity;
+    m_gpu_stream_counts.resize(kGpuStreams * capacity, 0u);
 }
 
-int Renderer::acquire_gpu_slot() {
-    if (!m_gpu_free_slots.empty()) {
-        const int slot = m_gpu_free_slots.back();
-        m_gpu_free_slots.pop_back();
-        return slot;
+int Renderer::acquire_gpu_handle() {
+    if (!m_gpu_free_handles.empty()) {
+        const int handle = m_gpu_free_handles.back();
+        m_gpu_free_handles.pop_back();
+        return handle;
     }
-    const int slot = m_gpu_slot_high_water;
-    grow_gpu_slots(slot + 1);
-    ++m_gpu_slot_high_water;
-    return slot;
+    const int handle = m_gpu_handle_high_water;
+    grow_gpu_handles(handle + 1);
+    ++m_gpu_handle_high_water;
+    return handle;
 }
 
-void Renderer::release_gpu_slot(Chunk_GL_Resources& resources) {
-    if (resources.gpu_slot < 0) return;
-    m_gpu_free_slots.push_back(resources.gpu_slot);
-    resources.gpu_slot = -1;
+// Чанк уходит с GPU: его участки возвращаются в пул, ручка — в список свободных. Диапазоны на видеокарте
+// обнуляются, чтобы устаревшая запись списка отрисовки никогда не читала чужую память.
+void Renderer::release_gpu_chunk(Chunk_GL_Resources& resources) {
+    if (resources.gpu_handle < 0) return;
+    for (int j = 0; j < kGpuStreams; ++j) {
+        if (resources.gpu_cap[j] != 0) free_quads(resources.gpu_first[j], resources.gpu_cap[j]);
+    }
+    const size_t base = static_cast<size_t>(resources.gpu_handle) * kGpuStreams;
+    const std::array<glm::uvec2, kGpuStreams> zero_ranges{};
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_ranges_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(base * sizeof(glm::uvec2)),
+                    sizeof(zero_ranges), zero_ranges.data());
+    std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(base), kGpuStreams, 0u);
+    m_gpu_free_handles.push_back(resources.gpu_handle);
+    resources.gpu_handle = -1;
     resources.gpu_version = 0;
+    resources.gpu_first.fill(0);
+    resources.gpu_cap.fill(0);
+    resources.gpu_wanted.fill(0);
+    resources.gpu_regrow = false;
 }
 
+// Забирает счётчики квадов, посчитанные мешерами, и решает, хватает ли потокам ёмкости. Счётчик всегда
+// настоящий (квады сверх ёмкости не пишутся, но считаются), поэтому новая ёмкость выбирается точно: чанк
+// с переполненным потоком мешится ещё раз и больше не переполняется. Сильно раздутые потоки сжимаются так же.
 void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
     while (m_gpu_readback_count > 0) {
         Gpu_Readback& rb = m_gpu_readbacks[m_gpu_readback_head];
@@ -678,25 +648,31 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
         const size_t count = rb.positions.size();
         glBindBuffer(GL_COPY_READ_BUFFER, rb.buffer);
         const auto* words = static_cast<const uint32_t*>(glMapBufferRange(
-            GL_COPY_READ_BUFFER, 0, static_cast<GLsizeiptr>(count * 4 * sizeof(uint32_t)), GL_MAP_READ_BIT));
+            GL_COPY_READ_BUFFER, 0, static_cast<GLsizeiptr>(count * kGpuStreams * sizeof(uint32_t)), GL_MAP_READ_BIT));
         if (words) {
             for (size_t i = 0; i < count; ++i) {
-                const int slot = rb.slots[i];
-                bool overflow = false;
-                for (size_t s = 0; s < 4; ++s) {
-                    const uint32_t quads = words[i * 4 + s];
-                    m_gpu_quad_counts[static_cast<size_t>(slot) * 4 + s] = quads;
-                    overflow = overflow || quads > static_cast<uint32_t>(kGpuQuadCap);
-                }
-                if (!overflow) continue;
+                const int handle = rb.handles[i];
                 const auto it = m_chunk_gl_cache.find(rb.positions[i]);
-                if (it == m_chunk_gl_cache.end()) continue;
-                // Отчёт относится к квадам именно этой версии в этом слоте; иначе он устарел.
-                if (it->second.gpu_slot != slot || it->second.gpu_version != rb.versions[i]) continue;
-                if (std::find(m_gpu_fallback_requests.begin(), m_gpu_fallback_requests.end(),
-                              rb.positions[i]) == m_gpu_fallback_requests.end()) {
-                    m_gpu_fallback_requests.push_back(rb.positions[i]);
+                // Отчёт относится к квадам именно этой версии под этой ручкой; иначе он устарел.
+                if (it == m_chunk_gl_cache.end() || it->second.gpu_handle != handle ||
+                    it->second.gpu_version != rb.versions[i]) continue;
+                Chunk_GL_Resources& res = it->second;
+                bool regrow = false;
+                for (int j = 0; j < kGpuStreams; ++j) {
+                    const uint32_t quads = words[i * kGpuStreams + j];
+                    m_gpu_stream_counts[static_cast<size_t>(handle) * kGpuStreams + j] = quads;
+                    const uint32_t cap = res.gpu_cap[j];
+                    const uint32_t padded = quads + quads / 4 + kGpuBlockQuads;
+                    const uint32_t target = (padded + kGpuBlockQuads - 1) / kGpuBlockQuads * kGpuBlockQuads;
+                    if (quads > cap) {
+                        res.gpu_wanted[j] = target;
+                        regrow = true;
+                    } else if (cap >= 4 * std::max(target, 64u) && cap - target >= 512) {
+                        res.gpu_wanted[j] = target;
+                        regrow = true;
+                    }
                 }
+                if (regrow) res.gpu_regrow = true;
             }
             glUnmapBuffer(GL_COPY_READ_BUFFER);
         }
@@ -705,7 +681,7 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
         rb.fence = nullptr;
         rb.positions.clear();
         rb.versions.clear();
-        rb.slots.clear();
+        rb.handles.clear();
         m_gpu_readback_head = (m_gpu_readback_head + 1) % kGpuReadbackRing;
         --m_gpu_readback_count;
     }
@@ -721,36 +697,71 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         const Renderable_Chunk& chunk = *batch[i];
         const Chunk_Meshes& meshes = *chunk.meshes;
         Chunk_GL_Resources& res = m_chunk_gl_cache[chunk.position];
-        if (res.gpu_slot < 0) res.gpu_slot = acquire_gpu_slot();
+        if (res.gpu_handle < 0) {
+            res.gpu_handle = acquire_gpu_handle();
+            res.gpu_first.fill(0);
+            res.gpu_cap.fill(0);
+        }
         res.gpu_version = chunk.mesh_version;
+        const size_t handle = static_cast<size_t>(res.gpu_handle);
+
+        // Ёмкости потоков: только там, где секция может дать геометрию этого вида. Размер, подобранный по
+        // прошлому readback'у (gpu_wanted) или оставшийся с прошлой версии меша, сохраняется; новому потоку
+        // даётся стартовая ёмкость вида.
+        std::array<glm::uvec2, kGpuStreams> ranges{};
+        for (int k = 0; k < kGpuKindCount; ++k) {
+            for (int s = 0; s < Config::chunk_section_count; ++s) {
+                const int j = k * Config::chunk_section_count + s;
+                uint32_t target = 0;
+                if ((meshes.sections[s].kinds >> k) & 1u) {
+                    target = res.gpu_wanted[j] != 0 ? res.gpu_wanted[j]
+                           : res.gpu_cap[j] != 0 ? res.gpu_cap[j]
+                           : kGpuInitialQuads[k];
+                    target = (target + kGpuBlockQuads - 1) / kGpuBlockQuads * kGpuBlockQuads;
+                }
+                if (target != res.gpu_cap[j]) {
+                    if (res.gpu_cap[j] != 0) free_quads(res.gpu_first[j], res.gpu_cap[j]);
+                    res.gpu_cap[j] = target;
+                    res.gpu_first[j] = target != 0 ? allocate_quads(target) : 0;
+                }
+                ranges[j] = glm::uvec2(res.gpu_first[j], res.gpu_cap[j]);
+            }
+        }
+        res.gpu_wanted.fill(0);
+        res.gpu_regrow = false;
 
         // Палитры и слова чанка кладём в общий батч; смещения переносим на его начало.
         const uint32_t base = static_cast<uint32_t>(m_gpu_payload_cpu.size());
         m_gpu_payload_cpu.insert(m_gpu_payload_cpu.end(), meshes.gpu_words.begin(), meshes.gpu_words.end());
 
-        // Заголовок чанка: [0].x — слот, [1 + канал] — палитра, слова, битность.
+        // Заголовок чанка: [0].x — ручка, [1] — (флаги, маска видов), [2 + канал] — палитра, слова, битность.
         glm::uvec4* header = &m_gpu_headers_cpu[i * kGpuHeaderStride];
-        header[0] = glm::uvec4(static_cast<uint32_t>(res.gpu_slot), 0u, 0u, 0u);
+        header[0] = glm::uvec4(static_cast<uint32_t>(res.gpu_handle), 0u, 0u, 0u);
+        header[1] = glm::uvec4(meshes.positive_faces_only ? 1u : 0u, static_cast<uint32_t>(meshes.gpu_kinds), 0u, 0u);
         for (int ch = 0; ch < kGpuMeshChannelCount; ++ch) {
             const std::array<uint32_t, 3>& c = meshes.gpu_channels[ch];
-            header[1 + ch] = glm::uvec4(base + c[0], base + c[1], c[2], 0u);
+            header[2 + ch] = glm::uvec4(base + c[0], base + c[1], c[2], 0u);
         }
 
-        // Мировой угол чанка для вершинного шейдера и обнуление счётчиков секций слота.
+        // Мировой угол чанка, диапазоны потоков и обнуление счётчиков.
         const glm::vec4 origin(static_cast<float>(chunk.position.x * Config::chunk_size),
                                static_cast<float>(chunk.position.y * Config::chunk_height),
                                static_cast<float>(chunk.position.z * Config::chunk_size), 0.0f);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_origins_ssbo);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(res.gpu_slot) * sizeof(glm::vec4),
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle * sizeof(glm::vec4)),
                         sizeof(glm::vec4), &origin);
-        const uint32_t zero_counts[4] = {0u, 0u, 0u, 0u};
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_ranges_ssbo);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle * kGpuStreams * sizeof(glm::uvec2)),
+                        sizeof(ranges), ranges.data());
+        const std::array<uint32_t, kGpuStreams> zero_counts{};
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_counts_ssbo);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(res.gpu_slot) * 4 * sizeof(uint32_t),
-                        sizeof(zero_counts), zero_counts);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle * kGpuStreams * sizeof(uint32_t)),
+                        sizeof(zero_counts), zero_counts.data());
+        std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(handle * kGpuStreams), kGpuStreams, 0u);
 
         rb.positions.push_back(chunk.position);
         rb.versions.push_back(chunk.mesh_version);
-        rb.slots.push_back(res.gpu_slot);
+        rb.handles.push_back(res.gpu_handle);
     }
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_headers_ssbo);
@@ -765,88 +776,105 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_payload_ssbo);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(payload_bytes), m_gpu_payload_cpu.data());
 
-    // Greedy: 576 работ на чанк (72 среза x 2 знака x 4 секции), по 64 в группе = 9 групп на чанк.
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
-    glUseProgram(m_gpu_greedy_program);
-    glUniform1i(m_gpu_loc_chunk_count, static_cast<GLint>(n));
-    glUniform1i(m_gpu_loc_greedy_quad_cap, kGpuQuadCap);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpu_headers_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_gpu_payload_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_quads_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_gpu_counts_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_gpu_lut_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_gpu_tables_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_ranges_ssbo);
+    // Кубы: 576 работ на чанк (72 среза x 2 знака x 4 секции), по 64 в группе = 9 групп на чанк.
+    glUseProgram(m_gpu_greedy_program);
+    glUniform1i(m_gpu_loc_greedy_chunk_count, static_cast<GLint>(n));
     glDispatchCompute(static_cast<GLuint>(n) * 9u, 1, 1);
+    // Формы, флора, жидкость: по строке клеток (слой y, ряд z) на инвокацию — 1024 работы на чанк, 16 групп.
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_gpu_shape_index_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_gpu_shape_boxes_ssbo);
+    glUseProgram(m_gpu_misc_program);
+    glUniform1i(m_gpu_loc_misc_chunk_count, static_cast<GLint>(n));
+    glDispatchCompute(static_cast<GLuint>(n) * 16u, 1, 1);
 
-    // Счётчики квадов уходят в readback: по ним узнаём переполнение, не останавливая конвейер.
+    // Счётчики квадов уходят в readback: по ним подгоняется ёмкость потоков, не останавливая конвейер.
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     glBindBuffer(GL_COPY_READ_BUFFER, m_gpu_counts_ssbo);
     glBindBuffer(GL_COPY_WRITE_BUFFER, rb.buffer);
     for (size_t i = 0; i < n; ++i) {
         glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
-                            static_cast<GLintptr>(rb.slots[i]) * 4 * sizeof(uint32_t),
-                            static_cast<GLintptr>(i) * 4 * sizeof(uint32_t),
-                            4 * sizeof(uint32_t));
+                            static_cast<GLintptr>(static_cast<size_t>(rb.handles[i]) * kGpuStreams * sizeof(uint32_t)),
+                            static_cast<GLintptr>(i * kGpuStreams * sizeof(uint32_t)),
+                            kGpuStreams * sizeof(uint32_t));
     }
     rb.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     ++m_gpu_readback_count;
 }
 
-std::vector<glm::ivec3> Renderer::take_cpu_fallback_requests() {
-    std::vector<glm::ivec3> requests;
-    requests.swap(m_gpu_fallback_requests);
-    return requests;
-}
-
 bool Renderer::debug_gpu_section_quads(const glm::ivec3& chunk_position, int section,
-                                       std::vector<glm::uvec4>& out) {
+                                       std::vector<glm::uvec4>& out, int kind) {
     out.clear();
     const auto it = m_chunk_gl_cache.find(chunk_position);
-    if (!m_gpu_enabled || it == m_chunk_gl_cache.end() || it->second.gpu_slot < 0) return false;
-    const size_t index = static_cast<size_t>(it->second.gpu_slot) * 4 + static_cast<size_t>(section);
-    const size_t count = std::min(static_cast<size_t>(m_gpu_quad_counts[index]),
-                                  static_cast<size_t>(kGpuQuadCap));
+    if (!m_gpu_ready || it == m_chunk_gl_cache.end() || it->second.gpu_handle < 0) return false;
+    const Chunk_GL_Resources& res = it->second;
+    const int j = kind * Config::chunk_section_count + section;
+    const size_t counter = static_cast<size_t>(res.gpu_handle) * kGpuStreams + static_cast<size_t>(j);
+    const size_t count = std::min(static_cast<size_t>(m_gpu_stream_counts[counter]),
+                                  static_cast<size_t>(res.gpu_cap[j]));
     out.resize(count);
     if (count > 0) {
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_quads_ssbo);
         glGetBufferSubData(GL_SHADER_STORAGE_BUFFER,
-                           static_cast<GLintptr>(index * kGpuQuadCap * sizeof(glm::uvec4)),
+                           static_cast<GLintptr>(static_cast<size_t>(res.gpu_first[j]) * sizeof(glm::uvec4)),
                            static_cast<GLsizeiptr>(count * sizeof(glm::uvec4)), out.data());
     }
     return true;
 }
 
-void Renderer::draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks,
-                              const glm::mat4& view,
-                              const glm::mat4& projection,
-                              float ambient_intensity) {
-    if (!m_gpu_enabled || chunks.empty()) return;
+// Подготовка кадра: догружает на GPU чанки без актуальных квадов (с бюджетом по объёму, ближние первыми),
+// собирает для каждого вида список видимых секций и одним финализатором на вид пишет команды отрисовки.
+void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opaque_order,
+                                 bool spectator, const glm::vec3& camera_position) {
     poll_gpu_readbacks(false);
 
-    // Чанки без GPU-нагрузки или уже ушедшие на CPU освобождают слот; остальным, у кого нет
-    // актуальных квадов, нужна загрузка. chunks уже отсортированы от ближних к дальним.
-    std::vector<const Renderable_Chunk*> to_submit;
-    for (const Renderable_Chunk* chunk_ptr : chunks) {
-        const Renderable_Chunk& chunk = *chunk_ptr;
-        Chunk_GL_Resources& res = m_chunk_gl_cache[chunk.position];
-        const Chunk_Meshes& meshes = *chunk.meshes;
-        if (!meshes.solid_on_gpu || !meshes.gpu_upload_pending) {
-            release_gpu_slot(res);
-            continue;
+    // Чанки без геометрии отдают ручку; остальным, у кого нет актуальных квадов или нужна другая ёмкость,
+    // нужна загрузка. opaque_order уже отсортирован от ближних к дальним.
+    const auto collect_pending = [&]() {
+        std::vector<const Renderable_Chunk*> pending;
+        for (const Renderable_Chunk* chunk_ptr : opaque_order) {
+            const Renderable_Chunk& chunk = *chunk_ptr;
+            Chunk_GL_Resources& res = m_chunk_gl_cache[chunk.position];
+            if (!chunk.meshes->gpu_upload_pending) {
+                release_gpu_chunk(res);
+                continue;
+            }
+            if (res.gpu_handle < 0 || res.gpu_version != chunk.mesh_version || res.gpu_regrow) {
+                pending.push_back(chunk_ptr);
+            }
         }
-        if (res.gpu_slot < 0 || res.gpu_version != chunk.mesh_version) {
-            to_submit.push_back(chunk_ptr);
-        }
-    }
+        return pending;
+    };
 
-    if (!to_submit.empty()) {
+    std::vector<const Renderable_Chunk*> pending = collect_pending();
+    if (m_gpu_sync_residency) {
+        // Снимок должен быть полным: грузим всё, ждём счётчики и, если какому-то потоку не хватило
+        // ёмкости, повторяем (одного повтора достаточно: счётчики настоящие).
+        for (int pass = 0; pass < 8 && !pending.empty(); ++pass) {
+            for (size_t at = 0; at < pending.size(); at += kGpuBatchChunks) {
+                if (m_gpu_readback_count == kGpuReadbackRing) poll_gpu_readbacks(true);
+                const size_t end = std::min(pending.size(), at + static_cast<size_t>(kGpuBatchChunks));
+                submit_gpu_batch(std::vector<const Renderable_Chunk*>(pending.begin() + static_cast<std::ptrdiff_t>(at),
+                                                                      pending.begin() + static_cast<std::ptrdiff_t>(end)));
+            }
+            while (m_gpu_readback_count > 0) poll_gpu_readbacks(true);
+            pending = collect_pending();
+        }
+    } else if (!pending.empty()) {
         if (m_gpu_readback_count == kGpuReadbackRing) poll_gpu_readbacks(true);
         if (m_gpu_readback_count < kGpuReadbackRing) {
-            // Бюджет кадра: to_submit уже от ближних к дальним, поэтому останавливаемся на первом
+            // Бюджет кадра: pending уже от ближних к дальним, поэтому останавливаемся на первом
             // чанке, который не влезает. Так дальние не обгоняют ближние.
             std::vector<const Renderable_Chunk*> batch;
             size_t bytes = 0;
-            for (const Renderable_Chunk* chunk_ptr : to_submit) {
+            for (const Renderable_Chunk* chunk_ptr : pending) {
                 if (batch.size() == static_cast<size_t>(kGpuBatchChunks)) break;
                 const size_t chunk_bytes = chunk_ptr->meshes->gpu_words.size() * sizeof(uint32_t);
                 if (!batch.empty() && bytes + chunk_bytes > kGpuFrameBudgetBytes) break;
@@ -857,65 +885,127 @@ void Renderer::draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks
         }
     }
 
-    // Видимость: бит s слота — секция s попала во фрустум и в ней есть геометрия. Пустые по квадам
-    // секции финализатор отбрасывает сам (count = 0), поэтому здесь счётчики не нужны.
-    std::fill(m_gpu_vis_cpu.begin(), m_gpu_vis_cpu.begin() + m_gpu_slot_high_water, 0u);
-    bool any_visible = false;
-    for (const Renderable_Chunk* chunk_ptr : chunks) {
+    // Списки видимых секций по видам. Непрозрачные виды (кубы и формы) подчиняются occlusion-запросам, если
+    // они включены; флора и жидкость — только фрустуму и достижимости. Порядок записей — порядок отрисовки:
+    // непрозрачные — от ближних к дальним, прозрачные — от дальних к ближним.
+    std::array<std::vector<glm::uvec2>, kGpuKindCount> entries;
+    for (const Renderable_Chunk* chunk_ptr : opaque_order) {
         const Renderable_Chunk& chunk = *chunk_ptr;
-        const Chunk_GL_Resources& res = m_chunk_gl_cache.at(chunk.position);
+        const auto it = m_chunk_gl_cache.find(chunk.position);
+        if (it == m_chunk_gl_cache.end() || it->second.gpu_handle < 0) continue;
+        Chunk_GL_Resources& res = it->second;
         const Chunk_Meshes& meshes = *chunk.meshes;
-        if (res.gpu_slot < 0 || !meshes.solid_on_gpu || !meshes.gpu_upload_pending) continue;
+        const glm::vec3 footprint_min(static_cast<float>(chunk.position.x * Config::chunk_size), 0.0f,
+                                      static_cast<float>(chunk.position.z * Config::chunk_size));
+        const glm::vec3 footprint_max(footprint_min.x + static_cast<float>(Config::chunk_size), 0.0f,
+                                      footprint_min.z + static_cast<float>(Config::chunk_size));
 
-        uint32_t bits = 0;
+        std::array<uint32_t, kGpuKindCount> masks{};
+        bool any_opaque_drawn = false;
         for (size_t s = 0; s < meshes.sections.size(); ++s) {
-            if (!meshes.sections[s].has_geometry || !chunk.section_visible[s]) continue;
-            bits |= 1u << s;
-            // Статистика: число квадов берём из последнего полученного readback'а (с задержкой).
-            const uint32_t quads = std::min(m_gpu_quad_counts[static_cast<size_t>(res.gpu_slot) * 4 + s],
-                                            static_cast<uint32_t>(kGpuQuadCap));
-            ++m_last_rendered_section_count;
-            m_last_rendered_triangle_count += static_cast<size_t>(quads) * 2;
+            const Chunk_Section_Range& section = meshes.sections[s];
+            if (!section.has_geometry) continue;
+            const bool opaque_kinds = (section.kinds & ((1u << kKindSolid) | (1u << kKindShaped))) != 0;
+            bool opaque_visible = chunk.section_visible[s];
+            if (opaque_kinds && !chunk.section_visible[s]) ++m_last_culled_section_count;
+            if (opaque_kinds && opaque_visible && m_occlusion_enabled && !spectator) {
+                Section_Occlusion_State& occ = res.occlusion[s];
+                poll_occlusion_result(occ);
+                const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
+                const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
+                const bool camera_inside =
+                    camera_position.x >= section_min.x && camera_position.x <= section_max.x &&
+                    camera_position.y >= section_min.y && camera_position.y <= section_max.y &&
+                    camera_position.z >= section_min.z && camera_position.z <= section_max.z;
+                if (camera_inside) occ.visible = true;
+                if (!occ.visible) {
+                    opaque_visible = false;
+                    ++m_last_occluded_section_count;
+                }
+            }
+            for (int k = 0; k < kGpuKindCount; ++k) {
+                if (!((section.kinds >> k) & 1u)) continue;
+                const bool visible = (k <= kKindShaped) ? opaque_visible : chunk.section_visible[s];
+                if (!visible) continue;
+                if (k == kKindFlora && chunk.flora_skip_render) continue;
+                masks[k] |= 1u << s;
+                // Статистика: число квадов — из последнего readback'а (с задержкой).
+                const int j = k * Config::chunk_section_count + static_cast<int>(s);
+                const uint32_t quads = std::min(m_gpu_stream_counts[static_cast<size_t>(res.gpu_handle) * kGpuStreams + j],
+                                                res.gpu_cap[j]);
+                m_last_rendered_triangle_count += static_cast<size_t>(quads) * 2;
+            }
+            if (opaque_kinds && opaque_visible) {
+                ++m_last_rendered_section_count;
+                any_opaque_drawn = true;
+            }
         }
-        m_gpu_vis_cpu[res.gpu_slot] = bits;
-        if (bits != 0) {
-            any_visible = true;
-            ++m_last_rendered_chunk_count;
+        if (any_opaque_drawn) ++m_last_rendered_chunk_count;
+        for (int k = 0; k < kGpuKindCount; ++k) {
+            if (masks[k] != 0) entries[k].emplace_back(static_cast<uint32_t>(res.gpu_handle), masks[k]);
         }
     }
-    if (!any_visible) return;
+    std::reverse(entries[kKindFlora].begin(), entries[kKindFlora].end());
+    std::reverse(entries[kKindLiquid].begin(), entries[kKindLiquid].end());
 
-    // Финализация: команда DrawArraysIndirect на каждую секцию пула (count = квады * 6, если видна).
-    const int total_sections = m_gpu_slot_high_water * 4;
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_vis_ssbo);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(m_gpu_slot_high_water * sizeof(uint32_t)),
-                    m_gpu_vis_cpu.data());
+    m_gpu_order_cpu.clear();
+    uint32_t cmd_total = 0;
+    for (int k = 0; k < kGpuKindCount; ++k) {
+        Gpu_Frame_List& list = m_gpu_lists[k];
+        list.order_offset = static_cast<uint32_t>(m_gpu_order_cpu.size());
+        list.cmd_offset = cmd_total;
+        list.entries = static_cast<uint32_t>(entries[k].size());
+        m_gpu_order_cpu.insert(m_gpu_order_cpu.end(), entries[k].begin(), entries[k].end());
+        cmd_total += list.entries * Config::chunk_section_count;
+    }
+    if (cmd_total == 0) return;
+
+    if (m_gpu_order_cpu.size() > m_gpu_order_capacity) {
+        if (m_gpu_order_ssbo != 0) glDeleteBuffers(1, &m_gpu_order_ssbo);
+        m_gpu_order_capacity = m_gpu_order_cpu.size() * 2;
+        m_gpu_order_ssbo = create_ssbo(m_gpu_order_capacity * sizeof(glm::uvec2), nullptr, GL_STREAM_DRAW);
+    }
+    if (cmd_total > m_gpu_cmd_capacity) {
+        if (m_gpu_cmd_ssbo != 0) glDeleteBuffers(1, &m_gpu_cmd_ssbo);
+        m_gpu_cmd_capacity = static_cast<size_t>(cmd_total) * 2;
+        m_gpu_cmd_ssbo = create_ssbo(m_gpu_cmd_capacity * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_order_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(m_gpu_order_cpu.size() * sizeof(glm::uvec2)),
+                    m_gpu_order_cpu.data());
+
+    // Финализация: по одной команде DrawArraysIndirect на (запись списка, секция); count = квады * 6, если секция видна.
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     glUseProgram(m_gpu_finalize_program);
-    glUniform1i(m_gpu_loc_section_total, total_sections);
-    glUniform1i(m_gpu_loc_finalize_quad_cap, kGpuQuadCap);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_gpu_counts_ssbo);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_vis_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_gpu_order_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_ranges_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_gpu_cmd_ssbo);
-    glDispatchCompute(static_cast<GLuint>((total_sections + 63) / 64), 1, 1);
+    for (int k = 0; k < kGpuKindCount; ++k) {
+        const Gpu_Frame_List& list = m_gpu_lists[k];
+        if (list.entries == 0) continue;
+        glUniform1i(m_gpu_loc_finalize_entries, static_cast<GLint>(list.entries));
+        glUniform1i(m_gpu_loc_finalize_kind, k);
+        glUniform1ui(m_gpu_loc_finalize_order_offset, list.order_offset);
+        glUniform1ui(m_gpu_loc_finalize_cmd_offset, list.cmd_offset);
+        glDispatchCompute((list.entries * Config::chunk_section_count + 63) / 64, 1, 1);
+    }
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 
-    // Отрисовка: вершины разворачиваются из квадов в вершинном шейдере, атрибутов нет.
-    m_gpu_terrain_shader_ptr->use();
-    m_gpu_terrain_shader_ptr->set_mat4("model", glm::mat4(1.0f));
-    m_gpu_terrain_shader_ptr->set_mat4("view", view);
-    m_gpu_terrain_shader_ptr->set_mat4("projection", projection);
-    m_gpu_terrain_shader_ptr->set_int("u_quad_cap", kGpuQuadCap);
-    m_gpu_terrain_shader_ptr->set_int("textureAtlas", 0);
-    m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
-    m_gpu_terrain_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
-    m_blocks_atlas_ptr->bind(0);
+    // Вершины разворачиваются из квадов в вершинном шейдере; общие таблицы привязаны на весь кадр.
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_quads_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_gpu_rects_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, m_gpu_origins_ssbo);
+}
+
+void Renderer::draw_gpu_kind(int kind) {
+    const Gpu_Frame_List& list = m_gpu_lists[kind];
+    if (list.entries == 0) return;
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpu_cmd_ssbo);
     glBindVertexArray(m_gpu_section_vao);
-    glMultiDrawArraysIndirect(GL_TRIANGLES, nullptr, total_sections, 0);
+    glMultiDrawArraysIndirect(GL_TRIANGLES,
+                              reinterpret_cast<const void*>(static_cast<uintptr_t>(list.cmd_offset) * sizeof(glm::uvec4)),
+                              static_cast<GLsizei>(list.entries * Config::chunk_section_count), 0);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     glBindVertexArray(0);
 }
@@ -930,24 +1020,13 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     m_last_rendered_triangle_count = 0;
     m_last_rendered_section_count = 0;
     m_last_culled_section_count = 0;
-    m_shader_ptr->use();
-    m_shader_ptr->set_mat4("model", glm::mat4(1.0f));
-    m_shader_ptr->set_mat4("view", view);
-    m_shader_ptr->set_mat4("projection", projection);
-    m_shader_ptr->set_int("textureAtlas", 0);
-    m_shader_ptr->set_float("ambient", ambient_intensity);
-    m_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
-    m_blocks_atlas_ptr->bind(0);
+    m_last_occluded_section_count = 0;
+    for (Gpu_Frame_List& list : m_gpu_lists) list = Gpu_Frame_List{};
 
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-
-    m_last_occluded_section_count = 0;
-
-    std::vector<const Renderable_Chunk*> transparent_chunks;
-    transparent_chunks.reserve(chunks.size());
 
     const glm::vec3 camera_position = glm::vec3(glm::inverse(view)[3]);
 
@@ -956,7 +1035,8 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // opaque chunks front-to-back (nearest first) means real occluders — the terrain/cave
     // walls actually blocking the view — get drawn before we test what's behind them, so
     // the query for a deep, sealed-off cave section correctly fails once the mountain in
-    // front of it has already been rasterized this same frame.
+    // front of it has already been rasterized this same frame. Тот же порядок задаёт и очередь
+    // загрузки на GPU: ближние чанки получают геометрию первыми.
     std::vector<const Renderable_Chunk*> opaque_order;
     opaque_order.reserve(chunks.size());
     for (const auto& chunk : chunks) {
@@ -977,94 +1057,48 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         });
 
     for (const Renderable_Chunk* chunk_ptr : opaque_order) {
-        const Renderable_Chunk& chunk = *chunk_ptr;
-        auto& gl_res = m_chunk_gl_cache[chunk.position];
-
-        if (!gl_res.is_valid || gl_res.mesh_version != chunk.mesh_version) {
-            upload_terrain_mesh(gl_res.solid_vao, gl_res.solid_vbo, gl_res.solid_count, chunk.meshes->solid);
-            upload_mesh(gl_res.flora_vao, gl_res.flora_vbo, gl_res.flora_count, chunk.meshes->flora);
-            upload_mesh(gl_res.liquid_vao, gl_res.liquid_vbo, gl_res.liquid_count, chunk.meshes->liquid);
-            upload_terrain_mesh(gl_res.shaped_vao, gl_res.shaped_vbo, gl_res.shaped_count, chunk.meshes->shaped);
-            gl_res.mesh_version = chunk.mesh_version;
-            gl_res.is_valid = true;
-        }
-
-        // Секции по Y (см. Chunk_Section_Range): X/Z-границы у всех секций чанка одни и те
-        // же, отличается только Y-диапазон — так что можно отсечь верхние/нижние секции,
-        // не попадающие во фрустум (например, при взгляде почти горизонтально "небо" чанка
-        // выше игрока часто не нужно рисовать), без отдельных VAO/VBO на секцию.
-        const glm::vec3 footprint_min(
-            static_cast<float>(chunk.position.x * Config::chunk_size),
-            static_cast<float>(chunk.position.y * Config::chunk_height),
-            static_cast<float>(chunk.position.z * Config::chunk_size)
-        );
-        const glm::vec3 footprint_max(
-            footprint_min.x + static_cast<float>(Config::chunk_size), 0.0f,
-            footprint_min.z + static_cast<float>(Config::chunk_size)
-        );
-
-        bool any_section_drawn = false;
-        for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
-            const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
-            if (!section.has_geometry || (section.solid_count == 0 && section.shaped_count == 0) ||
-                !chunk.section_visible[section_index]) {
-                if (section.has_geometry && (section.solid_count > 0 || section.shaped_count > 0) &&
-                    !chunk.section_visible[section_index]) {
-                    ++m_last_culled_section_count;
-                }
-                continue;
-            }
-
-            const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
-            const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
-
-            // section.min_y/max_y is a tight bound over the WHOLE 32-wide section (every
-            // vertex in it), not over whatever's directly underfoot — a hill on one edge of
-            // the section pulls max_y up even for a player standing on lower ground elsewhere
-            // in the same section. That can put the camera literally inside this box's Y range
-            // while standing on real, solid, unrelated ground. An occlusion query has no good
-            // answer there: looking straight down from inside the box reaches neither its side
-            // walls (16 blocks off-center) nor its top (behind/above) — only its own distant
-            // underside, far below where the real ground actually is, which is exactly the
-            // self-referential setup that flickers (see issue_occlusion_query). So: skip the
-            // query question entirely here and just draw it — a section containing the camera
-            // is definitionally visible, no test needed.
-            const bool camera_inside_section =
-                camera_position.x >= section_min.x && camera_position.x <= section_max.x &&
-                camera_position.y >= section_min.y && camera_position.y <= section_max.y &&
-                camera_position.z >= section_min.z && camera_position.z <= section_max.z;
-
-            Section_Occlusion_State& occ = gl_res.occlusion[section_index];
-            if (m_occlusion_enabled && !spectator) {
-                poll_occlusion_result(occ);
-                if (camera_inside_section) occ.visible = true;
-            }
-
-            if (spectator || !m_occlusion_enabled || occ.visible) {
-                if (section.solid_count > 0) draw_mesh_range(gl_res.solid_vao, section.solid_start, section.solid_count);
-                // Блоки формы (ступеньки, плиты): тот же шейдер и формат вершин, что у твёрдых.
-                if (section.shaped_count > 0) draw_mesh_range(gl_res.shaped_vao, section.shaped_start, section.shaped_count);
-                ++m_last_rendered_section_count;
-                any_section_drawn = true;
-            } else {
-                ++m_last_occluded_section_count;
-            }
-        }
-
-        if (any_section_drawn) {
-            ++m_last_rendered_chunk_count;
-        }
-        transparent_chunks.push_back(chunk_ptr);
+        m_chunk_gl_cache[chunk_ptr->position].mesh_version = chunk_ptr->mesh_version;
     }
+    prepare_gpu_frame(opaque_order, spectator, camera_position);
 
-    // GPU-путь непрозрачной геометрии: тот же проход, что и CPU-солид, но квады строит видеокарта.
-    draw_solid_gpu(opaque_order, view, projection, ambient_intensity);
+    const float time = static_cast<float>(glfwGetTime());
+    const float max_light = static_cast<float>(Config::max_light_level);
+    m_blocks_atlas_ptr->bind(0);
+
+    // Непрозрачные кубы.
+    m_gpu_terrain_shader_ptr->use();
+    m_gpu_terrain_shader_ptr->set_mat4("model", glm::mat4(1.0f));
+    m_gpu_terrain_shader_ptr->set_mat4("view", view);
+    m_gpu_terrain_shader_ptr->set_mat4("projection", projection);
+    m_gpu_terrain_shader_ptr->set_int("textureAtlas", 0);
+    m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
+    m_gpu_terrain_shader_ptr->set_float("maxLightLevel", max_light);
+    draw_gpu_kind(kKindSolid);
+
+    // Остальные виды идут одним шейдером; вид выбирает uniform u_kind.
+    const Shader& misc = *m_gpu_misc_shader_ptr;
+    misc.use();
+    misc.set_mat4("model", glm::mat4(1.0f));
+    misc.set_mat4("view", view);
+    misc.set_mat4("projection", projection);
+    misc.set_int("textureAtlas", 0);
+    misc.set_float("time", time);
+    misc.set_float("ambient", ambient_intensity);
+    misc.set_float("maxLightLevel", max_light);
+    // Спрайт воды в UV атласа: левый-нижний угол и размер (скролл и мерцание не выходят за его кусок).
+    const glm::vec4& water_uv = get_block_props(Block_Types::Water).uv_side;
+    misc.set_vec2("tile_origin", glm::vec2(water_uv.x, water_uv.y));
+    misc.set_vec2("tile_size", glm::vec2(water_uv.z - water_uv.x, water_uv.w - water_uv.y));
+
+    // Блоки формы (ступеньки, плиты): непрозрачные, рисуются вместе с кубами.
+    misc.set_int("u_kind", 1);
+    draw_gpu_kind(kKindShaped);
 
     // Second pass: now that this frame's opaque draw has written real occluder depth,
     // test every section selected by Chunk_Manager against it. This is what
     // decides whether each section gets drawn NEXT frame — sections whose box is fully
     // behind other terrain (a sealed cave under a hill, the far side of a mountain, etc.)
-    // come back "not visible" and are skipped outright, instead of being meshed and drawn
+    // come back "not visible" and are skipped outright, instead of being drawn
     // for geometry the camera can never actually see. Kept as its own pass (rather than
     // inline in the loop above) so occlusion is judged against the whole frame's opaque
     // geometry, not just whatever had been drawn so far.
@@ -1077,7 +1111,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // so a hill on one side of it can put the box's top well above a player standing on lower
     // ground elsewhere in the same section, and looking straight down from there reaches
     // neither the box's side walls (a dozen-plus blocks off-center) nor its top (behind/above)
-    // — only its own far underside, well below the real ground. Both passes below special-case
+    // — only its own far underside, well below the real ground. Both passes special-case
     // this: a section containing the camera is drawn and marked visible unconditionally, no
     // query asked.
     //
@@ -1094,111 +1128,67 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     //    away), not world-space units, so unlike a geometric grow alone it stays effective
     //    regardless of distance from the camera.
     if (m_occlusion_enabled && !spectator) {
-    m_occlusion_shader_ptr->use();
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glDepthMask(GL_FALSE);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(-4.0f, -8.0f);
-    for (const Renderable_Chunk* chunk_ptr : opaque_order) {
-        const Renderable_Chunk& chunk = *chunk_ptr;
-        auto& gl_res = m_chunk_gl_cache[chunk.position];
-        const glm::vec3 footprint_min(
-            static_cast<float>(chunk.position.x * Config::chunk_size),
-            static_cast<float>(chunk.position.y * Config::chunk_height),
-            static_cast<float>(chunk.position.z * Config::chunk_size)
-        );
-        const glm::vec3 footprint_max(
-            footprint_min.x + static_cast<float>(Config::chunk_size), 0.0f,
-            footprint_min.z + static_cast<float>(Config::chunk_size)
-        );
+        m_occlusion_shader_ptr->use();
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-4.0f, -8.0f);
+        for (const Renderable_Chunk* chunk_ptr : opaque_order) {
+            const Renderable_Chunk& chunk = *chunk_ptr;
+            auto& gl_res = m_chunk_gl_cache[chunk.position];
+            const glm::vec3 footprint_min(
+                static_cast<float>(chunk.position.x * Config::chunk_size), 0.0f,
+                static_cast<float>(chunk.position.z * Config::chunk_size));
+            const glm::vec3 footprint_max(
+                footprint_min.x + static_cast<float>(Config::chunk_size), 0.0f,
+                footprint_min.z + static_cast<float>(Config::chunk_size));
 
-        for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
-            const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
-            if (!section.has_geometry || section.solid_count == 0 ||
-                !chunk.section_visible[section_index]) continue;
+            for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
+                const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
+                if (!section.has_geometry || (section.kinds & ((1u << kKindSolid) | (1u << kKindShaped))) == 0 ||
+                    !chunk.section_visible[section_index]) continue;
 
-            const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
-            const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
+                const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
+                const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
 
-            // Same "camera embedded in this section's box" case as the first pass — skip
-            // issuing a query for it (an already-visible query the poll would just read as
-            // true anyway; a stray one left in flight from before the camera entered is
-            // harmless, it'll be polled once it lands and ignored while this holds) and force
-            // the state a query would need many frames to converge back to.
-            const bool camera_inside_section =
-                camera_position.x >= section_min.x && camera_position.x <= section_max.x &&
-                camera_position.y >= section_min.y && camera_position.y <= section_max.y &&
-                camera_position.z >= section_min.z && camera_position.z <= section_max.z;
-            if (camera_inside_section) {
-                gl_res.occlusion[section_index].visible = true;
-                continue;
+                // Same "camera embedded in this section's box" case as above — skip issuing a query for
+                // it and force the state a query would need many frames to converge back to.
+                const bool camera_inside_section =
+                    camera_position.x >= section_min.x && camera_position.x <= section_max.x &&
+                    camera_position.y >= section_min.y && camera_position.y <= section_max.y &&
+                    camera_position.z >= section_min.z && camera_position.z <= section_max.z;
+                if (camera_inside_section) {
+                    gl_res.occlusion[section_index].visible = true;
+                    continue;
+                }
+
+                issue_occlusion_query(gl_res.occlusion[section_index], view, projection, section_min, section_max);
             }
-
-            issue_occlusion_query(gl_res.occlusion[section_index], view, projection, section_min, section_max);
         }
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glEnable(GL_CULL_FACE);
+        misc.use();
     }
-    glDepthMask(GL_TRUE);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDisable(GL_POLYGON_OFFSET_FILL);
-    glEnable(GL_CULL_FACE);
-    } // m_occlusion_enabled
-    m_shader_ptr->use();
-    std::stable_sort(transparent_chunks.begin(), transparent_chunks.end(),
-        [&camera_position](const Renderable_Chunk* lhs, const Renderable_Chunk* rhs) {
-            const auto chunk_center = [](const Renderable_Chunk& chunk) {
-                return glm::vec3(
-                    (static_cast<float>(chunk.position.x) + 0.5f) * Config::chunk_size,
-                    (static_cast<float>(chunk.position.y) + 0.5f) * Config::chunk_height,
-                    (static_cast<float>(chunk.position.z) + 0.5f) * Config::chunk_size
-                );
-            };
-            const glm::vec3 lhs_offset = chunk_center(*lhs) - camera_position;
-            const glm::vec3 rhs_offset = chunk_center(*rhs) - camera_position;
-            return glm::dot(lhs_offset, lhs_offset) > glm::dot(rhs_offset, rhs_offset);
-        });
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_TRUE);
 
-    // Прозрачные проходы сортируются по чанку целиком (как и раньше), а не по секции —
+    // Прозрачные проходы идут по записям списка: чанки от дальних к ближним, а не по секциям —
     // сортировка секций внутри уже отсортированных по глубине чанков дала бы минимальный
-    // выигрыш ценой куда более сложного кода, поэтому здесь секционный culling применяется
-    // только для отсечения (пропуска), но не переупорядочивает вывод внутри чанка.
-    // Флора — отдельный шейдер (покачивание верхних вершин на ветру, см.
-    // assets/shaders/flora_*.glsl), по той же схеме, что и у liquid ниже.
-    m_flora_shader_ptr->use();
-    m_flora_shader_ptr->set_mat4("model", glm::mat4(1.0f));
-    m_flora_shader_ptr->set_mat4("view", view);
-    m_flora_shader_ptr->set_mat4("projection", projection);
-    m_flora_shader_ptr->set_int("textureAtlas", 0);
-    m_flora_shader_ptr->set_float("time", static_cast<float>(glfwGetTime()));
-    m_flora_shader_ptr->set_float("ambient", ambient_intensity);
-    m_flora_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
-
-    // Флора — крестообразные квады, у каждого ОДНА лицевая сторона (см.
-    // add_flora_block_data в Chunk.cpp). При включённом GL_CULL_FACE каждый квад
-    // отбрасывался с одной из двух сторон, и цветок было видно только с двух
-    // направлений из четырёх. На время прохода флоры отсечение выключается,
-    // и обе стороны квада попадают на экран. Освещение от этого не страдает:
-    // шейдер флоры смотрит только на Normal.y, одинаковый для обеих сторон.
+    // выигрыш ценой куда более сложного кода.
+    // Флора — крестообразные квады, у каждого ОДНА лицевая сторона. При включённом GL_CULL_FACE каждый квад
+    // отбрасывался бы с одной из двух сторон, и цветок было бы видно только с двух направлений из четырёх.
+    // На время прохода флоры отсечение выключается, и обе стороны квада попадают на экран. Освещение от этого
+    // не страдает: фрагментный шейдер смотрит только на NormalY, одинаковый для обеих сторон.
+    // Дальность прорисовки флоры (flora_skip_render) учтена при построении списка: трава и цветы — самая мелкая
+    // и самая многочисленная геометрия в мире, вдалеке она вырождается в шум из отдельных пикселей.
+    misc.set_int("u_kind", 2);
     glDisable(GL_CULL_FACE);
-
-    // Дальность прорисовки флоры. Трава и цветы — самая мелкая и самая
-    // многочисленная геометрия в мире, вдалеке она всё равно вырождается в шум
-    // из отдельных пикселей, поэтому дальние чанки просто пропускаются.
-    // Отрицательное значение = ограничения нет.
-    for (const Renderable_Chunk* chunk : transparent_chunks) {
-        if (chunk->flora_skip_render) continue;
-        const auto& gl_res = m_chunk_gl_cache.at(chunk->position);
-        for (size_t section_index = 0; section_index < chunk->meshes->sections.size(); ++section_index) {
-            const Chunk_Section_Range& section = chunk->meshes->sections[section_index];
-            if (!section.has_geometry || section.flora_count == 0 ||
-                !chunk->section_visible[section_index]) continue;
-            draw_mesh_range(gl_res.flora_vao, section.flora_start, section.flora_count);
-        }
-    }
+    draw_gpu_kind(kKindFlora);
 
     // Наблюдатель может оказаться внутри сплошного блока: у поверхности блока
     // обращённая внутрь сторона является обратной гранью. Оставляем её видимой,
@@ -1214,23 +1204,11 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         glEnable(GL_CULL_FACE);
     }
 
-    // Жидкость — отдельный шейдер (анимация волны на вершинах + мерцание/скролл течения
-    // на фрагментах, см. assets/shaders/liquid_*.glsl). glfwGetTime() — тот же самый общий
-    // счётчик времени, что использует Game::run() для delta_time, поэтому не понадобилось
-    // заводить отдельное поле "накопленного времени" только ради этого шейдера.
-    m_liquid_shader_ptr->use();
-    m_liquid_shader_ptr->set_mat4("model", glm::mat4(1.0f));
-    m_liquid_shader_ptr->set_mat4("view", view);
-    m_liquid_shader_ptr->set_mat4("projection", projection);
-    m_liquid_shader_ptr->set_int("textureAtlas", 0);
-    m_liquid_shader_ptr->set_float("time", static_cast<float>(glfwGetTime()));
-    // tile_size больше не "1/сетка атласа целиком" (спрайты теперь разного размера) —
-    // считаем размер именно того прямоугольника, который в UV занимает текстура воды,
-    // чтобы скролл/мерцание в шейдере не выходили за её собственный кусок атласа.
-    const glm::vec4& water_uv = get_block_props(Block_Types::Water).uv_side;
-    m_liquid_shader_ptr->set_vec2("tile_size", glm::vec2(water_uv.z - water_uv.x, water_uv.w - water_uv.y));
-    m_liquid_shader_ptr->set_float("ambient", ambient_intensity);
-    m_liquid_shader_ptr->set_float("maxLightLevel", static_cast<float>(Config::max_light_level));
+    // Жидкость: волна на верхней грани и мерцание/скролл течения на фрагментах (см. terrain_gpu_misc_*.glsl).
+    // Шейдер и ресурсы вернуть после before_liquid: колбэк мог сменить программу и атлас.
+    misc.use();
+    m_blocks_atlas_ptr->bind(0);
+    misc.set_int("u_kind", 3);
 
     // Liquid is alpha-blended and sorted back-to-front. It must NOT write depth: a far
     // water surface drawn first would otherwise stamp its depth into the buffer and make
@@ -1240,16 +1218,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
-
-    for (const Renderable_Chunk* chunk : transparent_chunks) {
-        const auto& gl_res = m_chunk_gl_cache.at(chunk->position);
-        for (size_t section_index = 0; section_index < chunk->meshes->sections.size(); ++section_index) {
-            const Chunk_Section_Range& section = chunk->meshes->sections[section_index];
-            if (!section.has_geometry || section.liquid_count == 0 ||
-                !chunk->section_visible[section_index]) continue;
-            draw_mesh_range(gl_res.liquid_vao, section.liquid_start, section.liquid_count);
-        }
-    }
+    draw_gpu_kind(kKindLiquid);
 
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
@@ -1315,3 +1284,4 @@ void Renderer::invalidate_chunk_cache(const glm::ivec3& chunk_pos) {
         m_chunk_gl_cache.erase(it);
     }
 }
+

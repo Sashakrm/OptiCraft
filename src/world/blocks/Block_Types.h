@@ -197,7 +197,9 @@ enum class Block_Shape : uint8_t {
     None = 0,
     Slab = 1,
     Stairs = 2,
-    Plate = 3   // пластинка 1/16 толщиной на всю клетку (провод)
+    Plate = 3,  // пластинка 1/16 толщиной на всю клетку (повторитель)
+    Button = 4, // кнопка 3x2x2 пикселя на грани опоры (meta = грань крепления, как в Logic_Manager)
+    Wire = 5    // провод: пластинка 12x2x12 пикселей по центру клетки у пола
 };
 
 enum class Block_Mesh_Style : uint8_t {

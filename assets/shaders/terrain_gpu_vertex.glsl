@@ -3,17 +3,17 @@
 // каждая вершина разворачивается из 16-байтной записи квада (mesh_greedy.comp) прямо здесь.
 // Выходы совпадают с terrain_vertex.glsl, поэтому фрагментный шейдер общий по смыслу.
 //
-// Вызов: glMultiDrawArraysIndirect, first = 0, baseInstance = глобальный номер секции
-// (слот*4 + секция). gl_BaseInstance в GLSL 4.30 нет, поэтому номер приходит атрибутом aSection
+// Вызов: glMultiDrawArraysIndirect, first = номер первого квада секции в пуле * 6, baseInstance =
+// ручка чанка*4 + секция. gl_BaseInstance в GLSL 4.30 нет, поэтому номер приходит атрибутом aSection
 // с делителем 1: при baseInstance GL читает элемент с индексом baseInstance + 0, а буфер
-// содержит тождественную последовательность 0..N-1. Вершина: квад = gl_VertexID / 6, угол = %6.
+// содержит тождественную последовательность 0..N-1. gl_VertexID у DrawArrays начинается с first,
+// поэтому квад = gl_VertexID / 6 — абсолютный номер в пуле, угол = gl_VertexID % 6.
 layout(location = 0) in uint aSection;
 layout(std430, binding = 2) readonly buffer Quads { uvec4 quads[]; };
 layout(std430, binding = 8) readonly buffer Rects { vec4 rects[]; };
-// Мировой минимальный угол каждого слота (xyz); w не используется.
+// Мировой минимальный угол каждого чанка по ручке (xyz); w не используется.
 layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 
-uniform int u_quad_cap;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
@@ -50,7 +50,7 @@ void main() {
     const uint k = vid - qi * 6u;
     const uint sec = aSection;
 
-    const uvec4 rec = quads[sec * uint(u_quad_cap) + qi];
+    const uvec4 rec = quads[qi];
     const uint w0 = rec.x;
     const uint w1 = rec.y;
     const uint w2 = rec.z;   // свет четырёх углов: байт угла = sky<<4 | blk

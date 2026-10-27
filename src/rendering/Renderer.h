@@ -8,6 +8,7 @@
 #include <glad/gl.h>
 #include <array>
 #include <functional>
+#include <map>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -25,9 +26,6 @@ using Vertex = Chunk_Vertex;
 
 class Renderer {
 private:
-    Shader* m_shader_ptr;
-    Shader* m_liquid_shader_ptr = nullptr;
-    Shader* m_flora_shader_ptr = nullptr;
     Shader* m_sky_shader_ptr = nullptr;
     Shader* m_occlusion_shader_ptr = nullptr;
     Shader* m_mob_shader_ptr = nullptr;
@@ -52,47 +50,50 @@ private:
                                      // so nothing is ever hidden before it's actually been tested
     };
 
+    // Вид геометрии GPU-мешера: номер совпадает с битом маски вида (Chunk_Section_Range::kinds).
+    enum Gpu_Kind { kKindSolid = 0, kKindShaped = 1, kKindFlora = 2, kKindLiquid = 3, kGpuKindCount = 4 };
+    // Потоков квадов на чанк: вид * 4 + секция. Один поток — непрерывный участок пула.
+    static constexpr int kGpuStreams = kGpuKindCount * Config::chunk_section_count;
+
     struct Chunk_GL_Resources {
-        unsigned int solid_vbo = 0;
-        unsigned int flora_vbo = 0;
-        unsigned int liquid_vbo = 0;
-        unsigned int solid_vao = 0;
-        unsigned int flora_vao = 0;
-        unsigned int liquid_vao = 0;
-        unsigned int shaped_vbo = 0;
-        unsigned int shaped_vao = 0;
-        size_t shaped_count = 0;
-        size_t solid_count = 0;
-        size_t flora_count = 0;
-        size_t liquid_count = 0;
         uint64_t mesh_version = 0;
-        bool is_valid = false;
         std::array<Section_Occlusion_State, Config::chunk_section_count> occlusion{};
-        int gpu_slot = -1;         // слот пула GPU-мешера, -1 = чанк не на GPU
-        uint64_t gpu_version = 0;  // mesh_version, с которой квады лежат в слоте
+        // Ручка чанка в пуле GPU-мешера (-1 = чанк не на GPU) и версия меша, по которой посчитаны квады.
+        int gpu_handle = -1;
+        uint64_t gpu_version = 0;
+        // По потокам: первый квад и ёмкость в квадах (0 = потока нет); желаемая ёмкость после readback'а.
+        std::array<uint32_t, kGpuStreams> gpu_first{};
+        std::array<uint32_t, kGpuStreams> gpu_cap{};
+        std::array<uint32_t, kGpuStreams> gpu_wanted{};
+        bool gpu_regrow = false;   // счётчики показали, что ёмкость потоков надо поменять: чанк мешится заново
     };
 
     std::unordered_map<glm::ivec3, Chunk_GL_Resources, Chunk_Key_Hash> m_chunk_gl_cache;
 
-    void upload_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, const std::vector<Vertex>& vertices);
-    void upload_terrain_mesh(unsigned int& vao, unsigned int& vbo, size_t& count, const std::vector<Terrain_Vertex>& vertices);
-    void draw_mesh(unsigned int vao, size_t count);
-    void draw_mesh_range(unsigned int vao, size_t start, size_t count);
     void delete_chunk_resources(Chunk_GL_Resources& resources);
 
-    // ---- GPU-мешер непрозрачной геометрии (нужен OpenGL 4.3, см. assets/shaders/mesh_*.comp) ----
+    // ---- GPU-мешер: вся геометрия чанков строится видеокартой (OpenGL 4.3, assets/shaders/mesh_*.comp) ----
+    // Блоки, метаданные и свет чанка уходят в видеопамять упакованными каналами; mesh_greedy.comp строит жадные
+    // квады непрозрачных кубов, mesh_misc.comp — блоки формы, флору и жидкость. Квады лежат в одном общем пуле
+    // (по потоку на вид и секцию), а рисуются через glMultiDrawArraysIndirect с vertex pulling.
+    // Ёмкость потока растёт и сжимается по настоящему числу квадов: счётчики приходят обратно через readback,
+    // и чанк, у которого поток переполнился, мешится заново с нужной ёмкостью (никакого отката на CPU).
     bool initialize_gpu_mesher();
     void shutdown_gpu_mesher();
-    void grow_gpu_slots(int needed);
-    int acquire_gpu_slot();
-    void release_gpu_slot(Chunk_GL_Resources& resources);
+    void grow_gpu_handles(int needed);
+    void grow_gpu_pool(uint32_t extra_blocks);
+    int acquire_gpu_handle();
+    void release_gpu_chunk(Chunk_GL_Resources& resources);
+    uint32_t allocate_quads(uint32_t quads);
+    void free_quads(uint32_t first, uint32_t quads);
     // Забирает готовые readback'и счётчиков квадов (FIFO). wait_for_oldest — ждать самый старый.
     void poll_gpu_readbacks(bool wait_for_oldest);
-    // Загружает батч чанков в GPU и запускает greedy-мешер на видеокарте.
+    // Загружает батч чанков в GPU и запускает мешеры на видеокарте.
     void submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch);
-    // Финализация команд, выбор видимых секций и indirect-отрисовка солидной геометрии GPU-чанков.
-    void draw_solid_gpu(const std::vector<const Renderable_Chunk*>& chunks,
-                        const glm::mat4& view, const glm::mat4& projection, float ambient_intensity);
+    // Дозагрузка чанков кадра (с бюджетом или целиком), списки видимых секций по видам и команды отрисовки.
+    void prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opaque_order,
+                           bool spectator, const glm::vec3& camera_position);
+    void draw_gpu_kind(int kind);
 
     // Reads back last frame's query (if the result is ready) and updates state.visible.
     // Never blocks: if the driver hasn't finished the query yet, last frame's answer is
@@ -125,14 +126,12 @@ private:
     // set_occlusion_enabled(true) можно только после переделки теста (см. issue_occlusion_query).
     bool m_occlusion_enabled = false;
 
-    // ---- GPU-мешер: видеокарта мешит секции из упакованных блоков чанка (greedy, как в CPU) и
-    // рисует квады через glMultiDrawArraysIndirect с vertex pulling (terrain_gpu_vertex.glsl).
-    // Пул: слот на чанк, в слоте 4 секции по kGpuQuadCap квадов по 8 байт. Если квадов в секции
-    // больше — чанк уходит обратно на CPU-мешер (take_cpu_fallback_requests).
-    // 2048: на стартовой сцене (622 непустые секции, макс. 2620 квадов) кап 512 отдавал на CPU 53 из 160
-    // чанков, 2048 — 4 из 160. Память пула: 4 * kGpuQuadCap * 8 байт на слот (64 КБ при 2048).
-    static constexpr int kGpuQuadCap = 2048;
+    // Параметры GPU-мешера. Единица пула — блок из kGpuBlockQuads квадов (16 байт каждый).
     static constexpr int kGpuBatchChunks = 64;
+    static constexpr uint32_t kGpuBlockQuads = 32;
+    static constexpr uint32_t kGpuInitialPoolBlocks = 8192;   // 256 К квадов = 4 МБ, дальше пул растёт
+    // Стартовая ёмкость потока по виду (квады); после первого readback'а она подгоняется под фактическое число.
+    static constexpr std::array<uint32_t, kGpuKindCount> kGpuInitialQuads = {256, 64, 256, 256};
     // Бюджет загрузки за кадр по объёму слов GPU-нагрузки. Ближние чанки грузятся первыми; дальние
     // ждут следующего кадра. Хотя бы один чанк в кадре грузится всегда, даже если он больше бюджета.
     static constexpr size_t kGpuFrameBudgetBytes = 2u * 1024u * 1024u;
@@ -142,53 +141,72 @@ private:
         GLsync fence = nullptr;
         std::vector<glm::ivec3> positions;
         std::vector<uint64_t> versions;
-        std::vector<int> slots;
+        std::vector<int> handles;
     };
-    bool m_gpu_enabled = false;
+    // Свободные участки пула (в блоках): начало -> длина. Соседние участки сливаются при освобождении.
+    struct Gpu_Pool_Allocator {
+        std::map<uint32_t, uint32_t> free_runs;
+        uint32_t total_blocks = 0;
+    };
+    // Список отрисовки одного вида за кадр: записи (ручка, маска секций) лежат в общем SSBO порядка.
+    struct Gpu_Frame_List {
+        uint32_t order_offset = 0;
+        uint32_t cmd_offset = 0;
+        uint32_t entries = 0;
+    };
+    bool m_gpu_ready = false;
+    bool m_gpu_sync_residency = false;   // true — загрузить всё сразу и дождаться счётчиков (изометрический снимок)
     unsigned int m_gpu_greedy_program = 0;
+    unsigned int m_gpu_misc_program = 0;
     unsigned int m_gpu_finalize_program = 0;
-    Shader* m_gpu_terrain_shader_ptr = nullptr;
-    int m_gpu_loc_chunk_count = -1;
-    int m_gpu_loc_greedy_quad_cap = -1;
-    int m_gpu_loc_section_total = -1;
-    int m_gpu_loc_finalize_quad_cap = -1;
-    unsigned int m_gpu_section_vao = 0;     // VAO с одним атрибутом: номер секции, делитель 1
+    Shader* m_gpu_terrain_shader_ptr = nullptr;   // непрозрачные кубы
+    Shader* m_gpu_misc_shader_ptr = nullptr;      // блоки формы, флора, жидкость
+    int m_gpu_loc_greedy_chunk_count = -1;
+    int m_gpu_loc_misc_chunk_count = -1;
+    int m_gpu_loc_finalize_entries = -1;
+    int m_gpu_loc_finalize_kind = -1;
+    int m_gpu_loc_finalize_order_offset = -1;
+    int m_gpu_loc_finalize_cmd_offset = -1;
+    unsigned int m_gpu_section_vao = 0;     // VAO с одним атрибутом: baseInstance = ручка*4 + секция, делитель 1
     unsigned int m_gpu_section_ids_vbo = 0; // тождественные номера 0..4*capacity-1
-    unsigned int m_gpu_lut_ssbo = 0;      // rect_lut[(id*6 + грань)*256 + метаданные]
-    unsigned int m_gpu_tables_ssbo = 0;   // флаги блоков (256) и огрубление света (256)
-    unsigned int m_gpu_rects_ssbo = 0;    // UV-прямоугольники спрайтов (vec4)
-    unsigned int m_gpu_headers_ssbo = 0;  // батч: по kGpuHeaderStride uvec4 на чанк
-    unsigned int m_gpu_payload_ssbo = 0;  // батч: палитры и упакованные биты
-    size_t m_gpu_payload_capacity = 0;    // в байтах
-    unsigned int m_gpu_quads_ssbo = 0;    // пул: квады [слот*4 + секция][kGpuQuadCap]
-    unsigned int m_gpu_counts_ssbo = 0;   // пул: число квадов на секцию
-    unsigned int m_gpu_origins_ssbo = 0;  // пул: мировой угол чанка на слот (vec4)
-    unsigned int m_gpu_vis_ssbo = 0;      // пул: маска видимых секций на слот
-    unsigned int m_gpu_cmd_ssbo = 0;      // команды DrawArraysIndirect на секцию
-    int m_gpu_slot_capacity = 0;
-    int m_gpu_slot_high_water = 0;        // сколько слотов выдано максимум (индекс + 1)
-    std::vector<int> m_gpu_free_slots;
-    std::vector<uint32_t> m_gpu_vis_cpu;
-    std::vector<uint32_t> m_gpu_quad_counts; // последние известные счётчики квадов (статистика)
+    unsigned int m_gpu_lut_ssbo = 0;        // rect_lut[(id*6 + грань)*256 + метаданные]
+    unsigned int m_gpu_tables_ssbo = 0;     // огрубление света (256) и флаги блоков
+    unsigned int m_gpu_shape_index_ssbo = 0;// боксы блоков формы: индекс (форма, метаданные) -> (число, смещение)
+    unsigned int m_gpu_shape_boxes_ssbo = 0;
+    unsigned int m_gpu_rects_ssbo = 0;      // UV-прямоугольники спрайтов (vec4)
+    unsigned int m_gpu_headers_ssbo = 0;    // батч: по kGpuHeaderStride uvec4 на чанк
+    unsigned int m_gpu_payload_ssbo = 0;    // батч: палитры и упакованные биты
+    size_t m_gpu_payload_capacity = 0;      // в байтах
+    unsigned int m_gpu_quads_ssbo = 0;      // пул квадов (uvec4)
+    unsigned int m_gpu_counts_ssbo = 0;     // число квадов на поток: [ручка * 16 + вид * 4 + секция]
+    unsigned int m_gpu_ranges_ssbo = 0;     // место потока в пуле: (первый квад, ёмкость), тот же индекс
+    unsigned int m_gpu_origins_ssbo = 0;    // мировой угол чанка на ручку (vec4)
+    unsigned int m_gpu_order_ssbo = 0;      // списки отрисовки кадра (ручка, маска секций)
+    unsigned int m_gpu_cmd_ssbo = 0;        // команды DrawArraysIndirect: по 4 на запись списка
+    size_t m_gpu_order_capacity = 0;        // записей
+    size_t m_gpu_cmd_capacity = 0;          // команд
+    int m_gpu_handle_capacity = 0;
+    int m_gpu_handle_high_water = 0;        // сколько ручек выдано максимум (индекс + 1)
+    std::vector<int> m_gpu_free_handles;
+    Gpu_Pool_Allocator m_gpu_pool;
+    std::vector<uint32_t> m_gpu_stream_counts;   // последние известные счётчики (статистика и подгонка ёмкости)
     std::vector<glm::uvec4> m_gpu_headers_cpu;
     std::vector<uint32_t> m_gpu_payload_cpu;
+    std::vector<glm::uvec2> m_gpu_order_cpu;
     std::array<Gpu_Readback, kGpuReadbackRing> m_gpu_readbacks{};
     int m_gpu_readback_head = 0;
     int m_gpu_readback_count = 0;
-    std::vector<glm::ivec3> m_gpu_fallback_requests;
+    std::array<Gpu_Frame_List, kGpuKindCount> m_gpu_lists{};
 
 public:
     void set_occlusion_enabled(bool enabled) { m_occlusion_enabled = enabled; }
-
-    // GPU-мешер доступен (GL 4.3 и шейдеры собрались). Иначе весь мешинг остаётся на CPU.
-    bool gpu_solid_meshing() const { return m_gpu_enabled; }
-    static int gpu_quad_cap() { return kGpuQuadCap; }
-    // Чанки, у которых квады не влезли в пул GPU: их надо перестроить на CPU
-    // (Chunk_Manager::request_cpu_remesh). Список забирается и очищается.
-    std::vector<glm::ivec3> take_cpu_fallback_requests();
-    // Только для проверок (harness): квады секции из пула GPU как лежат в видеопамяти (8-байтные записи).
-    // false, если чанк сейчас не на GPU (фолбэк на CPU или ещё не загружен). Читает видеопамять, вне кадра.
-    bool debug_gpu_section_quads(const glm::ivec3& chunk_position, int section, std::vector<glm::uvec4>& out);
+    // Изометрический снимок: чанки грузятся на GPU все сразу, кадр ждёт счётчиков квадов (без этого часть
+    // чанков доехала бы до видеокарты в следующих кадрах, а снимок должен быть полным).
+    void set_gpu_sync_residency(bool enabled) { m_gpu_sync_residency = enabled; }
+    // Только для проверок (harness): квады потока (вид, секция) из пула как лежат в видеопамяти (записи по 16 байт).
+    // false, если чанк сейчас не на GPU. Читает видеопамять, вне кадра.
+    bool debug_gpu_section_quads(const glm::ivec3& chunk_position, int section, std::vector<glm::uvec4>& out,
+                                 int kind = 0);
     bool is_occlusion_enabled() const { return m_occlusion_enabled; }
 
     Renderer();
@@ -200,12 +218,10 @@ public:
     void set_flora_render_distance(int chunks) { m_flora_render_distance_chunks = chunks; }
     int get_flora_render_distance() const { return m_flora_render_distance_chunks; }
 
-    // Загружает шейдеры и берёт из Atlas_Registry атлас с именем blocks_atlas_name
-    // (по умолчанию "blocks_main") для рендера мировых блоков — Atlas_Registry::load_all()
+    // Загружает шейдеры, поднимает GPU-мешер (нужен OpenGL 4.3) и берёт из Atlas_Registry атлас с именем
+    // blocks_atlas_name (по умолчанию "blocks_main") для рендера мировых блоков — Atlas_Registry::load_all()
     // обязан быть вызван ДО этого (см. Game::initialize).
-    bool initialize(const std::string& vertex_shader_path,
-                    const std::string& fragment_shader_path,
-                    const std::string& blocks_atlas_name = "blocks_main");
+    bool initialize(const std::string& blocks_atlas_name = "blocks_main");
 
     void clear_screen(float r, float g, float b, float a = 1.0f);
 
@@ -235,7 +251,6 @@ public:
                               const glm::mat4& projection,
                               float ambient_intensity);
 
-    Shader* get_shader() { return m_shader_ptr; }
     // Шейдер мобов (skinning) — см. assets/shaders/mob_vertex.glsl / mob_fragment.glsl
     // и src/mobs/Mob.cpp. Нужен вызывающему коду (Game), чтобы передать его в Mob::render().
     Shader* get_mob_shader() { return m_mob_shader_ptr; }

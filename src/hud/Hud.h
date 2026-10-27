@@ -233,6 +233,10 @@ public:
     void draw_block_highlight(const glm::ivec3& block_pos,
                               const glm::mat4& view,
                               const glm::mat4& projection);
+    // Подсветка произвольного бокса (мировые координаты): блоки с точным хитбоксом (кнопка, провод).
+    void draw_box_highlight(const glm::vec3& lo, const glm::vec3& hi,
+                            const glm::mat4& view,
+                            const glm::mat4& projection);
     void draw_vignette(int window_width, int window_height);
     void draw_underwater_overlay(int window_width, int window_height);
     void draw_debug_overlay(int window_width, int window_height, const Hud_Debug_Stats& stats);

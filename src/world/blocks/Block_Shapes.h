@@ -22,6 +22,12 @@ struct Shape_Box {
 // Заполняет out (до 2 боксов) и возвращает их число. Для Shape::None возвращает 0.
 int shape_boxes(Block_Shape shape, uint8_t meta, Shape_Box out[2]);
 
+// Фигуры с точным хитбоксом (Button, Wire): луч прицела проходит мимо пустой части клетки, а подсветка
+// рисуется по реальному боксу, а не по всей клетке.
+inline bool shape_has_precise_hitbox(Block_Shape shape) {
+    return shape == Block_Shape::Button || shape == Block_Shape::Wire;
+}
+
 // Направление "высокой" стороны ступенек для meta: 0..3 (как Block_Meta::facing_*).
 uint8_t stairs_high_side(uint8_t meta);
 

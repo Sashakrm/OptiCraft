@@ -4,26 +4,31 @@
 // (32 по X, 8 по Y, 32 по Z) и два знака, то есть 576 работ на чанк. Срезы независимы: слияние
 // идёт только внутри среза, как и в CPU-проходе, поэтому квады совпадают с CPU по составу.
 //
-// Вход — упакованные каналы чанка (палитры + биты, см. pack_channel в Chunk.cpp). Выход — 8-байтные
-// записи квадов в пул (раскладка записи — в декодере terrain_gpu_vertex.glsl), по CAP записей на секцию.
+// Вход — упакованные каналы чанка (палитры + биты, см. pack_channel в Chunk.cpp). Выход — 16-байтные
+// записи квадов в общий пул (раскладка записи — в декодере terrain_gpu_vertex.glsl). Место под квады
+// секции задаёт таблица ranges: (первый квад в пуле, ёмкость). Квады сверх ёмкости не пишутся, но
+// считаются: по счётчику CPU видит переполнение и переносит чанк в больший участок пула.
 //
 // Ключ среза: UV-прямоугольник/поворот, AO и свет четырёх углов. Соседние блоки разных типов с одной
 // текстурой сливаются, только если совпадают AO и свет всех углов (как в CPU-мешере).
 layout(local_size_x = 64) in;
 
-// Заголовок чанка: kGpuHeaderStride = 17 uvec4 (см. Chunk.h). [0].x = слот пула; [1 + ch] = (палитра,
-// слова, биты, 0) канала ch.
+// Заголовок чанка: kGpuHeaderStride = 25 uvec4 (см. Chunk.h). [0].x = ручка чанка в пуле; [1].x = флаги
+// (бит 0 — только положительные грани, для изометрического снимка), [1].y = маска видов геометрии
+// (бит 0 — solid); [2 + ch] = (палитра, слова, биты, 0) канала ch.
 layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
 layout(std430, binding = 1) readonly buffer Payload { uint payload[]; };
 layout(std430, binding = 2) writeonly buffer Quads { uvec4 quads[]; };
+// Счётчики потоков квадов: [ручка * 16 + вид * 4 + секция]. Здесь вид solid = 0.
 layout(std430, binding = 3) buffer Counts { uint counts[]; };
 // (id * 6 + грань) * 256 + метаданные -> индекс прямоугольника UV | поворот << 15.
 layout(std430, binding = 4) readonly buffer Lut { uint rect_lut[]; };
 // Таблицы правил: сначала light_coarse (256 слов), за ними block_flags — по id, длина по числу блоков.
 layout(std430, binding = 5) readonly buffer Tables { uint light_coarse[256]; uint block_flags[]; };
+// Место потока квадов в пуле: .x — индекс первого квада, .y — ёмкость в квадах. Индекс как у counts.
+layout(std430, binding = 6) readonly buffer Ranges { uvec2 ranges[]; };
 
 uniform int u_chunk_count;
-uniform int u_quad_cap;
 
 const uint FLAG_GREEDY = 1u;
 const uint FLAG_TRANSPARENT = 2u;
@@ -31,13 +36,14 @@ const uint FLAG_USES_META = 4u;
 const uint FLAG_CULL_SAME = 8u;
 const uint FLAG_OCCLUDES = 16u;
 const uint ITEMS_PER_CHUNK = 576u;
-// Шаг заголовка на чанк: слот + 16 каналов. Должен совпадать с kGpuHeaderStride в Chunk.h.
-const uint HEADER_STRIDE = 17u;
+// Шаг заголовка на чанк: два служебных uvec4 + 23 канала. Должен совпадать с kGpuHeaderStride в Chunk.h.
+const uint HEADER_STRIDE = 25u;
+const uint KIND_SOLID = 1u;
 
 // Значение i канала ch чанка hb. Битность 0 — одно значение палитры; иначе номер бит [i*b, i*b+b),
 // возможно через границу двух слов.
 uint read_channel(uint hb, uint ch, uint i) {
-    const uvec4 c = headers[hb + 1u + ch];
+    const uvec4 c = headers[hb + 2u + ch];
     const uint bits = c.z;
     if (bits == 0u) return payload[c.x];
     const uint bit = i * bits;
@@ -151,9 +157,9 @@ uint face_corner_light(uint hb, ivec3 cell, int axis, int sign, int ua, int va) 
                                      int(p.z < 0 || p.z >= 32);
                 if (out_axes >= 2) continue;
                 if (i > 0 && occludes(hb, p.x, p.y, p.z)) continue;
-                const uint packed = light_at(hb, p.x, p.y, p.z);
-                sky_sum += packed >> 4u;
-                blk_sum += packed & 15u;
+                const uint pk = light_at(hb, p.x, p.y, p.z);
+                sky_sum += pk >> 4u;
+                blk_sum += pk & 15u;
                 ++n;
             }
             const uint sky = (sky_sum + n / 2u) / n;
@@ -170,11 +176,15 @@ void main() {
     if (chunk >= uint(u_chunk_count)) return;
     const uint item = g - chunk * ITEMS_PER_CHUNK;
     const uint hb = chunk * HEADER_STRIDE;
-    const uint slot = headers[hb].x;
+    const uint handle = headers[hb].x;
+    const uvec4 info = headers[hb + 1u];
+    if ((info.y & KIND_SOLID) == 0u) return;
 
     const uint sec = item / 144u;
     const uint rem = item - sec * 144u;
     const bool pos = rem < 72u;
+    // Изометрический снимок: отрицательные грани не видны с камеры и не строятся (как only_positive_faces).
+    if (!pos && (info.x & 1u) != 0u) return;
     const int dir = pos ? 1 : -1;
     const uint r = pos ? rem : rem - 72u;
     int axis;
@@ -275,10 +285,11 @@ void main() {
             // w1: индекс прямоугольника (15 бит), AO (8 бит). w2: свет четырёх углов.
             const uint w1 = rect | (ao << 24u);
 
-            const uint gsec = slot * 4u + sec;
-            const uint idx = atomicAdd(counts[gsec], 1u);
-            if (idx < uint(u_quad_cap)) {
-                quads[gsec * uint(u_quad_cap) + idx] = uvec4(w0, w1, key.z, 0u);
+            const uint stream = handle * 16u + sec;   // вид solid = 0
+            const uint idx = atomicAdd(counts[stream], 1u);
+            const uvec2 range = ranges[stream];
+            if (idx < range.y) {
+                quads[range.x + idx] = uvec4(w0, w1, key.z, 0u);
             }
             u += w;
         }

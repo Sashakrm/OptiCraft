@@ -1,0 +1,257 @@
+#version 430 core
+// GPU-мешер «прочей» геометрии чанка: блоки формы (ступеньки, плиты, провод), флора (крест из двух
+// квадов) и жидкость (высоты в углах клетки). Правила — те же, что были у CPU-мешера (бывшие
+// emit_shape_box / add_flora_block_data / add_liquid_face_data в Chunk.cpp): куллинг, свет и
+// высоты воды совпадают с ними. Жадного слияния здесь нет: каждая клетка даёт свои квады независимо,
+// поэтому порядок записи в пул произвольный, а счётчик — атомарный.
+//
+// Одна инвокация = одна строка клетки (чанк, слой y, ряд z): 32 клетки по x. 1024 работы на чанк.
+//
+// Выход — 16-байтные записи квадов в общий пул (тот же буфер, что у mesh_greedy.comp), три потока на
+// секцию: shaped (вид 1), flora (вид 2), liquid (вид 3). Раскладка записи (читает terrain_gpu_misc_vertex.glsl):
+//   x: клетка x(5) | y(5)<<5 | z(5)<<10 | грань(3)<<15 | свет(8)<<18
+//      грань: 0..5 = +X,-X,+Y,-Y,+Z,-Z; 6 и 7 — две диагонали флоры
+//      свет: sky<<4 | block — один на всю грань (как у CPU: свет соседней клетки / своей клетки у флоры)
+//   y: индекс UV-прямоугольника (15 бит)
+//   shaped: z = x0 | y0<<7 | z0<<14 | x1<<21, w = y1 | z1<<7 — бокс в 1/64 клетки (грань берётся из него)
+//   liquid: z = h0 | h1<<16, w = h2 | h3<<16 — высота угла c = fu + 2*fv, 16 бит (0..65535 = 0..1 клетки)
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
+layout(std430, binding = 1) readonly buffer Payload { uint payload[]; };
+layout(std430, binding = 2) writeonly buffer Quads { uvec4 quads[]; };
+// Счётчики потоков квадов: [ручка * 16 + вид * 4 + секция].
+layout(std430, binding = 3) buffer Counts { uint counts[]; };
+// (id * 6 + грань) * 256 + метаданные -> индекс UV-прямоугольника | поворот << 15.
+layout(std430, binding = 4) readonly buffer Lut { uint rect_lut[]; };
+layout(std430, binding = 5) readonly buffer Tables { uint light_coarse[256]; uint block_flags[]; };
+layout(std430, binding = 6) readonly buffer Ranges { uvec2 ranges[]; };
+// Боксы блоков формы: shape_index[форма * 256 + метаданные] = (число боксов, смещение в shape_boxes);
+// бокс = (x0 | y0<<7 | z0<<14 | x1<<21, y1 | z1<<7), единица — 1/64 клетки. Строится на CPU из shape_boxes().
+layout(std430, binding = 7) readonly buffer ShapeIndex { uvec2 shape_index[]; };
+layout(std430, binding = 8) readonly buffer ShapeBoxes { uvec2 shape_boxes[]; };
+
+uniform int u_chunk_count;
+
+const uint FLAG_TRANSPARENT = 2u;
+const uint FLAG_FLORA = 32u;
+const uint FLAG_LIQUID = 64u;
+const uint FLAG_SHAPED = 128u;
+// Сосед закрывает грань блока формы: полный непрозрачный не жидкий куб (и не воздух).
+const uint FLAG_SHAPE_CULLS = 256u;
+// Блок — жидкость (по состоянию): грань жидкости к такому соседу не нужна.
+const uint FLAG_LIQUID_STATE = 512u;
+const uint FLAG_SHAPE_SHIFT = 10u;   // биты 10..12 — форма (Block_Shape)
+const uint KIND_SHAPED = 1u;
+const uint KIND_FLORA = 2u;
+const uint KIND_LIQUID = 3u;
+const uint MISC_MASK = 14u;          // биты видов 1..3 в маске вида чанка
+
+const uint HEADER_STRIDE = 25u;
+const uint ITEMS_PER_CHUNK = 1024u;
+
+// Значение i канала ch чанка hb (см. mesh_greedy.comp).
+uint read_channel(uint hb, uint ch, uint i) {
+    const uvec4 c = headers[hb + 2u + ch];
+    const uint bits = c.z;
+    if (bits == 0u) return payload[c.x];
+    const uint bit = i * bits;
+    const uint w = c.y + (bit >> 5u);
+    const uint s = bit & 31u;
+    uint v = payload[w] >> s;
+    if (s + bits > 32u) v |= payload[w + 1u] << (32u - s);
+    return payload[c.x + (v & ((1u << bits) - 1u))];
+}
+
+int ring_index(int x, int y, int z) {
+    const bool ox = x < 0 || x >= 32;
+    const bool oy = y < 0 || y >= 32;
+    const bool oz = z < 0 || z >= 32;
+    const int px = x >= 32 ? 1 : 0;
+    const int py = y >= 32 ? 1 : 0;
+    const int pz = z >= 32 ? 1 : 0;
+    if (int(ox) + int(oy) + int(oz) == 3) return 384 + px + 2 * py + 4 * pz;
+    if (!oy) return (px + 2 * pz) * 32 + y;
+    if (!ox) return 128 + (py + 2 * pz) * 32 + x;
+    return 256 + (px + 2 * py) * 32 + z;
+}
+
+// Блок в клетке чанка, за одной его границей (грани соседей) или в кольце рёбер и углов.
+uint block_at(uint hb, int x, int y, int z) {
+    const int out_axes = int(x < 0 || x >= 32) + int(y < 0 || y >= 32) + int(z < 0 || z >= 32);
+    if (out_axes >= 2) return read_channel(hb, 15u, uint(ring_index(x, y, z)));
+    if (x < 0) return read_channel(hb, 3u, uint(y * 32 + z));
+    if (x >= 32) return read_channel(hb, 4u, uint(y * 32 + z));
+    if (y < 0) return read_channel(hb, 5u, uint(z * 32 + x));
+    if (y >= 32) return read_channel(hb, 6u, uint(z * 32 + x));
+    if (z < 0) return read_channel(hb, 7u, uint(y * 32 + x));
+    if (z >= 32) return read_channel(hb, 8u, uint(y * 32 + x));
+    return read_channel(hb, 0u, uint((y * 32 + z) * 32 + x));
+}
+
+// Метаданные клетки: свой чанк (канал 1), грани соседей (16..21), кольцо (22).
+uint meta_at(uint hb, int x, int y, int z) {
+    const int out_axes = int(x < 0 || x >= 32) + int(y < 0 || y >= 32) + int(z < 0 || z >= 32);
+    if (out_axes >= 2) return read_channel(hb, 22u, uint(ring_index(x, y, z)));
+    if (x < 0) return read_channel(hb, 16u, uint(y * 32 + z));
+    if (x >= 32) return read_channel(hb, 17u, uint(y * 32 + z));
+    if (y < 0) return read_channel(hb, 18u, uint(z * 32 + x));
+    if (y >= 32) return read_channel(hb, 19u, uint(z * 32 + x));
+    if (z < 0) return read_channel(hb, 20u, uint(y * 32 + x));
+    if (z >= 32) return read_channel(hb, 21u, uint(y * 32 + x));
+    return read_channel(hb, 1u, uint((y * 32 + z) * 32 + x));
+}
+
+// Свет клетки чанка или соседней клетки за одной границей (как light_at в mesh_greedy.comp).
+uint light_at(uint hb, int x, int y, int z) {
+    if (x < 0) return read_channel(hb, 9u, uint(y * 32 + z));
+    if (x >= 32) return read_channel(hb, 10u, uint(y * 32 + z));
+    if (y < 0) return read_channel(hb, 11u, uint(z * 32 + x));
+    if (y >= 32) return read_channel(hb, 12u, uint(z * 32 + x));
+    if (z < 0) return read_channel(hb, 13u, uint(y * 32 + x));
+    if (z >= 32) return read_channel(hb, 14u, uint(y * 32 + x));
+    return read_channel(hb, 2u, uint((y * 32 + z) * 32 + x));
+}
+
+void emit(uint handle, uint kind, uint sec, uvec4 rec) {
+    const uint stream = handle * 16u + kind * 4u + sec;
+    const uint idx = atomicAdd(counts[stream], 1u);
+    const uvec2 range = ranges[stream];
+    if (idx < range.y) quads[range.x + idx] = rec;
+}
+
+uvec4 make_rec(int x, int y, int z, uint face, uint light, uint rect, uint zz, uint ww) {
+    return uvec4(uint(x) | (uint(y) << 5u) | (uint(z) << 10u) | (face << 15u) | (light << 18u),
+                 rect & 0x7FFFu, zz, ww);
+}
+
+// Высота поверхности жидкости в клетке — liquid_height в старом Chunk.cpp: если над клеткой та же
+// жидкость, она полная; иначе уровень amount/9 из метаданных (0 = источник, бит 3 = падающая вода).
+float liquid_height(uint hb, int x, int y, int z, uint id) {
+    const bool x_in = x >= 0 && x < 32;
+    const bool z_in = z >= 0 && z < 32;
+    // Над клеткой на самом краю чанка (три оси за границей) соседей мы не знаем.
+    const bool can_look_up = (y + 1 < 32) || (y + 1 == 32 && x_in && z_in);
+    if (can_look_up && block_at(hb, x, y + 1, z) == id) return 1.0;
+    const uint meta = meta_at(hb, x, y, z);
+    int amount;
+    if ((meta & 8u) != 0u) amount = 8;                    // Block_Meta::fluid_falling_bit
+    else {
+        const int level = int(meta & 7u);                  // Block_Meta::fluid_level_mask
+        amount = level == 0 ? 8 : 8 - level;
+    }
+    return float(amount) / 9.0;
+}
+
+uint height16(float h) {
+    return uint(clamp(h, 0.0, 1.0) * 65535.0 + 0.5);
+}
+
+void main() {
+    const uint g = gl_GlobalInvocationID.x;
+    const uint chunk = g / ITEMS_PER_CHUNK;
+    if (chunk >= uint(u_chunk_count)) return;
+    const uint row = g - chunk * ITEMS_PER_CHUNK;
+    const int y = int(row >> 5u);
+    const int z = int(row & 31u);
+    const uint hb = chunk * HEADER_STRIDE;
+    const uint handle = headers[hb].x;
+    const uvec4 info = headers[hb + 1u];
+    if ((info.y & MISC_MASK) == 0u) return;
+    const bool positive_only = (info.x & 1u) != 0u;
+    const uint sec = uint(y) >> 3u;
+
+    for (int x = 0; x < 32; ++x) {
+        const uint id = read_channel(hb, 0u, uint((y * 32 + z) * 32 + x));
+        const uint fl = block_flags[id];
+        if ((fl & (FLAG_FLORA | FLAG_LIQUID | FLAG_SHAPED)) == 0u) continue;
+        const ivec3 cell = ivec3(x, y, z);
+
+        // Порядок как у CPU: сначала форма, затем флора, затем жидкость.
+        if ((fl & FLAG_SHAPED) != 0u) {
+            const uint shape = (fl >> FLAG_SHAPE_SHIFT) & 7u;
+            const uint meta = read_channel(hb, 1u, uint((y * 32 + z) * 32 + x));
+            const uvec2 index = shape_index[shape * 256u + meta];
+            for (uint b = 0u; b < index.x; ++b) {
+                const uvec2 box = shape_boxes[index.y + b];
+                const int lo[3] = int[3](int(box.x & 127u), int((box.x >> 7u) & 127u), int((box.x >> 14u) & 127u));
+                const int hi[3] = int[3](int((box.x >> 21u) & 127u), int(box.y & 127u), int((box.y >> 7u) & 127u));
+                for (int f = 0; f < 6; ++f) {                       // +X, -X, +Y, -Y, +Z, -Z
+                    const int axis = f >> 1;
+                    const bool pos = (f & 1) == 0;
+                    // Грань лежит на стенке клетки, а за стенкой полный непрозрачный куб — не рисуем.
+                    const bool on_boundary = pos ? (hi[axis] >= 64) : (lo[axis] <= 0);
+                    ivec3 n = cell;
+                    n[axis] += pos ? 1 : -1;
+                    const uint nid = block_at(hb, n.x, n.y, n.z);
+                    if (on_boundary && nid != 0u && (block_flags[nid] & FLAG_SHAPE_CULLS) != 0u) continue;
+                    const uint rect = rect_lut[(id * 6u + uint(f)) * 256u] & 0x7FFFu;
+                    const uint light = light_at(hb, n.x, n.y, n.z);
+                    emit(handle, KIND_SHAPED, sec, make_rec(x, y, z, uint(f), light, rect, box.x, box.y));
+                }
+            }
+            continue;
+        }
+
+        if ((fl & FLAG_FLORA) != 0u) {
+            const uint rect = rect_lut[(id * 6u + 2u) * 256u] & 0x7FFFu;   // uv_top
+            const uint light = light_at(hb, x, y, z);
+            emit(handle, KIND_FLORA, sec, make_rec(x, y, z, 6u, light, rect, 0u, 0u));
+            emit(handle, KIND_FLORA, sec, make_rec(x, y, z, 7u, light, rect, 0u, 0u));
+            continue;
+        }
+
+        // --- Жидкость ---
+        // Высоты поверхности в четырёх углах клетки: среднее по тем из четырёх клеток вокруг угла,
+        // где та же жидкость (liquid_corner в старом Chunk.cpp). hc[cx][cz], cx/cz — смещение угла.
+        float hc[2][2];
+        for (int cx = 0; cx < 2; ++cx) {
+            for (int cz = 0; cz < 2; ++cz) {
+                float sum = 0.0;
+                int count = 0;
+                for (int ox = -1; ox <= 0; ++ox) {
+                    for (int oz = -1; oz <= 0; ++oz) {
+                        const int ax = x + cx + ox;
+                        const int az = z + cz + oz;
+                        if (block_at(hb, ax, y, az) != id) continue;
+                        sum += liquid_height(hb, ax, y, az, id);
+                        ++count;
+                    }
+                }
+                hc[cx][cz] = count > 0 ? sum / float(count) : 0.0;
+            }
+        }
+        const uint h00 = height16(hc[0][0]);
+        const uint h10 = height16(hc[1][0]);
+        const uint h01 = height16(hc[0][1]);
+        const uint h11 = height16(hc[1][1]);
+
+        for (int f = 0; f < 6; ++f) {                               // +X, -X, +Y, -Y, +Z, -Z
+            const int axis = f >> 1;
+            const bool pos = (f & 1) == 0;
+            if (!pos && positive_only) continue;
+            ivec3 n = cell;
+            n[axis] += pos ? 1 : -1;
+            const uint nid = block_at(hb, n.x, n.y, n.z);
+            // Та же жидкость рядом: поверхности клеток совпадают по общим углам, стенок не нужно.
+            if (nid == id) continue;
+            // Грань видна, только если с той стороны воздух или прозрачный не жидкий блок.
+            if ((block_flags[nid] & FLAG_LIQUID_STATE) != 0u || (block_flags[nid] & FLAG_TRANSPARENT) == 0u) continue;
+            const uint rect = rect_lut[(id * 6u + uint(f)) * 256u] & 0x7FFFu;
+            const uint light = light_at(hb, n.x, n.y, n.z);
+            uint c0 = 0u, c1 = 0u, c2 = 0u, c3 = 0u;               // высоты углов fu + 2*fv
+            if (f == 2) {                                           // верх: высота поверхности в углах
+                c0 = h00; c1 = h10; c2 = h01; c3 = h11;
+            } else if (f == 0) {                                    // +X: u вдоль Z
+                c2 = h10; c3 = h11;
+            } else if (f == 1) {                                    // -X
+                c2 = h00; c3 = h01;
+            } else if (f == 4) {                                    // +Z: u вдоль X
+                c2 = h01; c3 = h11;
+            } else if (f == 5) {                                    // -Z
+                c2 = h00; c3 = h10;
+            }                                                       // f == 3 (дно) — плоское, нули
+            emit(handle, KIND_LIQUID, sec, make_rec(x, y, z, uint(f), light, rect, c0 | (c1 << 16u), c2 | (c3 << 16u)));
+        }
+    }
+}

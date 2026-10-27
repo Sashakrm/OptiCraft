@@ -114,16 +114,10 @@ bool Game::initialize() {
     // конструируется при первом обращении) — важно сделать это ПОСЛЕ атласов выше.
     Block_Registry::get_instance();
 
-    if (!m_renderer_ptr->initialize(
-            "assets/shaders/terrain_vertex.glsl",
-            "assets/shaders/terrain_fragment.glsl",
-            "blocks_main")) {
+    if (!m_renderer_ptr->initialize("blocks_main")) {
         LOG_ERROR("Failed to initialize renderer");
         return false;
     }
-
-    // GPU-мешинг непрозрачной геометрии включается только если рендерер поднял GL 4.3 (см. Renderer).
-    Chunk_Manager::set_gpu_solid_meshing(m_renderer_ptr->gpu_solid_meshing());
 
     m_hud_ptr = std::make_unique<Hud>();
     if (!m_hud_ptr->initialize()) {
@@ -1364,10 +1358,6 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     const auto projection = m_camera_ptr->get_projection_matrix(aspect_ratio);
     const Frustum frustum(projection * view);
     const glm::vec3 camera_position = m_camera_ptr->get_position();
-    // Чанки, у которых квады не влезли в пул GPU-мешера, перестраиваются на CPU.
-    const std::vector<glm::ivec3> cpu_fallback = m_renderer_ptr->take_cpu_fallback_requests();
-    if (!cpu_fallback.empty()) m_chunk_manager_ptr->request_cpu_remesh(cpu_fallback);
-
     const auto renderable = m_chunk_manager_ptr->get_renderable_chunks(
         &frustum, &camera_position, m_renderer_ptr->get_flora_render_distance(), m_spectator);
 
@@ -1411,11 +1401,15 @@ void Game::render_gameplay(bool show_gameplay_hud) {
 
     if (show_gameplay_hud && m_block_interaction_ptr->has_target()) {
         const auto& hit = m_block_interaction_ptr->get_current_hit();
-        m_hud_ptr->draw_block_highlight(
-            glm::ivec3(hit.block_x, hit.block_y, hit.block_z),
-            view,
-            projection
-        );
+        if (hit.has_box) {
+            m_hud_ptr->draw_box_highlight(hit.box_lo, hit.box_hi, view, projection);
+        } else {
+            m_hud_ptr->draw_block_highlight(
+                glm::ivec3(hit.block_x, hit.block_y, hit.block_z),
+                view,
+                projection
+            );
+        }
     }
 
     // Хотбар всегда на экране во время игры (как в Minecraft — виден и на паузе/инвентаре),

@@ -1,24 +1,36 @@
 #version 430 core
-// Финализация GPU-мешера: по числу квадов и маске видимости секций пишет команду
-// glMultiDrawArraysIndirect для каждой пары (слот, секция). Индекс команды = глобальный номер секции
-// (слот*4 + секция) и он же уходит в baseInstance: вершинный шейдер берёт по нему свою секцию.
+// Финализация GPU-мешеров: по счётчикам квадов и списку видимых секций пишет команды
+// glMultiDrawArraysIndirect для одного вида геометрии (solid, shaped, flora или liquid) — вызывается
+// по разу на вид. Команда на каждую пару (запись списка, секция); порядок записей списка и есть порядок
+// отрисовки (CPU кладёт туда чанки от ближних к дальним, для жидкости — от дальних к ближним).
+//
+// Квады секции лежат в пуле подряд, поэтому `first` = номер первого квада * 6, а в вершинном шейдере
+// gl_VertexID / 6 — это сразу абсолютный номер квада. В baseInstance уходит ручка*4 + секция: по ней
+// вершинный шейдер (атрибутом aSection с делителем 1) находит начало координат своего чанка.
 layout(local_size_x = 64) in;
 
 layout(std430, binding = 3) readonly buffer Counts { uint counts[]; };
-// Битовая маска видимых секций слота: бит s — секция s попала во frustum и слот активен.
-layout(std430, binding = 6) readonly buffer Vis { uint vis[]; };
+// Запись списка отрисовки: .x — ручка чанка, .y — маска видимых секций (бит s — секция s).
+layout(std430, binding = 4) readonly buffer Order { uvec2 order[]; };
+// Место потока в пуле: .x — первый квад, .y — ёмкость (квадов сверх неё нет в памяти).
+layout(std430, binding = 6) readonly buffer Ranges { uvec2 ranges[]; };
 // DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
 layout(std430, binding = 7) writeonly buffer Cmd { uvec4 cmds[]; };
 
-uniform int u_section_total;
-uniform int u_quad_cap;
+uniform int u_entry_count;    // записей в списке отрисовки этого вида
+uniform int u_kind;           // 0 solid, 1 shaped, 2 flora, 3 liquid
+uniform uint u_order_offset;  // начало списка этого вида в Order
+uniform uint u_cmd_offset;    // начало команд этого вида в Cmd
 
 void main() {
     const uint g = gl_GlobalInvocationID.x;
-    if (g >= uint(u_section_total)) return;
-    const uint slot = g >> 2u;
+    if (g >= uint(u_entry_count) * 4u) return;
+    const uint entry = g >> 2u;
     const uint sec = g & 3u;
-    const uint quads = min(counts[g], uint(u_quad_cap));
-    const bool visible = ((vis[slot] >> sec) & 1u) != 0u;
-    cmds[g] = uvec4((visible && quads > 0u) ? quads * 6u : 0u, 1u, 0u, g);
+    const uvec2 item = order[u_order_offset + entry];
+    const uint stream = item.x * 16u + uint(u_kind) * 4u + sec;
+    const uvec2 range = ranges[stream];
+    const uint quads = min(counts[stream], range.y);
+    const bool visible = ((item.y >> sec) & 1u) != 0u;
+    cmds[u_cmd_offset + g] = uvec4((visible && quads > 0u) ? quads * 6u : 0u, 1u, range.x * 6u, item.x * 4u + sec);
 }

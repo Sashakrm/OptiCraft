@@ -450,6 +450,8 @@ void Block_Registry::load_from_file(const std::string& path) {
                 if (sh == "slab") properties.shape = Block_Shape::Slab;
                 else if (sh == "stairs") properties.shape = Block_Shape::Stairs;
                 else if (sh == "plate") properties.shape = Block_Shape::Plate;
+                else if (sh == "button") properties.shape = Block_Shape::Button;
+                else if (sh == "wire") properties.shape = Block_Shape::Wire;
                 else if (sh != "none") LOG_WARN("Block_Registry: unknown shape '" + sh + "' for '" + properties.name + "'");
             }
             if (const auto* v = entry.find("mesh_style")) {
