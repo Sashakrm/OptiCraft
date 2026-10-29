@@ -148,19 +148,14 @@ const std::vector<Biome_Id>& selectable_single_biomes() {
 // ни одной строки памяти и не нуждаются в синхронизации. Каждый кэш прямого
 // отображения (direct-mapped): попадание — одно сравнение ключа, промах — пересчёт.
 namespace {
-    struct Terrain_Point {
-        int key_x = 0, key_z = 0;
-        bool valid = false;
-        double continentalness = 0.0;
-        double erosion = 0.0;
-        double mountainness = 0.0;
-        double surface_height = 0.0;
-        uint32_t epoch = 0;
-    };
-
-    constexpr size_t kTerrainCacheBits = 13;             // 8192 колонок
+    // 32768 колонок на поток: построители рек и пещер обходят окна в сотни блоков и вытесняли
+    // из прежних 8192 записей рельеф, нужный генерации чанков.
+    constexpr size_t kTerrainCacheBits = 15;
     constexpr size_t kTerrainCacheSize = 1u << kTerrainCacheBits;
     constexpr size_t kTerrainCacheMask = kTerrainCacheSize - 1;
+
+    // Максимальная высота структуры (дерева) над поверхностью: выше неё декорации чанк не затрагивают.
+    constexpr int kDecorationMaxHeight = 26;
 
     constexpr size_t kColumnCacheBits = 13;              // 8192 колонки
     constexpr size_t kColumnCacheSize = 1u << kColumnCacheBits;
@@ -348,10 +343,16 @@ double World_Generator::continental_elevation(double c) const {
 double World_Generator::raw_surface_height(int world_x, int world_z,
                                            double continentalness,
                                            double erosion) const {
+    return raw_surface_height(world_x, world_z, continentalness, erosion,
+                              normalize_noise(fbm2(m_mountain, world_x, world_z, 4, 0.00125, 2.0, 0.5)));
+}
+
+double World_Generator::raw_surface_height(int world_x, int world_z,
+                                           double continentalness,
+                                           double erosion,
+                                           double mountain_signal) const {
     const double broad_terrain = fbm2(m_terrain, world_x, world_z, 5, 0.0022, 2.0, 0.5);
     const double detail_terrain = fbm2(m_detail, world_x, world_z, 3, 0.012, 2.0, 0.5);
-    const double mountain_signal = normalize_noise(
-        fbm2(m_mountain, world_x, world_z, 4, 0.00125, 2.0, 0.5));
 
     const double base = continental_elevation(continentalness);
 
@@ -393,10 +394,35 @@ double World_Generator::raw_surface_height(int world_x, int world_z,
 //  Кэш рельефа и колонок
 // ---------------------------------------------------------------------------
 namespace {
-    Terrain_Point* terrain_cache_slot(int x, int z) {
-        static thread_local Terrain_Point cache[kTerrainCacheSize];
+    World_Generator::Terrain_Point* terrain_cache_slot(int x, int z) {
+        static thread_local World_Generator::Terrain_Point cache[kTerrainCacheSize];
         return &cache[cache_index2(x, z, kTerrainCacheMask)];
     }
+}
+
+World_Generator::Terrain_Point World_Generator::terrain_point(int x, int z) const {
+    Terrain_Point* slot = terrain_cache_slot(x, z);
+    if (slot->valid && slot->epoch == m_cache_epoch && slot->key_x == x && slot->key_z == z) {
+        return *slot;
+    }
+
+    Terrain_Point point;
+    point.key_x = x;
+    point.key_z = z;
+    point.valid = true;
+    point.epoch = m_cache_epoch;
+    point.continentalness = split_signed_noise(
+        fbm2(m_continental, x, z, 5, 0.00022, 2.0, 0.5));
+    point.erosion = normalize_noise(fbm2(m_erosion, x, z, 4, 0.0018, 2.0, 0.5));
+    point.mountainness = normalize_noise(
+        fbm2(m_mountain, x, z, 4, 0.00125, 2.0, 0.5));
+    // Сигнал гор уже посчитан выше (mountainness) — второй раз тот же fbm не вычисляем.
+    point.surface_height = raw_surface_height(x, z,
+                                              point.continentalness,
+                                              point.erosion,
+                                              point.mountainness);
+    *slot = point;
+    return point;
 }
 
 // Континентальность, эрозия, горность и высота поверхности одной колонки.
@@ -410,31 +436,7 @@ World_Generator::Column World_Generator::build_column(int world_x, int world_z) 
 
     if (!m_noise_environment) return column;
 
-    const auto terrain_of = [this](int x, int z) -> Terrain_Point {
-        Terrain_Point* slot = terrain_cache_slot(x, z);
-        if (slot->valid && slot->epoch == m_cache_epoch &&
-            slot->key_x == x && slot->key_z == z) {
-            return *slot;
-        }
-
-        Terrain_Point point;
-        point.key_x = x;
-        point.key_z = z;
-        point.valid = true;
-        point.epoch = m_cache_epoch;
-        point.continentalness = split_signed_noise(
-            fbm2(m_continental, x, z, 5, 0.00022, 2.0, 0.5));
-        point.erosion = normalize_noise(fbm2(m_erosion, x, z, 4, 0.0018, 2.0, 0.5));
-        point.mountainness = normalize_noise(
-            fbm2(m_mountain, x, z, 4, 0.00125, 2.0, 0.5));
-        point.surface_height = raw_surface_height(x, z,
-                                                  point.continentalness,
-                                                  point.erosion);
-        *slot = point;
-        return point;
-    };
-
-    const Terrain_Point here = terrain_of(world_x, world_z);
+    const Terrain_Point here = terrain_point(world_x, world_z);
     column.continentalness = here.continentalness;
     column.erosion = here.erosion;
     column.mountainness = here.mountainness;
@@ -444,8 +446,8 @@ World_Generator::Column World_Generator::build_column(int world_x, int world_z) 
     // Наклон нужен, чтобы песок ложился только на пологий берег, а не на отвесную
     // скалу. Соседние точки рельефа почти всегда уже в кэше — их считает соседняя
     // колонка того же чанка.
-    const double east = terrain_of(world_x + 1, world_z).surface_height;
-    const double north = terrain_of(world_x, world_z + 1).surface_height;
+    const double east = terrain_point(world_x + 1, world_z).surface_height;
+    const double north = terrain_point(world_x, world_z + 1).surface_height;
     column.slope = std::max(std::abs(east - here.surface_height),
                             std::abs(north - here.surface_height));
 
@@ -516,7 +518,7 @@ bool World_Generator::sky_anchor_valid(int anchor_x, int anchor_z) const {
     const double mountain_signal = normalize_noise(
         fbm2(m_mountain, anchor_x, anchor_z, 4, 0.00125, 2.0, 0.5));
 
-    const double surface = raw_surface_height(anchor_x, anchor_z, c, erosion);
+    const double surface = raw_surface_height(anchor_x, anchor_z, c, erosion, mountain_signal);
 
     const bool mountain = mountain_signal > 0.75 && erosion > 0.25 && surface > 80.0;
     const bool ocean = c < -0.19;
@@ -990,7 +992,10 @@ int World_Generator::get_height(int world_x, int world_z) const {
         case Terrain_Mode::Void: return m_dimension->spawn_height - 2; // spawn = height + 2
         case Terrain_Mode::Noise: break;
     }
-    return column_at(world_x, world_z).height;
+    // Построители пещер и рек спрашивают только высоту (десятки тысяч раз): строить для этого полную
+    // Column с климатом, наклоном и биомом незачем. Результат тот же: Column::height = floor(surface_height).
+    if (!m_noise_environment) return 0;
+    return static_cast<int>(std::floor(terrain_point(world_x, world_z).surface_height));
 }
 
 Block_Types World_Generator::get_block(int world_x, int world_y, int world_z) const {
@@ -1210,6 +1215,42 @@ bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chun
 // ---------------------------------------------------------------------------
 //  Декорации
 // ---------------------------------------------------------------------------
+bool World_Generator::may_decorate_chunk(int chunk_x, int chunk_y, int chunk_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations || !m_dimension->ground)
+        return false;
+
+    // Диапазон высот поверхности под областью декораций чанка (с нахлёстом) — на поток запоминается по
+    // колонке чанков: у вертикального столбца из многих чанков область одна и та же.
+    struct Range {
+        const World_Generator* owner = nullptr;
+        uint32_t epoch = 0;
+        int chunk_x = 0, chunk_z = 0;
+        int min_h = 0, max_h = 0;
+        bool valid = false;
+    };
+    static thread_local Range cache[64];
+    Range& slot = cache[cache_index2(chunk_x, chunk_z, 63)];
+    if (!(slot.valid && slot.owner == this && slot.epoch == m_cache_epoch &&
+          slot.chunk_x == chunk_x && slot.chunk_z == chunk_z)) {
+        const int start_x = chunk_x * Config::chunk_size;
+        const int start_z = chunk_z * Config::chunk_size;
+        int lo = std::numeric_limits<int>::max(), hi = std::numeric_limits<int>::min();
+        for (int x = -Config::decoration_overhang; x < Config::chunk_size + Config::decoration_overhang; ++x) {
+            for (int z = -Config::decoration_overhang; z < Config::chunk_size + Config::decoration_overhang; ++z) {
+                const int h = column_at(start_x + x, start_z + z).height;
+                lo = std::min(lo, h);
+                hi = std::max(hi, h);
+            }
+        }
+        slot = {this, m_cache_epoch, chunk_x, chunk_z, lo, hi, true};
+    }
+
+    // Те же условия раннего выхода, что в начале decorate_column, но для всех колонок разом.
+    const int chunk_min_y = chunk_y * Config::chunk_height;
+    const int chunk_max_y = chunk_min_y + Config::chunk_height - 1;
+    return slot.max_h + kDecorationMaxHeight >= chunk_min_y && slot.min_h <= chunk_max_y;
+}
+
 void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) const {
     if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations) return;
     const Column column = column_at(world_x, world_z);
@@ -1227,7 +1268,7 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     // хотя поверхность есть только в одном из них.
     const int chunk_min_y = chunk.get_chunk_y() * Config::chunk_height;
     const int chunk_max_y = chunk_min_y + Config::chunk_height - 1;
-    constexpr int kMaxStructureHeight = 26;
+    constexpr int kMaxStructureHeight = kDecorationMaxHeight;
     if (terrain_height + kMaxStructureHeight < chunk_min_y ||
         terrain_height > chunk_max_y)
         return;
@@ -1355,18 +1396,18 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
             ? is_sparse_tree_anchor(world_x, world_z, m_seed)
             : is_tree_anchor(world_x, world_z, m_seed, anchor_radius))) {
         const auto setter = [&](int x, int y, int z, Block_Types type) {
-            // Структура ставится только в уже пустой воксель, поэтому дерево
-            // никогда не перезаписывает рельеф или столб воды.
-            if (get_block(x, y, z) != Block_Types::Air) return;
-
+            // Воксель вне этого чанка не меняется — полный get_block (колонка + шум) для него не нужен.
             const int lx = x - chunk.get_chunk_x() * Config::chunk_size;
             const int ly = y - chunk_min_y;
             const int lz = z - chunk.get_chunk_z() * Config::chunk_size;
-            if (lx >= 0 && lx < Config::chunk_size &&
-                ly >= 0 && ly < Config::chunk_height &&
-                lz >= 0 && lz < Config::chunk_size) {
-                chunk.set_block(lx, ly, lz, type);
-            }
+            if (lx < 0 || lx >= Config::chunk_size ||
+                ly < 0 || ly >= Config::chunk_height ||
+                lz < 0 || lz >= Config::chunk_size) return;
+
+            // Структура ставится только в уже пустой воксель, поэтому дерево
+            // никогда не перезаписывает рельеф или столб воды.
+            if (get_block(x, y, z) != Block_Types::Air) return;
+            chunk.set_block(lx, ly, lz, type);
         };
         Tree_Generator::place_tree(tree_type, world_x, terrain_height, world_z, setter, rng);
     }

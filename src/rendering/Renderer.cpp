@@ -693,6 +693,14 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     m_gpu_payload_cpu.clear();
     Gpu_Readback& rb = m_gpu_readbacks[(m_gpu_readback_head + m_gpu_readback_count) % kGpuReadbackRing];
 
+    struct Chunk_Upload {
+        size_t handle;
+        glm::vec4 origin;
+        std::array<glm::uvec2, kGpuStreams> ranges;
+    };
+    std::vector<Chunk_Upload> uploads;
+    uploads.reserve(n);
+
     for (size_t i = 0; i < n; ++i) {
         const Renderable_Chunk& chunk = *batch[i];
         const Chunk_Meshes& meshes = *chunk.meshes;
@@ -743,25 +751,50 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             header[2 + ch] = glm::uvec4(base + c[0], base + c[1], c[2], 0u);
         }
 
-        // Мировой угол чанка, диапазоны потоков и обнуление счётчиков.
+        // Мировой угол чанка, диапазоны потоков и обнуление счётчиков копятся в списке и уходят в GPU
+        // после цикла одним вызовом на непрерывный участок ручек (раньше — 3 glBufferSubData на чанк).
         const glm::vec4 origin(static_cast<float>(chunk.position.x * Config::chunk_size),
                                static_cast<float>(chunk.position.y * Config::chunk_height),
                                static_cast<float>(chunk.position.z * Config::chunk_size), 0.0f);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_origins_ssbo);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle * sizeof(glm::vec4)),
-                        sizeof(glm::vec4), &origin);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_ranges_ssbo);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle * kGpuStreams * sizeof(glm::uvec2)),
-                        sizeof(ranges), ranges.data());
-        const std::array<uint32_t, kGpuStreams> zero_counts{};
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_counts_ssbo);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle * kGpuStreams * sizeof(uint32_t)),
-                        sizeof(zero_counts), zero_counts.data());
+        uploads.push_back({handle, origin, ranges});
         std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(handle * kGpuStreams), kGpuStreams, 0u);
 
         rb.positions.push_back(chunk.position);
         rb.versions.push_back(chunk.mesh_version);
         rb.handles.push_back(res.gpu_handle);
+    }
+
+    // Непрерывные участки ручек: origin / диапазоны / нули счётчиков — по одному вызову на участок.
+    std::stable_sort(uploads.begin(), uploads.end(),
+              [](const Chunk_Upload& a, const Chunk_Upload& b) { return a.handle < b.handle; });
+    {
+        std::vector<glm::vec4> run_origins;
+        std::vector<glm::uvec2> run_ranges;
+        std::vector<uint32_t> run_zero;
+        for (size_t a = 0; a < uploads.size();) {
+            size_t b = a + 1;
+            while (b < uploads.size() && uploads[b].handle == uploads[b - 1].handle + 1) ++b;
+            const size_t len = b - a;
+            run_origins.resize(len);
+            run_ranges.resize(len * kGpuStreams);
+            run_zero.assign(len * kGpuStreams, 0u);
+            for (size_t r = 0; r < len; ++r) {
+                run_origins[r] = uploads[a + r].origin;
+                std::copy(uploads[a + r].ranges.begin(), uploads[a + r].ranges.end(),
+                          run_ranges.begin() + static_cast<std::ptrdiff_t>(r * kGpuStreams));
+            }
+            const size_t handle0 = uploads[a].handle;
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_origins_ssbo);
+            glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle0 * sizeof(glm::vec4)),
+                            static_cast<GLsizeiptr>(len * sizeof(glm::vec4)), run_origins.data());
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_ranges_ssbo);
+            glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle0 * kGpuStreams * sizeof(glm::uvec2)),
+                            static_cast<GLsizeiptr>(len * kGpuStreams * sizeof(glm::uvec2)), run_ranges.data());
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_counts_ssbo);
+            glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(handle0 * kGpuStreams * sizeof(uint32_t)),
+                            static_cast<GLsizeiptr>(len * kGpuStreams * sizeof(uint32_t)), run_zero.data());
+            a = b;
+        }
     }
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_headers_ssbo);
@@ -799,11 +832,15 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     glBindBuffer(GL_COPY_READ_BUFFER, m_gpu_counts_ssbo);
     glBindBuffer(GL_COPY_WRITE_BUFFER, rb.buffer);
-    for (size_t i = 0; i < n; ++i) {
+    // Подряд идущие ручки копируются одним вызовом.
+    for (size_t i = 0; i < n;) {
+        size_t j = i + 1;
+        while (j < n && rb.handles[j] == rb.handles[j - 1] + 1) ++j;
         glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                             static_cast<GLintptr>(static_cast<size_t>(rb.handles[i]) * kGpuStreams * sizeof(uint32_t)),
                             static_cast<GLintptr>(i * kGpuStreams * sizeof(uint32_t)),
-                            kGpuStreams * sizeof(uint32_t));
+                            static_cast<GLsizeiptr>((j - i) * kGpuStreams * sizeof(uint32_t)));
+        i = j;
     }
     rb.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     ++m_gpu_readback_count;
@@ -839,9 +876,10 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
     // нужна загрузка. opaque_order уже отсортирован от ближних к дальним.
     const auto collect_pending = [&]() {
         std::vector<const Renderable_Chunk*> pending;
-        for (const Renderable_Chunk* chunk_ptr : opaque_order) {
+        for (size_t index = 0; index < opaque_order.size(); ++index) {
+            const Renderable_Chunk* chunk_ptr = opaque_order[index];
             const Renderable_Chunk& chunk = *chunk_ptr;
-            Chunk_GL_Resources& res = m_chunk_gl_cache[chunk.position];
+            Chunk_GL_Resources& res = *m_frame_res[index];
             if (!chunk.meshes->gpu_upload_pending) {
                 release_gpu_chunk(res);
                 continue;
@@ -889,11 +927,10 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
     // они включены; флора и жидкость — только фрустуму и достижимости. Порядок записей — порядок отрисовки:
     // непрозрачные — от ближних к дальним, прозрачные — от дальних к ближним.
     std::array<std::vector<glm::uvec2>, kGpuKindCount> entries;
-    for (const Renderable_Chunk* chunk_ptr : opaque_order) {
-        const Renderable_Chunk& chunk = *chunk_ptr;
-        const auto it = m_chunk_gl_cache.find(chunk.position);
-        if (it == m_chunk_gl_cache.end() || it->second.gpu_handle < 0) continue;
-        Chunk_GL_Resources& res = it->second;
+    for (size_t index = 0; index < opaque_order.size(); ++index) {
+        const Renderable_Chunk& chunk = *opaque_order[index];
+        Chunk_GL_Resources& res = *m_frame_res[index];
+        if (res.gpu_handle < 0) continue;
         const Chunk_Meshes& meshes = *chunk.meshes;
         const glm::vec3 footprint_min(static_cast<float>(chunk.position.x * Config::chunk_size), 0.0f,
                                       static_cast<float>(chunk.position.z * Config::chunk_size));
@@ -1037,27 +1074,35 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // the query for a deep, sealed-off cave section correctly fails once the mountain in
     // front of it has already been rasterized this same frame. Тот же порядок задаёт и очередь
     // загрузки на GPU: ближние чанки получают геометрию первыми.
-    std::vector<const Renderable_Chunk*> opaque_order;
-    opaque_order.reserve(chunks.size());
+    // Ключ сортировки (квадрат расстояния до центра чанка) считается ОДИН раз на чанк, а не на каждом
+    // сравнении: раньше компаратор заново строил центры и скалярные произведения O(N log N) раз.
+    // Порядок равных ключей сохраняется (stable), как и прежде.
+    m_frame_sort.clear();
+    m_frame_sort.reserve(chunks.size());
     for (const auto& chunk : chunks) {
-        if (chunk.meshes) opaque_order.push_back(&chunk);
+        if (!chunk.meshes) continue;
+        const glm::vec3 center(
+            (static_cast<float>(chunk.position.x) + 0.5f) * Config::chunk_size,
+            (static_cast<float>(chunk.position.y) + 0.5f) * Config::chunk_height,
+            (static_cast<float>(chunk.position.z) + 0.5f) * Config::chunk_size);
+        const glm::vec3 offset = center - camera_position;
+        m_frame_sort.push_back({glm::dot(offset, offset), &chunk});
     }
-    std::stable_sort(opaque_order.begin(), opaque_order.end(),
-        [&camera_position](const Renderable_Chunk* lhs, const Renderable_Chunk* rhs) {
-            const auto chunk_center = [](const Renderable_Chunk& c) {
-                return glm::vec3(
-                    (static_cast<float>(c.position.x) + 0.5f) * Config::chunk_size,
-                    (static_cast<float>(c.position.y) + 0.5f) * Config::chunk_height,
-                    (static_cast<float>(c.position.z) + 0.5f) * Config::chunk_size
-                );
-            };
-            const glm::vec3 lhs_offset = chunk_center(*lhs) - camera_position;
-            const glm::vec3 rhs_offset = chunk_center(*rhs) - camera_position;
-            return glm::dot(lhs_offset, lhs_offset) < glm::dot(rhs_offset, rhs_offset);
-        });
+    std::stable_sort(m_frame_sort.begin(), m_frame_sort.end(),
+                     [](const Frame_Sort_Item& a, const Frame_Sort_Item& b) { return a.distance_sq < b.distance_sq; });
 
-    for (const Renderable_Chunk* chunk_ptr : opaque_order) {
-        m_chunk_gl_cache[chunk_ptr->position].mesh_version = chunk_ptr->mesh_version;
+    std::vector<const Renderable_Chunk*>& opaque_order = m_frame_order;
+    opaque_order.clear();
+    opaque_order.reserve(m_frame_sort.size());
+    // Один поиск в m_chunk_gl_cache на чанк за кадр: указатели на значения unordered_map устойчивы,
+    // а остальные проходы кадра (загрузка на GPU, списки секций, occlusion) берут ресурсы по индексу.
+    m_frame_res.clear();
+    m_frame_res.reserve(m_frame_sort.size());
+    for (const Frame_Sort_Item& item : m_frame_sort) {
+        opaque_order.push_back(item.chunk);
+        Chunk_GL_Resources& res = m_chunk_gl_cache[item.chunk->position];
+        res.mesh_version = item.chunk->mesh_version;
+        m_frame_res.push_back(&res);
     }
     prepare_gpu_frame(opaque_order, spectator, camera_position);
 
@@ -1067,9 +1112,8 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
 
     // Непрозрачные кубы.
     m_gpu_terrain_shader_ptr->use();
-    m_gpu_terrain_shader_ptr->set_mat4("model", glm::mat4(1.0f));
-    m_gpu_terrain_shader_ptr->set_mat4("view", view);
-    m_gpu_terrain_shader_ptr->set_mat4("projection", projection);
+    const glm::mat4 view_projection = projection * view;
+    m_gpu_terrain_shader_ptr->set_mat4("view_projection", view_projection);
     m_gpu_terrain_shader_ptr->set_int("textureAtlas", 0);
     m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
     m_gpu_terrain_shader_ptr->set_float("maxLightLevel", max_light);
@@ -1078,9 +1122,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // Остальные виды идут одним шейдером; вид выбирает uniform u_kind.
     const Shader& misc = *m_gpu_misc_shader_ptr;
     misc.use();
-    misc.set_mat4("model", glm::mat4(1.0f));
-    misc.set_mat4("view", view);
-    misc.set_mat4("projection", projection);
+    misc.set_mat4("view_projection", view_projection);
     misc.set_int("textureAtlas", 0);
     misc.set_float("time", time);
     misc.set_float("ambient", ambient_intensity);
@@ -1134,9 +1176,9 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         glDisable(GL_CULL_FACE);
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(-4.0f, -8.0f);
-        for (const Renderable_Chunk* chunk_ptr : opaque_order) {
-            const Renderable_Chunk& chunk = *chunk_ptr;
-            auto& gl_res = m_chunk_gl_cache[chunk.position];
+        for (size_t index = 0; index < opaque_order.size(); ++index) {
+            const Renderable_Chunk& chunk = *opaque_order[index];
+            auto& gl_res = *m_frame_res[index];
             const glm::vec3 footprint_min(
                 static_cast<float>(chunk.position.x * Config::chunk_size), 0.0f,
                 static_cast<float>(chunk.position.z * Config::chunk_size));

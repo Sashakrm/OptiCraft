@@ -21,6 +21,10 @@ endif()
 # -DOPTICRAFT_NATIVE_ARCH=ON, когда сборка только для своей машины.
 option(OPTICRAFT_NATIVE_ARCH "Оптимизировать под процессор сборочной машины" OFF)
 
+# Межмодульная оптимизация (LTO): заметнее всего ускоряет мелкие функции шума/сеток между .cpp.
+# Выключена по умолчанию — линковка заметно дольше. Включается -DOPTICRAFT_LTO=ON.
+option(OPTICRAFT_LTO "Включить LTO в Release" OFF)
+
 # Удобно для IDE (VS Code, CLion и т.д.)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -243,6 +247,16 @@ find_package(glfw3 REQUIRED QUIET)
 if(UNIX AND NOT APPLE)
     find_package(X11 REQUIRED)
     find_package(Threads REQUIRED)
+endif()
+
+if(OPTICRAFT_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT OPTICRAFT_IPO_OK OUTPUT OPTICRAFT_IPO_LOG)
+    if(OPTICRAFT_IPO_OK)
+        set_property(TARGET ${PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    else()
+        message(WARNING "LTO не поддерживается компилятором: ${OPTICRAFT_IPO_LOG}")
+    endif()
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

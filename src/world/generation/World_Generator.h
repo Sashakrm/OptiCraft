@@ -109,6 +109,9 @@ public:
     static constexpr int sea_level() { return 63; }
 
     int get_height(int world_x, int world_z) const;
+    // Может ли декорирование вообще изменить этот чанк. false — ни одна из колонок, чьи декорации
+    // попадают в чанк (с нахлёстом), не доходит до его высот: цикл по ним можно пропустить целиком.
+    bool may_decorate_chunk(int chunk_x, int chunk_y, int chunk_z) const;
     Block_Types get_block(int world_x, int world_y, int world_z) const;
     void decorate_column(Chunk& chunk, int world_x, int world_z) const;
     bool is_solid(int world_x, int world_y, int world_z) const;
@@ -147,6 +150,20 @@ private:
 
     // Всё, что зависит только от (x, z). Считается один раз и переиспользуется
     // для всех блоков колонки.
+public:
+    // Рельеф одной колонки: то, что нужно и полной Column, и построителям пещер/рек (им — только высота).
+    // Публичный только ради потокового кэша в .cpp.
+    struct Terrain_Point {
+        int key_x = 0, key_z = 0;
+        bool valid = false;
+        double continentalness = 0.0;
+        double erosion = 0.0;
+        double mountainness = 0.0;
+        double surface_height = 0.0;
+        uint32_t epoch = 0;
+    };
+
+private:
     struct Column {
         double temperature = 0.0;
         double humidity = 0.0;
@@ -228,6 +245,12 @@ private:
     double continental_elevation(double continentalness) const;
     double raw_surface_height(int world_x, int world_z,
                               double continentalness, double erosion) const;
+    // То же, но с уже посчитанным сигналом гор (normalize_noise(fbm2(m_mountain, ...))): тот же fbm
+    // дважды считать незачем.
+    double raw_surface_height(int world_x, int world_z,
+                              double continentalness, double erosion, double mountain_signal) const;
+    // Рельеф колонки через потоковый кэш (без климата, наклона и биома).
+    Terrain_Point terrain_point(int world_x, int world_z) const;
 
     Column build_column(int world_x, int world_z) const;
     Column column_at(int world_x, int world_z) const;

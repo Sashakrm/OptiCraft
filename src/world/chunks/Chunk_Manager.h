@@ -203,6 +203,15 @@ private:
     // Чанки, чьи секции реально попали в текущий frustum/visibility traversal.
     // Обновляется get_renderable_chunks на главном потоке и используется как приоритет мешинга.
     mutable Chunk_Coord_Set m_visible_chunks;
+    // Плоский список загруженных чанков для обхода кадра: пересобирается только при смене набора
+    // (m_chunk_set_epoch), а не каждый кадр обходом хеш-таблицы.
+    mutable std::vector<std::pair<glm::ivec3, Chunk*>> m_loaded_cache;
+    mutable uint64_t m_loaded_cache_epoch = ~0ull;
+    // Скан грязных чанков (rebuild_dirty_chunks) пропускается, пока с прошлого скана, не нашедшего
+    // ни одного грязного чанка, никто не стал грязным и набор чанков не менялся.
+    bool m_dirty_scan_clean = false;
+    uint64_t m_dirty_scan_events = 0;
+    uint64_t m_dirty_scan_set_epoch = 0;
     uint8_t view_ring_of(const glm::ivec3& position) const;
     void refresh_view_rings();
     Mpmc_Queue<Chunk_Result> m_completed_jobs;
@@ -246,7 +255,16 @@ private:
     // сейчас размещённых игроком. Уровень не хранится тут отдельно — при пересчёте читается
     // заново через get_block_world(pos), так что если блок под источником вдруг изменился
     // (не должно происходить штатно, но на всякий случай) — пересчёт сам всё поправит.
-    std::vector<glm::ivec3> m_light_sources;
+    // Хранятся ПО ЧАНКАМ (ключ — координаты чанка, значение — мировые позиции его источников):
+    // локальному пересчёту света нужны только источники в окрестности правки, а не весь список мира,
+    // и при загрузке чанка список его источников просто заменяется — без поиска дубликатов.
+    // Запись удаляется при выгрузке чанка и восстанавливается сканом при следующей загрузке.
+    std::unordered_map<glm::ivec3, std::vector<glm::ivec3>, Chunk_Key_Hash> m_light_sources;
+    // Чанки, пришедшие с пустой сеткой блочного света: свет соседей и их собственных источников
+    // дотягивается до них одним инкрементальным проходом (relight_block_light_new_chunks).
+    std::vector<glm::ivec3> m_chunks_pending_block_light;
+    void add_light_source(const glm::ivec3& world_pos);
+    void remove_light_source(const glm::ivec3& world_pos);
 
     // Содержимое блоков-контейнеров (сундук/верстак/печь), см. Block_Entity.h — плоская
     // карта по мировым координатам, а не часть Chunk, потому что таких блоков на весь мир
@@ -308,13 +326,17 @@ private:
     void worker_loop(bool mesh_dedicated = false);
 
     bool set_light_world(int wx, int wy, int wz, uint8_t level);
-    // Полный пересчёт освещения от блоков (не инкрементальный — см. подробный комментарий
-    // у реализации в .cpp про то, почему это осознанный выбор, а не недоделка).
-    // extra_clear_position: позиция, которую нужно гарантированно включить в область очистки,
-    // даже если её уже нет в m_light_sources — нужно для корректного снятия света: когда
-    // источник только что убрали, он к этому моменту уже вычеркнут из списка, и без этого
-    // параметра его старый свет-"призрак" никогда бы не очистился (см. подробности в .cpp).
-    void recompute_lighting(std::optional<glm::ivec3> extra_clear_position = std::nullopt);
+    // Локальный пересчёт блочного света после правки блока в world_pos: очищается куб радиуса
+    // Config::max_light_level вокруг правки (дальше правка свет изменить не может) и заполняется
+    // заново от источников внутри куба и от неизменённых клеток сразу за его границей. Меши
+    // пересобираются только у чанков, где свет РЕАЛЬНО поменялся.
+    void relight_block_light_near(const glm::ivec3& world_pos);
+    // Инкрементальный пересчёт для только что загруженных чанков (m_chunks_pending_block_light):
+    // свет только прибавляется, очистка не нужна.
+    void relight_block_light_new_chunks();
+    // Локальный пересчёт света неба после правки: вертикальная тень пересчитывается только для
+    // колонки правки, горизонтальное растекание — в кубе вокруг неё (см. реализацию).
+    void relight_sky_light_near(const glm::ivec3& world_pos);
     // Грани соседа читают свет через границу: после смены света в чанках из changed_chunks
     // шесть соседей помечаются грязными, иначе их граница держала бы старый свет.
     void mark_light_neighbors_dirty(const std::unordered_set<glm::ivec3, Chunk_Key_Hash>& changed_chunks);

@@ -6,6 +6,7 @@
 #define OPTICRAFT_CHUNK_H
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -302,6 +303,8 @@ public:
         else m_meta[i] = value;
     }
 
+    // Блоки, записанные в палитре (могут включать уже не используемые записи).
+    const std::vector<Block_ID>& palette() const { return m_palette; }
     bool has_meta() const { return !m_meta.empty(); }
     void clear_meta() { m_meta.clear(); }
     const std::unordered_map<uint16_t, uint8_t>& meta_entries() const { return m_meta; }
@@ -499,6 +502,7 @@ private:
 
     Chunk_Meshes m_meshes;
     bool m_is_mesh_dirty = true;
+    static inline std::atomic<uint64_t> s_dirty_events{0};
     // Растёт при каждой пометке грязности (см. mark_mesh_dirty): задача пересборки запоминает его
     // на моменте снимка, и если к её применению он вырос, правка легла уже после снимка.
     uint64_t m_dirty_epoch = 0;
@@ -570,7 +574,11 @@ public:
     void mark_mesh_dirty() {
         m_is_mesh_dirty = true;
         ++m_dirty_epoch;
+        s_dirty_events.fetch_add(1, std::memory_order_relaxed);
     }
+    // Сколько раз ЛЮБОЙ чанк помечали грязным: менеджер по нему узнаёт, что скан грязных чанков
+    // можно пропустить (с прошлого скана никто не стал грязным).
+    static uint64_t dirty_event_count() { return s_dirty_events.load(std::memory_order_relaxed); }
     uint64_t get_dirty_epoch() const { return m_dirty_epoch; }
     // Номер последней поставленной задачи пересборки меша этого чанка. Результат более старой задачи
     // (например, поставленной до срочной пересборки после правки блока) отбрасывается.

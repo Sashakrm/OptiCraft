@@ -14,9 +14,8 @@ layout(std430, binding = 8) readonly buffer Rects { vec4 rects[]; };
 // Мировой минимальный угол каждого чанка по ручке (xyz); w не используется.
 layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
+// Готовая projection * view (model здесь всегда единичная): одно умножение на вершину вместо трёх.
+uniform mat4 view_projection;
 
 out vec2 Local;
 out float NormalY;
@@ -98,5 +97,5 @@ void main() {
     BlockLight = float(cl & 15u);
     Rect = rects[w1 & 0x7FFFu];
     AO = float((ao_bits >> (2u * uint(code))) & 3u);
-    gl_Position = projection * view * model * vec4(p, 1.0);
+    gl_Position = view_projection * vec4(p, 1.0);
 }

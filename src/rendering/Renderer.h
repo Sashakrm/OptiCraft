@@ -69,6 +69,12 @@ private:
     };
 
     std::unordered_map<glm::ivec3, Chunk_GL_Resources, Chunk_Key_Hash> m_chunk_gl_cache;
+    // Буферы кадра переиспользуются между кадрами (без аллокаций): чанки по расстоянию, их порядок и
+    // ресурсы — параллельные массивы (m_frame_res[i] относится к m_frame_order[i]).
+    struct Frame_Sort_Item { float distance_sq; const Renderable_Chunk* chunk; };
+    std::vector<Frame_Sort_Item> m_frame_sort;
+    std::vector<const Renderable_Chunk*> m_frame_order;
+    std::vector<Chunk_GL_Resources*> m_frame_res;
 
     void delete_chunk_resources(Chunk_GL_Resources& resources);
 

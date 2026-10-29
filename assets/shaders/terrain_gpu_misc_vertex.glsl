@@ -10,9 +10,8 @@ layout(std430, binding = 2) readonly buffer Quads { uvec4 quads[]; };
 layout(std430, binding = 8) readonly buffer Rects { vec4 rects[]; };
 layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
+// Готовая projection * view (model здесь всегда единичная): одно умножение на вершину вместо трёх.
+uniform mat4 view_projection;
 uniform float time;
 uniform int u_kind;   // 1 shaped, 2 flora, 3 liquid
 
@@ -115,5 +114,5 @@ void main() {
     SkyLight = float(packed_light >> 4u);
     BlockLight = float(packed_light & 15u);
     Rect = rect;
-    gl_Position = projection * view * model * vec4(p, 1.0);
+    gl_Position = view_projection * vec4(p, 1.0);
 }

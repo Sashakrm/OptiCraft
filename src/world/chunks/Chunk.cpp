@@ -232,15 +232,20 @@ void Chunk::generate_blocks() {
 
     // Generate decorations from nearby source columns too, so a tree or
     // structure crossing a border is reproduced by both affected chunks.
-    for (int x = -Config::decoration_overhang;
-         x < Config::chunk_size + Config::decoration_overhang; ++x) {
-        for (int z = -Config::decoration_overhang;
-             z < Config::chunk_size + Config::decoration_overhang; ++z) {
-            m_world_generator->decorate_column(
-                *this,
-                start_x + x,
-                start_z + z
-            );
+    // Чанк, до высот которого не дотягивается ни одна колонка области (подземелье глубоко под
+    // поверхностью, воздух над ней), пропускается целиком: раньше для каждого из 2304 колонок
+    // всё равно спрашивалась Column и сразу следовал ранний выход.
+    if (m_world_generator->may_decorate_chunk(m_chunk_x, m_chunk_y, m_chunk_z)) {
+        for (int x = -Config::decoration_overhang;
+             x < Config::chunk_size + Config::decoration_overhang; ++x) {
+            for (int z = -Config::decoration_overhang;
+                 z < Config::chunk_size + Config::decoration_overhang; ++z) {
+                m_world_generator->decorate_column(
+                    *this,
+                    start_x + x,
+                    start_z + z
+                );
+            }
         }
     }
 

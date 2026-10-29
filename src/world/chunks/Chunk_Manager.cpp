@@ -698,6 +698,7 @@ void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
         save_chunk_to_disk(*existing);
         m_unloaded_since_last_query.push_back({cx, cy, cz});
         m_chunks.erase(cx, cy, cz);
+        m_light_sources.erase({cx, cy, cz});   // при следующей загрузке чанка источники найдутся заново
         ++m_chunk_set_epoch;
     }
     m_requested_chunks.erase(cx, cy, cz);
@@ -965,36 +966,38 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent) {
         if (const Chunk* neighbor = get_chunk(npos.x, npos.y, npos.z)) {
             Chunk_Block_Face block_face;
             Chunk_Light_Face light_face;
-            // Order of faces: -X,+X,-Y,+Y,-Z,+Z.
-            if (i == 0 || i == 1) {
-                const int x = (i == 0) ? Config::chunk_size - 1 : 0;
-                for (int y = 0; y < Config::chunk_height; ++y) {
-                    for (int z = 0; z < Config::chunk_size; ++z) {
-                        const size_t idx = static_cast<size_t>(y) * Config::chunk_size + z;
-                        block_face.data[idx] = static_cast<Block_ID>((neighbor->get_block(x, y, z)));
-                        block_face.meta[idx] = neighbor->get_meta(x, y, z);
-                        light_face.data[idx] = neighbor->get_packed_light(x, y, z);
+            // Чтение прямо из сеток соседа (без проверок границ Chunk::get_*), а однородные сетки
+            // (воздух над землёй, сплошной камень, ровный свет) заполняются целиком без цикла по 1024 клеткам.
+            const Chunk_Block_Grid& nb_blocks = neighbor->get_blocks();
+            const Chunk_Light_Grid& nb_light = neighbor->get_light_grid();
+            const bool blocks_uniform = nb_blocks.is_uniform() && !nb_blocks.has_meta();
+            if (blocks_uniform) block_face.data.fill(static_cast<Block_ID>(nb_blocks.uniform_block()));
+            if (nb_light.is_uniform()) light_face.data.fill(nb_light.get(0, 0, 0));
+            const bool light_uniform = nb_light.is_uniform();
+            if (!blocks_uniform || !light_uniform) {
+                // Order of faces: -X,+X,-Y,+Y,-Z,+Z.
+                const auto copy_cell = [&](int x, int y, int z, size_t idx) {
+                    if (!blocks_uniform) {
+                        block_face.data[idx] = static_cast<Block_ID>(nb_blocks.get(x, y, z));
+                        block_face.meta[idx] = nb_blocks.get_meta(x, y, z);
                     }
-                }
-            } else if (i == 2 || i == 3) {
-                const int y = (i == 2) ? Config::chunk_height - 1 : 0;
-                for (int z = 0; z < Config::chunk_size; ++z) {
-                    for (int x = 0; x < Config::chunk_size; ++x) {
-                        const size_t idx = static_cast<size_t>(z) * Config::chunk_size + x;
-                        block_face.data[idx] = static_cast<Block_ID>((neighbor->get_block(x, y, z)));
-                        block_face.meta[idx] = neighbor->get_meta(x, y, z);
-                        light_face.data[idx] = neighbor->get_packed_light(x, y, z);
-                    }
-                }
-            } else {
-                const int z = (i == 4) ? Config::chunk_size - 1 : 0;
-                for (int y = 0; y < Config::chunk_height; ++y) {
-                    for (int x = 0; x < Config::chunk_size; ++x) {
-                        const size_t idx = static_cast<size_t>(y) * Config::chunk_size + x;
-                        block_face.data[idx] = static_cast<Block_ID>((neighbor->get_block(x, y, z)));
-                        block_face.meta[idx] = neighbor->get_meta(x, y, z);
-                        light_face.data[idx] = neighbor->get_packed_light(x, y, z);
-                    }
+                    if (!light_uniform) light_face.data[idx] = nb_light.get(x, y, z);
+                };
+                if (i == 0 || i == 1) {
+                    const int x = (i == 0) ? Config::chunk_size - 1 : 0;
+                    for (int y = 0; y < Config::chunk_height; ++y)
+                        for (int z = 0; z < Config::chunk_size; ++z)
+                            copy_cell(x, y, z, static_cast<size_t>(y) * Config::chunk_size + z);
+                } else if (i == 2 || i == 3) {
+                    const int y = (i == 2) ? Config::chunk_height - 1 : 0;
+                    for (int z = 0; z < Config::chunk_size; ++z)
+                        for (int x = 0; x < Config::chunk_size; ++x)
+                            copy_cell(x, y, z, static_cast<size_t>(z) * Config::chunk_size + x);
+                } else {
+                    const int z = (i == 4) ? Config::chunk_size - 1 : 0;
+                    for (int y = 0; y < Config::chunk_height; ++y)
+                        for (int x = 0; x < Config::chunk_size; ++x)
+                            copy_cell(x, y, z, static_cast<size_t>(y) * Config::chunk_size + x);
                 }
             }
             job.neighbor_blocks[i] = std::move(block_face);
@@ -1238,45 +1241,57 @@ void Chunk_Manager::collect_finished_chunks() {
             static_cast<uint32_t>(result.position.z));
 
         // Источники света, которые пришли с чанком (в том числе из сохранённого мира): без этого
-        // факелы и солнечные камни с диска не попадали в m_light_sources и не участвовали в пересчёте.
+        // факелы и солнечные камни с диска не попадали бы в m_light_sources и не светили.
         // Та же проверка заодно ставит тики жидкостям: вода, пришедшая с чанком (например, река
         // из генератора), соприкасается с воздухом и должна начать растекаться. Без тика такая вода
         // стояла бы "блоками", пока её не тронут.
-        const uint8_t* emission = Block_Registry::get_instance().light_emission_table();
-        const Block_Types first_block = new_chunk->get_block(0, 0, 0);
-        const bool uniform_idle = new_chunk->get_blocks().is_uniform() &&
-            emission[static_cast<Block_ID>(first_block)] == 0 &&
-            get_block_props(first_block).state != Block_State::Liquid;
-        if (!uniform_idle) {
-            const int base_x = result.position.x * Config::chunk_size;
-            const int base_y = result.position.y * Config::chunk_height;
-            const int base_z = result.position.z * Config::chunk_size;
-            static constexpr glm::ivec3 k_open_side[5] = {
-                {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}
-            };
-            for (int ly = 0; ly < Config::chunk_height; ++ly) {
-                for (int lz = 0; lz < Config::chunk_size; ++lz) {
-                    for (int lx = 0; lx < Config::chunk_size; ++lx) {
-                        const Block_Types block = new_chunk->get_block(lx, ly, lz);
-                        const auto id = static_cast<Block_ID>(block);
-                        const glm::ivec3 pos{base_x + lx, base_y + ly, base_z + lz};
-                        if (emission[id] > 0 &&
-                            std::find(m_light_sources.begin(), m_light_sources.end(), pos) == m_light_sources.end()) {
-                            m_light_sources.push_back(pos);
-                        }
-                        const Block_Properties& props = get_block_props(block);
-                        if (props.state != Block_State::Liquid) continue;
-                        for (const glm::ivec3& d : k_open_side) {
-                            const Block_Types nb = get_block_world(pos.x + d.x, pos.y + d.y, pos.z + d.z);
-                            const Block_Properties& np = get_block_props(nb);
-                            if (nb == Block_Types::Air || (!np.is_solid && np.state != Block_State::Liquid)) {
-                                m_fluids.schedule(pos, props.fluid_tick_delay);
-                                break;
+        // Скан 32768 вокселей нужен, только если в палитре чанка вообще есть светящийся блок или
+        // жидкость: палитра — это список блоков, реально встречающихся в чанке.
+        {
+            const uint8_t* emission = Block_Registry::get_instance().light_emission_table();
+            std::vector<Block_ID> interesting;
+            for (const Block_ID id : new_chunk->get_blocks().palette()) {
+                if (emission[id] > 0 ||
+                    get_block_props(static_cast<Block_Types>(id)).state == Block_State::Liquid) {
+                    interesting.push_back(id);
+                }
+            }
+            std::vector<glm::ivec3> found_sources;
+            if (!interesting.empty()) {
+                static thread_local std::array<Block_ID, Chunk_Block_Grid::voxel_count> flat;
+                new_chunk->get_blocks().unpack(flat.data());
+                const int base_x = result.position.x * Config::chunk_size;
+                const int base_y = result.position.y * Config::chunk_height;
+                const int base_z = result.position.z * Config::chunk_size;
+                static constexpr glm::ivec3 k_open_side[5] = {
+                    {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}
+                };
+                size_t i = 0;
+                for (int ly = 0; ly < Config::chunk_height; ++ly) {
+                    for (int lz = 0; lz < Config::chunk_size; ++lz) {
+                        for (int lx = 0; lx < Config::chunk_size; ++lx, ++i) {
+                            const Block_ID id = flat[i];
+                            if (std::find(interesting.begin(), interesting.end(), id) == interesting.end()) continue;
+                            const glm::ivec3 pos{base_x + lx, base_y + ly, base_z + lz};
+                            if (emission[id] > 0) found_sources.push_back(pos);
+                            const Block_Types block = static_cast<Block_Types>(id);
+                            const Block_Properties& props = get_block_props(block);
+                            if (props.state != Block_State::Liquid) continue;
+                            for (const glm::ivec3& d : k_open_side) {
+                                const Block_Types nb = get_block_world(pos.x + d.x, pos.y + d.y, pos.z + d.z);
+                                const Block_Properties& np = get_block_props(nb);
+                                if (nb == Block_Types::Air || (!np.is_solid && np.state != Block_State::Liquid)) {
+                                    m_fluids.schedule(pos, props.fluid_tick_delay);
+                                    break;
+                                }
                             }
                         }
                     }
                 }
             }
+            if (found_sources.empty()) m_light_sources.erase(result.position);
+            else m_light_sources[result.position] = std::move(found_sources);
+            m_chunks_pending_block_light.push_back(result.position);
         }
 
         // Чанк с текущей водой (метаданные жидкости хранятся только у течений): тики
@@ -1319,9 +1334,9 @@ void Chunk_Manager::collect_finished_chunks() {
     }
 
     // Новые чанки родились с пустой (нулевой) сеткой света — если рядом уже есть источники,
-    // их свет должен "дотянуться" и в свежезагруженные соседние чанки. Пересчёт полный, но
-    // дешёвый (см. recompute_lighting) и запускается только когда реально что-то догрузилось
-    // И есть хоть один источник — иначе на каждый обычный кадр это было бы лишней работой.
+    // их свет должен "дотянуться" и в свежезагруженные соседние чанки. Пересчёт
+    // инкрементальный (только добавляет свет, см. relight_block_light_new_chunks) и запускается только
+    // когда реально что-то догрузилось.
     // Do not rebuild the entire skylight field after every single generated chunk. During
     // startup the vertical stack can contain thousands of chunks; rebuilding after each
     // insertion turns loading into a quadratic amount of work and makes the window appear
@@ -1383,9 +1398,7 @@ void Chunk_Manager::collect_finished_chunks() {
         if (elapsed_ms >= sky_budget_ms) break;
     }
     m_frames_since_sky_recompute = 0;
-    if (any && !m_light_sources.empty()) {
-        recompute_lighting();
-    }
+    if (any) relight_block_light_new_chunks();
 }
 
 void Chunk_Manager::collect_finished_mesh_jobs() {
@@ -1489,10 +1502,20 @@ void Chunk_Manager::rebuild_dirty_chunks() {
     const int ring_limit = (capture_active() || stream_idle) ? std::numeric_limits<int>::max()
                                                              : first_incomplete_ring();
 
+    // Нет грязных чанков, и с прошлого скана никто грязным не стал — сканировать нечего.
+    if (m_dirty_scan_clean && m_dirty_scan_events == Chunk::dirty_event_count() &&
+        m_dirty_scan_set_epoch == m_chunk_set_epoch) {
+        return;
+    }
+    const uint64_t scan_events = Chunk::dirty_event_count();
+    const uint64_t scan_set_epoch = m_chunk_set_epoch;
+    size_t dirty_seen = 0;
+
     struct Candidate { glm::ivec3 pos; int score; };
     std::vector<Candidate> candidates;
     m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
         if (!chunk->is_mesh_dirty()) return;
+        ++dirty_seen;
         if (ring_limit != std::numeric_limits<int>::max() && chunk->get_mesh_version() == 0 &&
             static_cast<int>(view_ring_of(key)) + 1 >= ring_limit) return;
         if (m_pending_mesh_rebuilds.contains(key.x, key.y, key.z)) return;
@@ -1510,6 +1533,9 @@ void Chunk_Manager::rebuild_dirty_chunks() {
         }
         candidates.push_back({key, score});
     });
+    m_dirty_scan_clean = dirty_seen == 0;
+    m_dirty_scan_events = scan_events;
+    m_dirty_scan_set_epoch = scan_set_epoch;
     if (candidates.empty()) return;
 
     const size_t take = std::min(enqueue_cap, candidates.size());
@@ -1534,6 +1560,7 @@ void Chunk_Manager::clear() {
     m_pending_mesh_rebuilds.clear();
     m_mesh_rebuild_requeue.clear();
     m_light_sources.clear();
+    m_chunks_pending_block_light.clear();
     m_fluids.clear();
     m_columns_pending_sky_recompute.clear();
     m_frames_since_sky_recompute = 0;
@@ -1574,7 +1601,19 @@ Block_Types Chunk_Manager::get_block_world(int wx, int wy, int wz) const {
     const int ly = wy - cy * Config::chunk_height;
     const int lz = wz - cz * Config::chunk_size;
 
-    const Chunk* chunk = get_chunk(cx, cy, cz);
+    // Запросы коллизий идут сериями по соседним клеткам одного чанка: помним последний найденный чанк
+    // (на поток). Ключ — менеджер + эпоха набора чанков (растёт при любой вставке/выгрузке/очистке), так что
+    // устаревший указатель не используется. Промах (чанка нет) не кэшируется.
+    struct Last_Lookup { const Chunk_Manager* owner = nullptr; uint64_t epoch = 0; int cx = 0, cy = 0, cz = 0; const Chunk* chunk = nullptr; };
+    thread_local Last_Lookup last;
+    const Chunk* chunk;
+    if (last.chunk && last.owner == this && last.epoch == m_chunk_set_epoch &&
+        last.cx == cx && last.cy == cy && last.cz == cz) {
+        chunk = last.chunk;
+    } else {
+        chunk = get_chunk(cx, cy, cz);
+        if (chunk) last = {this, m_chunk_set_epoch, cx, cy, cz, chunk};
+    }
     if (chunk) {
         return chunk->get_block(lx, ly, lz);
     }
@@ -1653,52 +1692,28 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
         }
     }
 
-    // Отслеживаем источники света отдельным списком позиций (см. m_light_sources) — только
-    // блоки с ненулевым light_emission (сейчас это только Sun Stone, но список не завязан
-    // на конкретное имя блока). Пересчёт освещения запускаем в двух случаях: (а) сам этот
-    // блок стал или перестал быть источником, (б) правка произошла в радиусе действия УЖЕ
-    // существующего источника — например, поставили/убрали стену рядом с Sun Stone. Без (б)
-    // такая стена не отбрасывала бы тень, пока что-то ещё не потревожит освещение отдельно —
-    // поймано ровно на этом изолированным тестом (свет "просвечивал" сквозь новую стену).
+    // Источники света (блоки с light_emission > 0: Sun Stone, факел, лава) хранятся по чанкам
+    // (см. m_light_sources). Правка пересчитывает свет только в кубе вокруг себя: свет блока не
+    // уходит дальше Config::max_light_level клеток (см. relight_block_light_near).
     const bool old_emits_light = get_block_props(old_type).light_emission > 0;
     const bool new_emits_light = get_block_props(type).light_emission > 0;
     const glm::ivec3 world_pos{wx, wy, wz};
 
-    // Раньше пересчёт блочного света запускался только если сам блок стал/перестал быть
-    // источником, либо правка попадала в радиус УЖЕ существующего источника. На практике это
-    // означало, что перестройка света была заметна только при ломании блоков рядом с уже
-    // работающим источником — например, только что поставленный источник света прорисовывался
-    // с задержкой/не сразу, если рядом ещё не было других источников. Теперь пересчитываем
-    // (дёшево — recompute_lighting сам ограничен окрестностью m_light_sources, а не всем миром)
-    // при КАЖДОЙ правке блока, так что новый источник загорается сразу же, как только его
-    // поставили, а не только когда что-то другое потревожит освещение по соседству.
-    std::optional<glm::ivec3> removed_source_position;
-    if (old_emits_light) {
-        m_light_sources.erase(
-            std::remove(m_light_sources.begin(), m_light_sources.end(), world_pos),
-            m_light_sources.end()
-        );
-        removed_source_position = world_pos;
-    }
-    if (new_emits_light) {
-        m_light_sources.push_back(world_pos);
-    }
-    // Если блок и до, и после прозрачен для света и ничего не излучает (воздух <-> вода, цветок
-    // <-> воздух, смена уровня жидкости), освещение измениться не может: пересчёт пропускаем.
-    // Иначе каждый шаг растекания воды гонял бы пересчёт света по целому столбцу чанков.
+    if (old_emits_light) remove_light_source(world_pos);
+    if (new_emits_light) add_light_source(world_pos);
+
+    // Если прозрачность для света у блока не изменилась (воздух <-> вода, цветок <-> воздух,
+    // камень <-> земля) и ничего не излучает, освещение измениться не может: пересчёт пропускаем.
+    // Иначе каждый шаг растекания воды или смена одного непрозрачного блока на другой запускали бы
+    // пересчёт света.
     const bool* transparency = Block_Registry::get_instance().transparent_table();
     const bool light_unaffected =
-        transparency[static_cast<Block_ID>(old_type) & 0xFFu] &&
-        transparency[static_cast<Block_ID>(type) & 0xFFu] &&
+        transparency[static_cast<Block_ID>(old_type)] == transparency[static_cast<Block_ID>(type)] &&
         !old_emits_light && !new_emits_light;
     if (!light_unaffected) {
-        recompute_lighting(removed_source_position);
-
+        relight_block_light_near(world_pos);
         // Изменение непрозрачности может открыть/закрыть вертикальный луч солнца или вход в пещеру.
-        // Only this one column needs rescanning - the BFS below still spreads sideways into
-        // neighboring columns/chunks as needed, same as it always has.
-        recompute_sky_lighting({(static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) |
-                                 static_cast<uint32_t>(cz)});
+        relight_sky_light_near(world_pos);
     }
 
     // Раньше здесь на КАЖДЫЙ поставленный блок целиком переписывался 32-килобайтный
@@ -1958,130 +1973,429 @@ void Chunk_Manager::recompute_sky_lighting(
     mark_light_neighbors_dirty(touched_chunks);
 }
 
-void Chunk_Manager::recompute_lighting(std::optional<glm::ivec3> extra_clear_position) {
-    // ПОЛНЫЙ пересчёт (очистить область + BFS заново), а НЕ инкрементальное добавление/снятие
-    // света — осознанный выбор, а не недоделка. Правильный инкрементальный алгоритм снятия
-    // света (когда источник убрали или загородили) — это отдельный, гораздо более хрупкий BFS
-    // "de-propagation" (сравнить значение соседа с тем, что мог бы дать именно этот источник,
-    // и решать, снимать его или это вклад другого источника) — легко получить тонкие баги
-    // (осиротевший свет, который никогда не гаснет, либо наоборот гаснет там, где не должен).
-    // Полный пересчёт медленнее в пересчёте на одну правку, зато НАМНОГО проще и надёжнее, а
-    // источники света — редкое событие (игрок время от времени ставит/ломает Sun Stone), так
-    // что цена оправдана: пересчёт бежит по ограниченной области (радиус источника + запас),
-    // а не по всему загруженному миру.
+// ---------------------------------------------------------------------------------------------
+// Блочный свет и свет неба: ЛОКАЛЬНЫЕ пересчёты.
+//
+// Раньше любая правка блока запускала пересчёт по ВСЕМ источникам света мира (по 125 чанков
+// на источник, все они и их соседи помечались грязными) и перескан всей колонки чанков (около
+// 2.6 млн чтений вокселей). Теперь правка пересчитывает только куб вокруг себя:
+//  * свет от источника с яркостью <= max_light_level не уходит дальше max_light_level клеток,
+//    поэтому правка меняет свет только внутри куба такого радиуса, а за ним значения верны и
+//    служат «входящим» светом;
+//  * грязными помечаются только чанки, где значение света реально изменилось.
+// ---------------------------------------------------------------------------------------------
+namespace {
+    // Чанки, у которых сменился свет. Мешу нужен свет его собственных клеток и граничных клеток
+    // шести соседей, поэтому клетка на стыке добавляет и соседа с этой стороны.
+    struct Light_Dirty_Set {
+        std::unordered_set<glm::ivec3, Chunk_Key_Hash> chunks;
+        glm::ivec3 last{std::numeric_limits<int>::min()};
 
-    // Шаг 1: область, которую нужно ОЧИСТИТЬ перед пересчётом — не только сами чанки
-    // источников, но и всё, куда их свет МОГ БЫ дотянуться (иначе снятие/перемещение
-    // источника оставит "осиротевший" свет, который никто не потушит).
-    constexpr int chunk_margin = Config::max_light_level / Config::chunk_size + 2;
-    std::unordered_set<glm::ivec3, Chunk_Key_Hash> affected_chunks;
-    for (const auto& source_pos : m_light_sources) {
-        const glm::ivec3 source_chunk = get_chunk_coords_for_world(source_pos.x, source_pos.y, source_pos.z);
-        for (int dx = -chunk_margin; dx <= chunk_margin; ++dx) {
-            for (int dy = -chunk_margin; dy <= chunk_margin; ++dy) {
-                for (int dz = -chunk_margin; dz <= chunk_margin; ++dz) {
-                    affected_chunks.insert({source_chunk.x + dx, source_chunk.y + dy, source_chunk.z + dz});
+        void note(int cx, int cy, int cz, int lx, int ly, int lz) {
+            const bool border = lx == 0 || lx == Config::chunk_size - 1 ||
+                                ly == 0 || ly == Config::chunk_height - 1 ||
+                                lz == 0 || lz == Config::chunk_size - 1;
+            if (!border && last.x == cx && last.y == cy && last.z == cz) return;
+            last = {cx, cy, cz};
+            chunks.insert(last);
+            if (lx == 0) chunks.insert({cx - 1, cy, cz});
+            if (lx == Config::chunk_size - 1) chunks.insert({cx + 1, cy, cz});
+            if (ly == 0) chunks.insert({cx, cy - 1, cz});
+            if (ly == Config::chunk_height - 1) chunks.insert({cx, cy + 1, cz});
+            if (lz == 0) chunks.insert({cx, cy, cz - 1});
+            if (lz == Config::chunk_size - 1) chunks.insert({cx, cy, cz + 1});
+        }
+    };
+
+    // Обходит чанки, пересекающие куб [x0..x1]x[y0..y1]x[z0..z1] (мировые координаты, включительно),
+    // и отдаёт каждому локальные диапазоны. Чанк может быть nullptr (не загружен).
+    template <class F>
+    void for_each_chunk_in_box(Chunk_Manager& mgr, int x0, int y0, int z0, int x1, int y1, int z1, F&& f) {
+        const int cx0 = floor_div_chunk(x0, Config::chunk_size), cx1 = floor_div_chunk(x1, Config::chunk_size);
+        const int cy0 = floor_div_chunk(y0, Config::chunk_height), cy1 = floor_div_chunk(y1, Config::chunk_height);
+        const int cz0 = floor_div_chunk(z0, Config::chunk_size), cz1 = floor_div_chunk(z1, Config::chunk_size);
+        for (int cy = cy0; cy <= cy1; ++cy) {
+            for (int cz = cz0; cz <= cz1; ++cz) {
+                for (int cx = cx0; cx <= cx1; ++cx) {
+                    const int bx = cx * Config::chunk_size;
+                    const int by = cy * Config::chunk_height;
+                    const int bz = cz * Config::chunk_size;
+                    Chunk* chunk = mgr.get_chunk(cx, cy, cz);
+                    f(chunk, cx, cy, cz,
+                      std::max(x0, bx) - bx, std::min(x1, bx + Config::chunk_size - 1) - bx,
+                      std::max(y0, by) - by, std::min(y1, by + Config::chunk_height - 1) - by,
+                      std::max(z0, bz) - bz, std::min(z1, bz + Config::chunk_size - 1) - bz);
                 }
             }
         }
     }
-    // Источник, который только что убрали (см. комментарий у объявления в .h) — его уже нет
-    // в m_light_sources к этому моменту, поэтому без явного добавления его окрестность
-    // осталась бы вне области очистки, и его старый свет никогда бы не погас.
-    if (extra_clear_position) {
-        const glm::ivec3 source_chunk = get_chunk_coords_for_world(extra_clear_position->x, extra_clear_position->y, extra_clear_position->z);
-        for (int dx = -chunk_margin; dx <= chunk_margin; ++dx) {
-            for (int dy = -chunk_margin; dy <= chunk_margin; ++dy) {
-                for (int dz = -chunk_margin; dz <= chunk_margin; ++dz) {
-                    affected_chunks.insert({source_chunk.x + dx, source_chunk.y + dy, source_chunk.z + dz});
-                }
-            }
-        }
-    }
 
-    for (const auto& pos : affected_chunks) {
-        if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
-            chunk->clear_block_light();
-        }
+    inline Voxel_Cursor cursor_at(Chunk_Manager& mgr, int wx, int wy, int wz) {
+        const int cx = floor_div_chunk(wx, Config::chunk_size);
+        const int cy = floor_div_chunk(wy, Config::chunk_height);
+        const int cz = floor_div_chunk(wz, Config::chunk_size);
+        return {cx, cy, cz, wx - cx * Config::chunk_size, wy - cy * Config::chunk_height,
+                wz - cz * Config::chunk_size, mgr.get_chunk(cx, cy, cz)};
     }
-
-    // Шаг 2: многоисточниковый BFS. touched_chunks — это то, что РЕАЛЬНО задел проход (может
-    // быть меньше affected_chunks, если свет уткнулся в стены раньше, чем достиг границы
-    // запаса) — именно это, а не affected_chunks, определяет, какие чанки пересобирать.
-    //
-    // Раньше узел очереди хранил только мировые координаты и на каждого из 6 соседей заново
-    // проделывал get_block_world/get_light_world/set_light_world — а это ТРИ отдельных прохода
-    // "мировые координаты -> chunk-координаты (деление) -> get_chunk (hash-map) -> локальные
-    // координаты" на одного соседа (по одному на блок, на чтение света, на запись света).
-    // Voxel_Cursor + step_cursor (см. анонимный namespace выше) держат chunk-координаты,
-    // локальные координаты и указатель на Chunk уже разложенными и лезут в hash-map только
-    // при реальном пересечении границы чанка — см. подробный комментарий у step_cursor.
-    // Так же заменяем get_block_props(...).is_transparent/.light_emission на плоские таблицы
-    // Block_Registry (см. комментарий у их объявления в Block_Types.h).
-    const bool* transparent = Block_Registry::get_instance().transparent_table();
-    const uint8_t* emission = Block_Registry::get_instance().light_emission_table();
 
     struct Light_BFS_Node { Voxel_Cursor at; uint8_t level; };
-    Flat_Queue<Light_BFS_Node> flat_queue;
-    std::unordered_set<glm::ivec3, Chunk_Key_Hash> touched_chunks;
 
-    for (const auto& source_pos : m_light_sources) {
-        // Разложение мировых координат на (chunk, local) для самого источника — деление тут
-        // не страшно: источников света на весь мир единицы, это не горячий цикл.
-        const glm::ivec3 c = get_chunk_coords_for_world(source_pos.x, source_pos.y, source_pos.z);
-        Chunk* chunk = get_chunk(c.x, c.y, c.z);
-        if (!chunk) continue;
-        const int lx = source_pos.x - c.x * Config::chunk_size;
-        const int ly = source_pos.y - c.y * Config::chunk_height;
-        const int lz = source_pos.z - c.z * Config::chunk_size;
-
-        const Block_ID id = static_cast<Block_ID>(chunk->get_block(lx, ly, lz));
-        const int level = emission[id];
-        if (level <= 0) continue; // блок под этой позицией больше не источник света
-        const auto level_u8 = static_cast<uint8_t>(level);
-
-        chunk->set_light(lx, ly, lz, level_u8);
-        flat_queue.push({Voxel_Cursor{c.x, c.y, c.z, lx, ly, lz, chunk}, level_u8});
-        touched_chunks.insert(c);
+    // Распространение блочного света: уровень падает на 1 за клетку, через непрозрачное не идёт.
+    // Только ПОВЫШАЕТ значения. on_set вызывается для каждой изменённой клетки.
+    template <class OnSet>
+    void run_block_light_bfs(Chunk_Manager& mgr, Flat_Queue<Light_BFS_Node>& queue, OnSet&& on_set) {
+        const bool* transparent = Block_Registry::get_instance().transparent_table();
+        while (!queue.empty()) {
+            const Light_BFS_Node node = queue.front();
+            queue.pop();
+            if (node.level <= 1) continue;
+            for (int d = 0; d < 6; ++d) {
+                const Voxel_Cursor nc = step_cursor(node.at, k_dx6[d], k_dy6[d], k_dz6[d], mgr);
+                if (!nc.chunk) continue;
+                const Block_ID nid = static_cast<Block_ID>(nc.chunk->get_block(nc.lx, nc.ly, nc.lz));
+                if (!transparent[nid]) continue;
+                const auto new_level = static_cast<uint8_t>(node.level - 1);
+                if (new_level <= nc.chunk->get_light(nc.lx, nc.ly, nc.lz)) continue;
+                nc.chunk->set_light(nc.lx, nc.ly, nc.lz, new_level);
+                on_set(nc);
+                queue.push({nc, new_level});
+            }
+        }
     }
 
-    while (!flat_queue.empty()) {
-        const Light_BFS_Node node = flat_queue.front();
-        flat_queue.pop();
-        if (node.level <= 1) continue; // на уровне 1 распространяться дальше некуда (дало бы 0)
+    // Ставит узел источника в очередь, если на этой позиции всё ещё стоит светящийся блок.
+    inline bool seed_light_source(Chunk_Manager& mgr, const glm::ivec3& pos, Flat_Queue<Light_BFS_Node>& queue,
+                                  Voxel_Cursor* out_cursor = nullptr) {
+        const uint8_t* emission = Block_Registry::get_instance().light_emission_table();
+        const Voxel_Cursor c = cursor_at(mgr, pos.x, pos.y, pos.z);
+        if (!c.chunk) return false;
+        const int level = emission[static_cast<Block_ID>(c.chunk->get_block(c.lx, c.ly, c.lz))];
+        if (level <= 0) return false;
+        if (c.chunk->get_light(c.lx, c.ly, c.lz) < level) c.chunk->set_light(c.lx, c.ly, c.lz, static_cast<uint8_t>(level));
+        queue.push({c, static_cast<uint8_t>(level)});
+        if (out_cursor) *out_cursor = c;
+        return true;
+    }
+}
 
+void Chunk_Manager::add_light_source(const glm::ivec3& world_pos) {
+    const glm::ivec3 key = get_chunk_coords_for_world(world_pos.x, world_pos.y, world_pos.z);
+    std::vector<glm::ivec3>& bucket = m_light_sources[key];
+    if (std::find(bucket.begin(), bucket.end(), world_pos) == bucket.end()) bucket.push_back(world_pos);
+}
+
+void Chunk_Manager::remove_light_source(const glm::ivec3& world_pos) {
+    const glm::ivec3 key = get_chunk_coords_for_world(world_pos.x, world_pos.y, world_pos.z);
+    const auto it = m_light_sources.find(key);
+    if (it == m_light_sources.end()) return;
+    std::vector<glm::ivec3>& bucket = it->second;
+    bucket.erase(std::remove(bucket.begin(), bucket.end(), world_pos), bucket.end());
+    if (bucket.empty()) m_light_sources.erase(it);
+}
+
+void Chunk_Manager::relight_block_light_near(const glm::ivec3& p) {
+    // Свет источника (<= max_light_level) за N шагов даёт max_light_level - N, поэтому правка в p
+    // может изменить клетки не дальше чем в max_light_level - 1 от себя; берём радиус с запасом.
+    constexpr int r = Config::max_light_level;
+    const int x0 = p.x - r, x1 = p.x + r, z0 = p.z - r, z1 = p.z + r;
+    const int y0 = std::max(Config::world_min_y, p.y - r), y1 = std::min(Config::world_max_y, p.y + r);
+    const int nx = x1 - x0 + 1, ny = y1 - y0 + 1, nz = z1 - z0 + 1;
+    auto at = [&](int x, int y, int z) {
+        return (static_cast<size_t>(y - y0) * nz + static_cast<size_t>(z - z0)) * nx + static_cast<size_t>(x - x0);
+    };
+    auto in_box = [&](const Voxel_Cursor& c) {
+        const int wx = c.cx * Config::chunk_size + c.lx;
+        const int wy = c.cy * Config::chunk_height + c.ly;
+        const int wz = c.cz * Config::chunk_size + c.lz;
+        return wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1 && wz >= z0 && wz <= z1;
+    };
+
+    // 1. Снимок прежних значений (чтобы потом найти реально изменившиеся клетки) и очистка куба.
+    static thread_local std::vector<uint8_t> old_light;
+    old_light.assign(static_cast<size_t>(nx) * ny * nz, 0);
+    for_each_chunk_in_box(*this, x0, y0, z0, x1, y1, z1,
+        [&](Chunk* c, int cx, int cy, int cz, int xa, int xb, int ya, int yb, int za, int zb) {
+            if (!c) return;
+            const int bx = cx * Config::chunk_size, by = cy * Config::chunk_height, bz = cz * Config::chunk_size;
+            for (int ly = ya; ly <= yb; ++ly)
+                for (int lz = za; lz <= zb; ++lz)
+                    for (int lx = xa; lx <= xb; ++lx) {
+                        const uint8_t v = c->get_light(lx, ly, lz);
+                        old_light[at(bx + lx, by + ly, bz + lz)] = v;
+                        if (v) c->set_light(lx, ly, lz, 0);
+                    }
+        });
+
+    Flat_Queue<Light_BFS_Node> queue;
+
+    // 2a. Источники внутри куба.
+    {
+        const int cx0 = floor_div_chunk(x0, Config::chunk_size), cx1 = floor_div_chunk(x1, Config::chunk_size);
+        const int cy0 = floor_div_chunk(y0, Config::chunk_height), cy1 = floor_div_chunk(y1, Config::chunk_height);
+        const int cz0 = floor_div_chunk(z0, Config::chunk_size), cz1 = floor_div_chunk(z1, Config::chunk_size);
+        for (int cy = cy0; cy <= cy1; ++cy)
+            for (int cz = cz0; cz <= cz1; ++cz)
+                for (int cx = cx0; cx <= cx1; ++cx) {
+                    const auto it = m_light_sources.find({cx, cy, cz});
+                    if (it == m_light_sources.end()) continue;
+                    for (const glm::ivec3& s : it->second) {
+                        if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1 || s.z < z0 || s.z > z1) continue;
+                        seed_light_source(*this, s, queue);
+                    }
+                }
+    }
+
+    // 2b. Свет, входящий в куб снаружи: клетки сразу за гранью куба не менялись, их значения верны.
+    auto inflow = [&](int wx, int wy, int wz) {
+        if (wy < Config::world_min_y || wy > Config::world_max_y) return;
+        const Voxel_Cursor c = cursor_at(*this, wx, wy, wz);
+        if (!c.chunk) return;
+        const uint8_t level = c.chunk->get_light(c.lx, c.ly, c.lz);
+        if (level > 1) queue.push({c, level});
+    };
+    for (int y = y0; y <= y1; ++y) {
+        for (int z = z0; z <= z1; ++z) { inflow(x0 - 1, y, z); inflow(x1 + 1, y, z); }
+        for (int x = x0; x <= x1; ++x) { inflow(x, y, z0 - 1); inflow(x, y, z1 + 1); }
+    }
+    for (int z = z0; z <= z1; ++z)
+        for (int x = x0; x <= x1; ++x) { inflow(x, y0 - 1, z); inflow(x, y1 + 1, z); }
+
+    // 3. Распространение. Клетки вне куба менялись бы только при неконсистентных данных, но
+    // отметить их всё равно нужно.
+    Light_Dirty_Set dirty;
+    run_block_light_bfs(*this, queue, [&](const Voxel_Cursor& c) {
+        if (!in_box(c)) dirty.note(c.cx, c.cy, c.cz, c.lx, c.ly, c.lz);
+    });
+
+    // 4. Что изменилось внутри куба — те чанки и пересобираем.
+    for_each_chunk_in_box(*this, x0, y0, z0, x1, y1, z1,
+        [&](Chunk* c, int cx, int cy, int cz, int xa, int xb, int ya, int yb, int za, int zb) {
+            if (!c) return;
+            const int bx = cx * Config::chunk_size, by = cy * Config::chunk_height, bz = cz * Config::chunk_size;
+            for (int ly = ya; ly <= yb; ++ly)
+                for (int lz = za; lz <= zb; ++lz)
+                    for (int lx = xa; lx <= xb; ++lx) {
+                        if (c->get_light(lx, ly, lz) != old_light[at(bx + lx, by + ly, bz + lz)]) {
+                            dirty.note(cx, cy, cz, lx, ly, lz);
+                        }
+                    }
+            c->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
+        });
+    for (const glm::ivec3& key : dirty.chunks) {
+        if (Chunk* chunk = get_chunk(key.x, key.y, key.z)) chunk->mark_mesh_dirty();
+    }
+}
+
+void Chunk_Manager::relight_block_light_new_chunks() {
+    if (m_chunks_pending_block_light.empty()) return;
+    std::vector<glm::ivec3> pending;
+    pending.swap(m_chunks_pending_block_light);
+
+    Flat_Queue<Light_BFS_Node> queue;
+    Light_Dirty_Set dirty;
+    static constexpr glm::ivec3 k_faces[6] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+
+    for (const glm::ivec3& pos : pending) {
+        Chunk* chunk = get_chunk(pos.x, pos.y, pos.z);
+        if (!chunk) continue;
+
+        // Собственные источники чанка.
+        if (const auto it = m_light_sources.find(pos); it != m_light_sources.end()) {
+            for (const glm::ivec3& s : it->second) {
+                Voxel_Cursor c;
+                if (seed_light_source(*this, s, queue, &c)) dirty.note(c.cx, c.cy, c.cz, c.lx, c.ly, c.lz);
+            }
+        }
+
+        // Свет соседей, который может войти в новый чанк: освещённые клетки на их стыке с ним.
+        for (const glm::ivec3& d : k_faces) {
+            Chunk* nb = get_chunk(pos.x + d.x, pos.y + d.y, pos.z + d.z);
+            if (!nb) continue;
+            // Сторона соседа, обращённая к новому чанку: у соседа с d > 0 это его минимальная
+            // координата по оси, у соседа с d < 0 — максимальная.
+            for (int a = 0; a < Config::chunk_size; ++a) {
+                for (int b = 0; b < Config::chunk_size; ++b) {
+                    int lx, ly, lz;
+                    if (d.x != 0)      { lx = d.x > 0 ? 0 : Config::chunk_size - 1;   ly = a; lz = b; }
+                    else if (d.y != 0) { ly = d.y > 0 ? 0 : Config::chunk_height - 1; lx = a; lz = b; }
+                    else               { lz = d.z > 0 ? 0 : Config::chunk_size - 1;   lx = a; ly = b; }
+                    if (ly >= Config::chunk_height) continue;
+                    const uint8_t level = nb->get_light(lx, ly, lz);
+                    if (level > 1) {
+                        queue.push({Voxel_Cursor{pos.x + d.x, pos.y + d.y, pos.z + d.z, lx, ly, lz, nb}, level});
+                    }
+                }
+            }
+        }
+    }
+
+    run_block_light_bfs(*this, queue, [&](const Voxel_Cursor& c) {
+        dirty.note(c.cx, c.cy, c.cz, c.lx, c.ly, c.lz);
+    });
+
+    for (const glm::ivec3& key : dirty.chunks) {
+        if (Chunk* chunk = get_chunk(key.x, key.y, key.z)) {
+            chunk->mark_mesh_dirty();
+            chunk->compact_light();
+        }
+    }
+}
+
+void Chunk_Manager::relight_sky_light_near(const glm::ivec3& p) {
+    // Вертикальная тень зависит только от колонки (x, z) правки и меняется в пределах
+    // sky_shadow_range клеток под ней. Растекание вокруг этих клеток уходит по горизонтали не
+    // дальше max_light_level, поэтому пересчитывается куб: ±max_light_level по x/z, от
+    // p.y - sky_shadow_range - max_light_level до p.y + max_light_level по высоте.
+    constexpr int r = Config::max_light_level;
+    constexpr int shadow = Config::sky_shadow_range;
+    const int x0 = p.x - r, x1 = p.x + r, z0 = p.z - r, z1 = p.z + r;
+    const int y0 = std::max(Config::world_min_y, p.y - shadow - r);
+    const int y1 = std::min(Config::world_max_y, p.y + r);
+    const int nx = x1 - x0 + 1, ny = y1 - y0 + 1, nz = z1 - z0 + 1;
+    auto at = [&](int x, int y, int z) {
+        return (static_cast<size_t>(y - y0) * nz + static_cast<size_t>(z - z0)) * nx + static_cast<size_t>(x - x0);
+    };
+    auto in_box = [&](const Voxel_Cursor& c) {
+        const int wx = c.cx * Config::chunk_size + c.lx;
+        const int wy = c.cy * Config::chunk_height + c.ly;
+        const int wz = c.cz * Config::chunk_size + c.lz;
+        return wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1 && wz >= z0 && wz <= z1;
+    };
+    const bool* transparent = Block_Registry::get_instance().transparent_table();
+
+    // 1. Снимок и очистка. Чанки без блоков, как и раньше, не трогаются (см. recompute_sky_lighting).
+    static thread_local std::vector<uint8_t> old_sky;
+    old_sky.assign(static_cast<size_t>(nx) * ny * nz, 0);
+    for_each_chunk_in_box(*this, x0, y0, z0, x1, y1, z1,
+        [&](Chunk* c, int cx, int cy, int cz, int xa, int xb, int ya, int yb, int za, int zb) {
+            if (!c) return;
+            const bool clear = c->has_blocks();
+            const int bx = cx * Config::chunk_size, by = cy * Config::chunk_height, bz = cz * Config::chunk_size;
+            for (int ly = ya; ly <= yb; ++ly)
+                for (int lz = za; lz <= zb; ++lz)
+                    for (int lx = xa; lx <= xb; ++lx) {
+                        const uint8_t v = c->get_sky_light(lx, ly, lz);
+                        old_sky[at(bx + lx, by + ly, bz + lz)] = v;
+                        if (clear && v) c->set_sky_light(lx, ly, lz, 0);
+                    }
+        });
+
+    // 2. Вертикальный проход по каждой колонке куба сверху вниз; выше куба (до shadow клеток)
+    // идут только за ближайшим непрозрачным блоком — он и бросает тень.
+    const int scan_top = std::min(Config::world_max_y, y1 + shadow);
+    for (int x = x0; x <= x1; ++x) {
+        const int cx = floor_div_chunk(x, Config::chunk_size);
+        const int lx = x - cx * Config::chunk_size;
+        for (int z = z0; z <= z1; ++z) {
+            const int cz = floor_div_chunk(z, Config::chunk_size);
+            const int lz = z - cz * Config::chunk_size;
+            constexpr int no_occluder = std::numeric_limits<int>::max();
+            int occluder_y = no_occluder;
+            int current_cy = std::numeric_limits<int>::min();
+            Chunk* chunk = nullptr;
+            bool usable = false;
+            for (int y = scan_top; y >= y0; --y) {
+                const int cy = floor_div_chunk(y, Config::chunk_height);
+                if (cy != current_cy) {
+                    current_cy = cy;
+                    chunk = get_chunk(cx, cy, cz);
+                    usable = chunk && chunk->has_blocks();
+                }
+                if (!usable) continue;
+                const int ly = y - cy * Config::chunk_height;
+                const Block_ID id = static_cast<Block_ID>(chunk->get_block(lx, ly, lz));
+                if (!transparent[id]) { occluder_y = y; continue; }
+                if (y > y1) continue;
+                const bool shadowed = occluder_y != no_occluder && occluder_y - y <= shadow;
+                chunk->set_sky_light(lx, ly, lz, shadowed ? 0 : 15);
+            }
+        }
+    }
+
+    // 3. Растекание. Затравка — клетки с уровнем > 1, у которых есть более тёмный прозрачный
+    // горизонтальный сосед (так и было раньше), плюс клетки сразу за гранью куба: они не менялись,
+    // и их свет должен войти в очищенную область.
+    Flat_Queue<Light_BFS_Node> queue;
+    static constexpr int hdx[4] = {1, -1, 0, 0};
+    static constexpr int hdz[4] = {0, 0, 1, -1};
+    auto try_seed = [&](const Voxel_Cursor& here, uint8_t level) {
+        for (int d = 0; d < 4; ++d) {
+            const Voxel_Cursor nb = step_cursor(here, hdx[d], 0, hdz[d], *this);
+            if (!nb.chunk) continue;
+            // Свет читаем раньше блока: в открытом небе почти у всех соседей он уже не ниже.
+            if (nb.chunk->get_sky_light(nb.lx, nb.ly, nb.lz) >= level - 1) continue;
+            if (transparent[static_cast<Block_ID>(nb.chunk->get_block(nb.lx, nb.ly, nb.lz))]) {
+                queue.push({here, level});
+                return;
+            }
+        }
+    };
+    for_each_chunk_in_box(*this, x0, y0, z0, x1, y1, z1,
+        [&](Chunk* c, int cx, int cy, int cz, int xa, int xb, int ya, int yb, int za, int zb) {
+            if (!c) return;
+            for (int ly = ya; ly <= yb; ++ly)
+                for (int lz = za; lz <= zb; ++lz)
+                    for (int lx = xa; lx <= xb; ++lx) {
+                        const uint8_t level = c->get_sky_light(lx, ly, lz);
+                        if (level <= 1) continue;
+                        try_seed(Voxel_Cursor{cx, cy, cz, lx, ly, lz, c}, level);
+                    }
+        });
+    // Входящий свет: клетка за гранью куба с уровнем > 1, чей сосед внутри куба прозрачен и темнее.
+    // Грани куба по x/z/y проверяются одинаково — свет мог прийти и снизу/сверху.
+    auto shell = [&](int wx, int wy, int wz, int idx, int idy, int idz) {
+        if (wy < Config::world_min_y || wy > Config::world_max_y) return;
+        const Voxel_Cursor c = cursor_at(*this, wx, wy, wz);
+        if (!c.chunk) return;
+        const uint8_t level = c.chunk->get_sky_light(c.lx, c.ly, c.lz);
+        if (level <= 1) return;
+        const Voxel_Cursor nb = step_cursor(c, idx, idy, idz, *this);
+        if (!nb.chunk) return;
+        const Block_ID nid = static_cast<Block_ID>(nb.chunk->get_block(nb.lx, nb.ly, nb.lz));
+        if (transparent[nid] && nb.chunk->get_sky_light(nb.lx, nb.ly, nb.lz) < level - 1) queue.push({c, level});
+    };
+    for (int y = y0; y <= y1; ++y) {
+        for (int z = z0; z <= z1; ++z) { shell(x0 - 1, y, z, 1, 0, 0); shell(x1 + 1, y, z, -1, 0, 0); }
+        for (int x = x0; x <= x1; ++x) { shell(x, y, z0 - 1, 0, 0, 1); shell(x, y, z1 + 1, 0, 0, -1); }
+    }
+    for (int z = z0; z <= z1; ++z)
+        for (int x = x0; x <= x1; ++x) { shell(x, y0 - 1, z, 0, 1, 0); shell(x, y1 + 1, z, 0, -1, 0); }
+
+    Light_Dirty_Set dirty;
+    while (!queue.empty()) {
+        const Light_BFS_Node node = queue.front();
+        queue.pop();
+        if (node.level <= 1) continue;
         for (int d = 0; d < 6; ++d) {
             const Voxel_Cursor nc = step_cursor(node.at, k_dx6[d], k_dy6[d], k_dz6[d], *this);
-            if (!nc.chunk) continue; // сосед в чанке, который ещё не загружен
-
+            if (!nc.chunk) continue;
             const Block_ID nid = static_cast<Block_ID>(nc.chunk->get_block(nc.lx, nc.ly, nc.lz));
-            if (!transparent[nid]) continue; // свет не проходит сквозь непрозрачное
-
+            if (!transparent[nid]) continue;
             const auto new_level = static_cast<uint8_t>(node.level - 1);
-            if (new_level <= nc.chunk->get_light(nc.lx, nc.ly, nc.lz)) continue; // тут уже не темнее
-
-            nc.chunk->set_light(nc.lx, nc.ly, nc.lz, new_level);
-            touched_chunks.insert({nc.cx, nc.cy, nc.cz});
-            flat_queue.push({nc, new_level});
+            if (new_level <= nc.chunk->get_sky_light(nc.lx, nc.ly, nc.lz)) continue;
+            nc.chunk->set_sky_light(nc.lx, nc.ly, nc.lz, new_level);
+            if (!in_box(nc)) dirty.note(nc.cx, nc.cy, nc.cz, nc.lx, nc.ly, nc.lz);
+            queue.push({nc, new_level});
         }
     }
 
-    // Шаг 3: и очищенные, и реально задетые чанки — на пересборку меша (см. rebuild_dirty_chunks,
-    // вызывается каждый кадр из update_player_position и уже само разберётся асинхронно).
-    for (const auto& pos : affected_chunks) {
-        if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
-            chunk->mark_mesh_dirty();
-            chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
-        }
+    // 4. Изменившиеся клетки куба -> грязные меши.
+    for_each_chunk_in_box(*this, x0, y0, z0, x1, y1, z1,
+        [&](Chunk* c, int cx, int cy, int cz, int xa, int xb, int ya, int yb, int za, int zb) {
+            if (!c) return;
+            const int bx = cx * Config::chunk_size, by = cy * Config::chunk_height, bz = cz * Config::chunk_size;
+            for (int ly = ya; ly <= yb; ++ly)
+                for (int lz = za; lz <= zb; ++lz)
+                    for (int lx = xa; lx <= xb; ++lx) {
+                        if (c->get_sky_light(lx, ly, lz) != old_sky[at(bx + lx, by + ly, bz + lz)]) {
+                            dirty.note(cx, cy, cz, lx, ly, lz);
+                        }
+                    }
+            c->compact_light();
+        });
+    for (const glm::ivec3& key : dirty.chunks) {
+        if (Chunk* chunk = get_chunk(key.x, key.y, key.z)) chunk->mark_mesh_dirty();
     }
-    for (const auto& pos : touched_chunks) {
-        if (Chunk* chunk = get_chunk(pos.x, pos.y, pos.z)) {
-            chunk->mark_mesh_dirty();
-            chunk->compact_light();   // выровнявшийся свет снова занимает 1 байт, а не 32 КБ
-        }
-    }
-    mark_light_neighbors_dirty(affected_chunks);
-    mark_light_neighbors_dirty(touched_chunks);
 }
 
 void Chunk_Manager::mark_light_neighbors_dirty(
@@ -2392,15 +2706,20 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     bool spectator
 ) const {
     std::vector<Renderable_Chunk> result;
+    result.reserve(m_loaded_cache.size() / 2 + 16);
     m_visible_chunks.clear();
 
     // Все загруженные чанки, в том числе пустые: через пустой воздух обзор идёт дальше, и без них
     // обход секций оборвался бы.
-    std::vector<std::pair<glm::ivec3, Chunk*>> loaded;
-    loaded.reserve(m_chunks.size());
-    m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
-        loaded.emplace_back(key, chunk.get());
-    });
+    if (m_loaded_cache_epoch != m_chunk_set_epoch || m_loaded_cache.size() != m_chunks.size()) {
+        m_loaded_cache.clear();
+        m_loaded_cache.reserve(m_chunks.size());
+        m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
+            m_loaded_cache.emplace_back(key, chunk.get());
+        });
+        m_loaded_cache_epoch = m_chunk_set_epoch;
+    }
+    const std::vector<std::pair<glm::ivec3, Chunk*>>& loaded = m_loaded_cache;
     // Глаз в непроходимой клетке (камень: /tp в стену, застревание): обзора из воздуха нет, отсечение здесь не
     // применяется, и кадр рисуется как без него. Иначе кадр менялся бы: дальние поверхности, видные сквозь камень,
     // пропадали бы, а это уже видимое на экране.
@@ -2680,7 +2999,7 @@ void Chunk_Manager::pump_capture_region() {
         recompute_sky_lighting(batch, false);
 
         if (m_columns_pending_sky_recompute.empty()) {
-            if (!m_light_sources.empty()) recompute_lighting();
+            relight_block_light_new_chunks();
             // Меши строятся один раз, после того как весь свет посчитан.
             size_t dirty = 0;
             m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
