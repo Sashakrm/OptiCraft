@@ -631,6 +631,8 @@ void Renderer::release_gpu_chunk(Chunk_GL_Resources& resources) {
     resources.gpu_cap.fill(0);
     resources.gpu_wanted.fill(0);
     resources.gpu_regrow = false;
+    resources.gpu_capacity_observed.fill(false);
+    resources.gpu_flora_skipped = false;
 }
 
 // Забирает счётчики квадов, посчитанные мешерами, и решает, хватает ли потокам ёмкости. Счётчик всегда
@@ -667,10 +669,15 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
                     if (quads > cap) {
                         res.gpu_wanted[j] = target;
                         regrow = true;
-                    } else if (cap >= 4 * std::max(target, 64u) && cap - target >= 512) {
+                    } else if (res.gpu_capacity_observed[j] &&
+                               cap >= 4 * std::max(target, 64u) && cap - target >= 512) {
+                        // Shrink only after this stream has survived at least one
+                        // successful sizing pass. Otherwise a deliberately generous
+                        // first allocation would immediately trigger a needless remesh.
                         res.gpu_wanted[j] = target;
                         regrow = true;
                     }
+                    if (cap != 0) res.gpu_capacity_observed[j] = true;
                 }
                 if (regrow) res.gpu_regrow = true;
             }
@@ -711,6 +718,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             res.gpu_cap.fill(0);
         }
         res.gpu_version = chunk.mesh_version;
+        res.gpu_flora_skipped = chunk.flora_skip_render;
         const size_t handle = static_cast<size_t>(res.gpu_handle);
 
         // Ёмкости потоков: только там, где секция может дать геометрию этого вида. Размер, подобранный по
@@ -721,16 +729,20 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             for (int s = 0; s < Config::chunk_section_count; ++s) {
                 const int j = k * Config::chunk_section_count + s;
                 uint32_t target = 0;
-                if ((meshes.sections[s].kinds >> k) & 1u) {
+                const bool stream_needed = ((meshes.sections[s].kinds >> k) & 1u) != 0u &&
+                    !(k == kKindFlora && chunk.flora_skip_render);
+                if (stream_needed) {
                     target = res.gpu_wanted[j] != 0 ? res.gpu_wanted[j]
                            : res.gpu_cap[j] != 0 ? res.gpu_cap[j]
                            : kGpuInitialQuads[k];
                     target = (target + kGpuBlockQuads - 1) / kGpuBlockQuads * kGpuBlockQuads;
                 }
                 if (target != res.gpu_cap[j]) {
+                    const bool was_unallocated = res.gpu_cap[j] == 0;
                     if (res.gpu_cap[j] != 0) free_quads(res.gpu_first[j], res.gpu_cap[j]);
                     res.gpu_cap[j] = target;
                     res.gpu_first[j] = target != 0 ? allocate_quads(target) : 0;
+                    if (was_unallocated || target == 0) res.gpu_capacity_observed[j] = false;
                 }
                 ranges[j] = glm::uvec2(res.gpu_first[j], res.gpu_cap[j]);
             }
@@ -745,7 +757,11 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         // Заголовок чанка: [0].x — ручка, [1] — (флаги, маска видов), [2 + канал] — палитра, слова, битность.
         glm::uvec4* header = &m_gpu_headers_cpu[i * kGpuHeaderStride];
         header[0] = glm::uvec4(static_cast<uint32_t>(res.gpu_handle), 0u, 0u, 0u);
-        header[1] = glm::uvec4(meshes.positive_faces_only ? 1u : 0u, static_cast<uint32_t>(meshes.gpu_kinds), 0u, 0u);
+        uint32_t gpu_kinds = static_cast<uint32_t>(meshes.gpu_kinds);
+        if (chunk.flora_skip_render) gpu_kinds &= ~(1u << kKindFlora);
+        header[1] = glm::uvec4(meshes.positive_faces_only ? 1u : 0u, gpu_kinds,
+                               static_cast<uint32_t>(meshes.lod_stride),
+                               chunk.flora_skip_render ? 1u : 0u);
         for (int ch = 0; ch < kGpuMeshChannelCount; ++ch) {
             const std::array<uint32_t, 3>& c = meshes.gpu_channels[ch];
             header[2 + ch] = glm::uvec4(base + c[0], base + c[1], c[2], 0u);
@@ -797,16 +813,20 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         }
     }
 
+    // Header/payload используются только текущим compute batch. Orphaning даёт драйверу
+    // новый backing store вместо ожидания, пока GPU закончит читать предыдущий кадр.
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_headers_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+                 static_cast<GLsizeiptr>(static_cast<size_t>(kGpuBatchChunks) * kGpuHeaderStride * sizeof(glm::uvec4)),
+                 nullptr, GL_STREAM_DRAW);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(n * kGpuHeaderStride * sizeof(glm::uvec4)),
                     m_gpu_headers_cpu.data());
     const size_t payload_bytes = m_gpu_payload_cpu.size() * sizeof(uint32_t);
     if (payload_bytes > m_gpu_payload_capacity) {
-        m_gpu_payload_capacity = payload_bytes * 2;
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_payload_ssbo);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(m_gpu_payload_capacity), nullptr, GL_STREAM_DRAW);
+        m_gpu_payload_capacity = std::max(payload_bytes * 2, m_gpu_payload_capacity * 2);
     }
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_payload_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(m_gpu_payload_capacity), nullptr, GL_STREAM_DRAW);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(payload_bytes), m_gpu_payload_cpu.data());
 
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
@@ -884,7 +904,8 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
                 release_gpu_chunk(res);
                 continue;
             }
-            if (res.gpu_handle < 0 || res.gpu_version != chunk.mesh_version || res.gpu_regrow) {
+            if (res.gpu_handle < 0 || res.gpu_version != chunk.mesh_version || res.gpu_regrow ||
+                res.gpu_flora_skipped != chunk.flora_skip_render) {
                 pending.push_back(chunk_ptr);
             }
         }
@@ -906,7 +927,8 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
             pending = collect_pending();
         }
     } else if (!pending.empty()) {
-        if (m_gpu_readback_count == kGpuReadbackRing) poll_gpu_readbacks(true);
+        // Не блокируем render thread из-за заполненного readback ring. Уже готовые меши
+        // продолжают рисоваться; новые чанки просто остаются в pending до освобождения слота.
         if (m_gpu_readback_count < kGpuReadbackRing) {
             // Бюджет кадра: pending уже от ближних к дальним, поэтому останавливаемся на первом
             // чанке, который не влезает. Так дальние не обгоняют ближние.

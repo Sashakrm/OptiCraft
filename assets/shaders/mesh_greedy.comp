@@ -13,9 +13,8 @@
 // текстурой сливаются, только если совпадают AO и свет всех углов (как в CPU-мешере).
 layout(local_size_x = 64) in;
 
-// Заголовок чанка: kGpuHeaderStride = 25 uvec4 (см. Chunk.h). [0].x = ручка чанка в пуле; [1].x = флаги
-// (бит 0 — только положительные грани, для изометрического снимка), [1].y = маска видов геометрии
-// (бит 0 — solid); [2 + ch] = (палитра, слова, биты, 0) канала ch.
+// Заголовок чанка: kGpuHeaderStride = 27 uvec4 (см. Chunk.h). [1].z = LOD stride (1/2/4).
+// Каналы 23/24 содержат coarse-блоки и соответствующие метаданные; channel 0 остаётся полной копией.
 layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
 layout(std430, binding = 1) readonly buffer Payload { uint payload[]; };
 layout(std430, binding = 2) writeonly buffer Quads { uvec4 quads[]; };
@@ -36,8 +35,8 @@ const uint FLAG_USES_META = 4u;
 const uint FLAG_CULL_SAME = 8u;
 const uint FLAG_OCCLUDES = 16u;
 const uint ITEMS_PER_CHUNK = 576u;
-// Шаг заголовка на чанк: два служебных uvec4 + 23 канала. Должен совпадать с kGpuHeaderStride в Chunk.h.
-const uint HEADER_STRIDE = 25u;
+// Шаг заголовка на чанк: два служебных uvec4 + 25 каналов.
+const uint HEADER_STRIDE = 27u;
 const uint KIND_SOLID = 1u;
 
 // Значение i канала ch чанка hb. Битность 0 — одно значение палитры; иначе номер бит [i*b, i*b+b),
@@ -83,6 +82,29 @@ uint block_at(uint hb, int x, int y, int z) {
     return read_channel(hb, 0u, uint((y * 32 + z) * 32 + x));
 }
 
+// Для внутренней части дальнего чанка читаем coarse-копию (канал 23); за границей
+// всегда используем точную грань/кольцо соседа, чтобы стыки чанков не зависели от LOD.
+uint mesh_block_at(uint hb, int x, int y, int z, int lod_stride) {
+    if (lod_stride <= 1 || x < 0 || x >= 32 || y < 0 || y >= 32 || z < 0 || z >= 32)
+        return block_at(hb, x, y, z);
+    return read_channel(hb, 23u, uint((y * 32 + z) * 32 + x));
+}
+
+int lod_sample_count(int stride) {
+    return stride + (32 - 2 * stride) / stride + stride;
+}
+
+int lod_sample_coord(int index, int stride) {
+    const int inner_count = (32 - 2 * stride) / stride;
+    if (index < stride) return index;
+    if (index < stride + inner_count) return stride + (index - stride) * stride;
+    return 32 - stride + index - stride - inner_count;
+}
+
+int lod_sample_extent(int index, int stride, int sample_count) {
+    return (index < stride || index >= sample_count - stride) ? 1 : stride;
+}
+
 uint light_at(uint hb, int x, int y, int z) {
     if (x < 0) return read_channel(hb, 9u, uint(y * 32 + z));
     if (x >= 32) return read_channel(hb, 10u, uint(y * 32 + z));
@@ -100,9 +122,9 @@ bool occludes(uint hb, int x, int y, int z) {
 
 // Вершинный AO четырёх углов грани клетки cell (ось axis, знак sign), как face_ao в Chunk.cpp: угол
 // fu + 2*fv получает уровень 0..3 по двум боковым клеткам слоя перед гранью и по диагональной клетке.
-uint face_ao(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
+uint face_ao(uint hb, ivec3 cell, int axis, int sign, int normal_extent, int ua, int va) {
     ivec3 base = cell;
-    base[axis] += sign;
+    base[axis] += sign * normal_extent;
     uint code = 0u;
     for (int fv = 0; fv < 2; ++fv) {
         for (int fu = 0; fu < 2; ++fu) {
@@ -131,9 +153,9 @@ uvec3 mask[1024];
 
 // Свет четырёх углов грани (как face_corner_light в Chunk.cpp): среднее по клетке перед гранью и по
 // трём клеткам слоя, непрозрачные клетки не учитываются, клетки за двумя границами чанка тоже.
-uint face_corner_light(uint hb, ivec3 cell, int axis, int sign, int ua, int va) {
+uint face_corner_light(uint hb, ivec3 cell, int axis, int sign, int normal_extent, int ua, int va) {
     ivec3 base = cell;
-    base[axis] += sign;
+    base[axis] += sign * normal_extent;
     uint code = 0u;
     for (int fv = 0; fv < 2; ++fv) {
         for (int fu = 0; fu < 2; ++fu) {
@@ -186,6 +208,7 @@ void main() {
     // Изометрический снимок: отрицательные грани не видны с камеры и не строятся (как only_positive_faces).
     if (!pos && (info.x & 1u) != 0u) return;
     const int dir = pos ? 1 : -1;
+    const int lod_stride = int(clamp(info.z, 1u, 4u));
     const uint r = pos ? rem : rem - 72u;
     int axis;
     int s;
@@ -199,99 +222,144 @@ void main() {
         axis = 2;
         s = int(r - 40u);
     }
-    // Оси среза как в CPU: X -> u=Z, v=Y; Y -> u=X, v=Z; Z -> u=X, v=Y.
+
+    // В каждой оси оставляем точную полосу у границы чанка. Это сохраняет стыки
+    // между соседями даже тогда, когда один чанк рисуется в LOD0, а другой в LOD2.
+    int normal_extent = 1;
+    if (lod_stride > 1 && s >= lod_stride && s < 32 - lod_stride) {
+        if ((s - lod_stride) % lod_stride != 0) return;
+        normal_extent = lod_stride;
+    }
+    // Первая coarse-группа примыкает отрицательной стороной к точной граничной
+    // полосе; её ближайший сосед находится на расстоянии 1, а не lod_stride.
+    const int neighbor_extent = (!pos && s == lod_stride && normal_extent > 1)
+        ? 1 : normal_extent;
+
+    // Оси среза: X -> u=Z, v=Y; Y -> u=X, v=Z; Z -> u=X, v=Y.
     const int ua = (axis == 0) ? 2 : 0;
     const int va = (axis == 1) ? 2 : 1;
     const int v_base = (va == 1) ? int(sec) * 8 : 0;
     const int v_count = (va == 1) ? 8 : 32;
     const uint face = uint(axis) * 2u + (pos ? 0u : 1u);
+    // На внешних плоскостях чанка сохраняем полное разрешение и по касательным
+    // осям: иначе крупный LOD-квад мог бы не совпасть с мелкими гранями соседа.
+    const int sample_stride = (lod_stride > 1 && s >= lod_stride && s < 32 - lod_stride)
+        ? lod_stride : 1;
+    const int samples = lod_sample_count(sample_stride);
 
-    // Маска ключей среза (как в CPU, см. mask выше). Ключ 0 — граней нет
-    // (у любого жадно-мешаемого блока id не равен нулю).
+    // Маска индексируется координатами coarse-сетки, но каждая ячейка хранит
+    // свою физическую ширину/высоту (1 или lod_stride блоков).
+    for (int vi = 0; vi < samples; ++vi) {
+        for (int ui = 0; ui < samples; ++ui) {
+            mask[vi * 32 + ui] = uvec3(0u);
+        }
+    }
+
     bool any_key = false;
-    for (int v = 0; v < v_count; ++v) {
-        for (int u = 0; u < 32; ++u) {
+    for (int vi = 0; vi < samples; ++vi) {
+        const int v = lod_sample_coord(vi, sample_stride);
+        if (v < v_base || v >= v_base + v_count) continue;
+        for (int ui = 0; ui < samples; ++ui) {
+            const int u = lod_sample_coord(ui, sample_stride);
             ivec3 c;
             c[axis] = s;
             c[ua] = u;
-            c[va] = v_base + v;
+            c[va] = v;
             uvec3 key = uvec3(0u);
-            const uint cur = block_at(hb, c.x, c.y, c.z);
+            const uint cur = mesh_block_at(hb, c.x, c.y, c.z, lod_stride);
             const uint fc = block_flags[cur];
             if ((fc & FLAG_GREEDY) != 0u) {
                 ivec3 nc = c;
-                nc[axis] += dir;
-                const uint nb = block_at(hb, nc.x, nc.y, nc.z);
+                nc[axis] += dir * neighbor_extent;
+                const uint nb = mesh_block_at(hb, nc.x, nc.y, nc.z, lod_stride);
                 const bool cull_same = (fc & FLAG_CULL_SAME) != 0u;
                 if ((block_flags[nb] & FLAG_TRANSPARENT) != 0u && !(nb == cur && cull_same)) {
                     uint meta = 0u;
                     if ((fc & FLAG_USES_META) != 0u) {
-                        meta = read_channel(hb, 1u, uint((c.y * 32 + c.z) * 32 + c.x));
+                        const uint meta_channel = (lod_stride > 1) ? 24u : 1u;
+                        meta = read_channel(hb, meta_channel, uint((c.y * 32 + c.z) * 32 + c.x));
                     }
                     const uint material = rect_lut[(cur * 6u + face) * 256u + meta] & 0xFFFFu;
-                    const uint ao = face_ao(hb, c, axis, dir, ua, va);
-                    key = uvec3(material, (ao << 8u) | (1u << 16u), face_corner_light(hb, c, axis, dir, ua, va));
+                    const uint ao = face_ao(hb, c, axis, dir, neighbor_extent, ua, va);
+                    key = uvec3(material, (ao << 8u) | (1u << 16u),
+                                face_corner_light(hb, c, axis, dir, neighbor_extent, ua, va));
                     any_key = true;
                 }
             }
-            mask[v * 32 + u] = key;
+            mask[vi * 32 + ui] = key;
         }
     }
     if (!any_key) return;
 
-    // Жадное слияние, порядок обхода как в CPU: по строкам v, внутри строки по u.
-    for (int v = 0; v < v_count; ++v) {
-        int u = 0;
-        while (u < 32) {
-            const uvec3 key = mask[v * 32 + u];
+    // Жадное слияние по coarse-ячейкам. Размер итогового квада записывается в физических
+    // блоках, поэтому вершинный шейдеру не нужно выполнять дополнительный поиск соседей.
+    for (int vi = 0; vi < samples; ++vi) {
+        const int v = lod_sample_coord(vi, sample_stride);
+        if (v < v_base || v >= v_base + v_count) continue;
+        int ui = 0;
+        while (ui < samples) {
+            const uvec3 key = mask[vi * 32 + ui];
             if (key == uvec3(0u)) {
-                ++u;
+                ++ui;
                 continue;
             }
+
             const uint lut = key.x;
-            // Повёрнутая текстура (бревно на боку) не сливается: квад 1x1.
             const bool rotate = (lut & 0x8000u) != 0u;
-            int w = 1;
-            int h = 1;
+            int width_samples = 1;
+            int height_samples = 1;
             if (!rotate) {
-                while (u + w < 32 && mask[v * 32 + u + w] == key) ++w;
+                while (ui + width_samples < samples &&
+                       mask[vi * 32 + ui + width_samples] == key) {
+                    ++width_samples;
+                }
                 bool grow = true;
-                while (v + h < v_count && grow) {
-                    for (int i = 0; i < w; ++i) {
-                        if (mask[(v + h) * 32 + u + i] != key) {
+                while (vi + height_samples < samples && grow) {
+                    const int next_v = lod_sample_coord(vi + height_samples, sample_stride);
+                    if (next_v < v_base || next_v >= v_base + v_count) break;
+                    for (int i = 0; i < width_samples; ++i) {
+                        if (mask[(vi + height_samples) * 32 + ui + i] != key) {
                             grow = false;
                             break;
                         }
                     }
-                    if (grow) ++h;
+                    if (grow) ++height_samples;
                 }
             }
-            for (int dv = 0; dv < h; ++dv) {
-                for (int du = 0; du < w; ++du) {
-                    mask[(v + dv) * 32 + u + du] = uvec3(0u);
+
+            int physical_width = 0;
+            int physical_height = 0;
+            for (int i = 0; i < width_samples; ++i)
+                physical_width += lod_sample_extent(ui + i, sample_stride, samples);
+            for (int i = 0; i < height_samples; ++i)
+                physical_height += lod_sample_extent(vi + i, sample_stride, samples);
+
+            for (int dv = 0; dv < height_samples; ++dv) {
+                for (int du = 0; du < width_samples; ++du) {
+                    mask[(vi + dv) * 32 + ui + du] = uvec3(0u);
                 }
             }
 
             ivec3 o;
             o[axis] = s;
-            o[ua] = u;
-            o[va] = v_base + v;
+            o[ua] = lod_sample_coord(ui, sample_stride);
+            o[va] = v;
             const uint rect = lut & 0x7FFFu;
             const uint ao = (key.y >> 8u) & 0xFFu;
+            const uint normal_scale_log2 = normal_extent == 4 ? 2u : (normal_extent == 2 ? 1u : 0u);
             const uint w0 = uint(o.x) | (uint(o.y) << 5u) | (uint(o.z) << 10u) |
                             (uint(axis) << 15u) | ((pos ? 1u : 0u) << 17u) |
-                            (uint(w - 1) << 18u) | (uint(h - 1) << 23u) |
-                            (rotate ? (1u << 28u) : 0u);
-            // w1: индекс прямоугольника (15 бит), AO (8 бит). w2: свет четырёх углов.
+                            (uint(physical_width - 1) << 18u) | (uint(physical_height - 1) << 23u) |
+                            (rotate ? (1u << 28u) : 0u) | (normal_scale_log2 << 29u);
             const uint w1 = rect | (ao << 24u);
 
-            const uint stream = handle * 16u + sec;   // вид solid = 0
+            const uint stream = handle * 16u + sec;
             const uint idx = atomicAdd(counts[stream], 1u);
             const uvec2 range = ranges[stream];
             if (idx < range.y) {
                 quads[range.x + idx] = uvec4(w0, w1, key.z, 0u);
             }
-            u += w;
+            ui += width_samples;
         }
     }
 }

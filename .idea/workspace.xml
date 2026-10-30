@@ -29,34 +29,12 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="общее обновление">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/blocks.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/blocks.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/blocks.ocb" beforeDir="false" afterPath="$PROJECT_DIR$/assets/blocks.ocb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/flora_fragment.glsl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/flora_vertex.glsl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/liquid_fragment.glsl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/liquid_vertex.glsl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_finalize.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_finalize.comp" afterDir="false" />
+    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="увеличение производительности генератора мира">
       <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_fragment.glsl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_misc.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_misc.comp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_vertex.glsl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/documentation/TECHNICAL_DOCUMENTATION.md" beforeDir="false" afterPath="$PROJECT_DIR$/documentation/TECHNICAL_DOCUMENTATION.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/app/Window.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/app/Window.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Game.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/hud/Hud.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/hud/Hud.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/hud/Hud.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/hud/Hud.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/physics/Raycast.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/physics/Raycast.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/physics/Raycast.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/physics/Raycast.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rendering/capture/Isometric_Capture.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/capture/Isometric_Capture.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Shapes.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Shapes.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Shapes.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Shapes.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Types.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Types.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Types.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Types.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
@@ -261,7 +239,19 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State />
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/world_biome" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
           </value>
         </entry>
       </map>
@@ -273,7 +263,8 @@
     <MESSAGE value="исправление утечки памяти на диске" />
     <MESSAGE value="работа с елями и тайгой" />
     <MESSAGE value="общее обновление" />
-    <option name="LAST_COMMIT_MESSAGE" value="общее обновление" />
+    <MESSAGE value="увеличение производительности генератора мира" />
+    <option name="LAST_COMMIT_MESSAGE" value="увеличение производительности генератора мира" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

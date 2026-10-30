@@ -122,6 +122,7 @@ private:
     struct Mesh_Job {
         glm::ivec3 position;
         int priority = 0;
+        uint8_t lod_stride = 1;
         Chunk_Block_Grid own_blocks;
         Chunk_Light_Grid own_light;
         // Порядок: -X, +X, -Y, +Y, -Z, +Z. nullopt = сосед не загружен (тот же фолбэк на
@@ -243,6 +244,7 @@ private:
     uint64_t m_dirty_scan_events = 0;
     uint64_t m_dirty_scan_set_epoch = 0;
     uint8_t view_ring_of(const glm::ivec3& position) const;
+    int desired_lod_stride(int cx, int cz, int current_stride = 1) const;
     void refresh_view_rings();
     Mpmc_Queue<Chunk_Result> m_completed_jobs;
     // Задачи загрузки, которые есть на диске: их читает m_disk_reader пачками (см. Chunk_IO).
@@ -356,7 +358,7 @@ private:
     // То же для задач мешинга: приоритет пересчитывается по текущему кольцу и расстоянию (задачи не снимаются).
     void reprioritize_pending_meshes();
     bool save_chunk_to_disk(const Chunk& chunk) const;
-    void enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent = false);
+    void enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent = false, int lod_stride = 0);
     bool is_chunk_wanted(const glm::ivec3& position) const;
     void start_workers();
     void disk_reader_loop();
@@ -451,7 +453,7 @@ public:
         const glm::vec3* camera_position = nullptr,
         int flora_render_distance_chunks = -1,
         bool spectator = false
-    ) const;
+    );
     std::vector<glm::ivec3> take_unloaded_chunk_positions();
 
     // Block_Entity блока-контейнера в этой позиции, если он там есть (nullptr иначе).

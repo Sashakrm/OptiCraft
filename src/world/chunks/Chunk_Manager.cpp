@@ -17,9 +17,7 @@
 #include <exception>
 
 namespace {
-    constexpr size_t max_finished_chunks_per_frame = 4;
-    constexpr size_t max_finished_meshes_per_frame = 4;
-    constexpr size_t max_mesh_jobs_enqueued_per_frame = 16;
+    constexpr size_t max_mesh_jobs_enqueued_per_frame = 64;
     // Вертикальное окно: 8 слоёв обычно, 4 при быстром движении по Y или малой дальности.
     constexpr int kVerticalHalfNormal = 4;
     constexpr int kVerticalHalfReduced = 2;
@@ -315,17 +313,22 @@ void Chunk_Manager::start_workers() {
     // Не создаём поток на каждое логическое ядро: при большом hardware_concurrency
     // это приводит к одновременной генерации слишком большого числа чанков и
     // исчерпанию памяти ещё до того, как очередь загрузки успеет стабилизироваться.
-    const unsigned int available_workers = hardware_threads > 2 ? hardware_threads - 2 : 1u;
-    const unsigned int worker_count = std::max(2u, std::min(6u, available_workers));
+    const unsigned int available_workers = hardware_threads > 3 ? hardware_threads - 3 : 1u;
+    const unsigned int worker_count = std::max(2u, std::min(8u, available_workers));
 
     m_workers.reserve(worker_count);
     m_disk_reader = std::thread(&Chunk_Manager::disk_reader_loop, this);
-    // Все worker-потоки обслуживают обе очереди. Внутри worker_loop меши имеют
-    // приоритет над генерацией, поэтому отдельный «только mesh» поток простаивал
-    // при пустой очереди мешей, пока генерация была ограничена worker_count - 1.
-    // Разрешаем всем потокам помогать генерации, не лишая меши приоритета.
-    for (unsigned int i = 0; i < worker_count; ++i) {
+
+    // Reserve mesh capacity instead of letting long column/region jobs occupy every
+    // worker. General workers still prefer queued meshes, while dedicated workers
+    // never leave the mesh queue for generation or regional prewarm work.
+    const unsigned int dedicated_mesh_workers = worker_count >= 4 ? 2u : 1u;
+    const unsigned int general_workers = worker_count - dedicated_mesh_workers;
+    for (unsigned int i = 0; i < general_workers; ++i) {
         m_workers.emplace_back(&Chunk_Manager::worker_loop, this, false);
+    }
+    for (unsigned int i = 0; i < dedicated_mesh_workers; ++i) {
+        m_workers.emplace_back(&Chunk_Manager::worker_loop, this, true);
     }
 }
 
@@ -576,13 +579,14 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             m_sleepers.fetch_add(1);
             m_job_available.wait(lock, [this, mesh_dedicated] {
                 if (m_stop_workers) return true;
+                if (mesh_dedicated) return m_pending_mesh_count.load() > 0;
                 if (!m_pending_region_prep_jobs.empty()) return true;
                 if (m_pending_mesh_count.load() > 0) return true;
-                return !mesh_dedicated && m_pending_job_count.load() > 0;
+                return m_pending_job_count.load() > 0;
             });
             m_sleepers.fetch_sub(1);
             if (m_stop_workers) return;
-            if (!m_pending_region_prep_jobs.empty()) {
+            if (!mesh_dedicated && !m_pending_region_prep_jobs.empty()) {
                 region_prep_job = m_pending_region_prep_jobs.front();
                 m_pending_region_prep_jobs.pop_front();
                 has_region_prep_job = true;
@@ -923,7 +927,8 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             Chunk_Meshes meshes = build_chunk_gpu_mesh(mesh_job.own_blocks, mesh_job.own_light,
                                                        mesh_job.neighbor_blocks, mesh_job.neighbor_light,
                                                        mesh_job.position.x, mesh_job.position.y, mesh_job.position.z,
-                                                       lookup, light_lookup, meta_lookup, mesh_job.clip.active);
+                                                       lookup, light_lookup, meta_lookup, mesh_job.clip.active,
+                                                       mesh_job.lod_stride);
 
             Mesh_Result done{mesh_job.position, mesh_job.generation_id, std::move(meshes),
                              mesh_job.dirty_epoch, mesh_job.instance_id, mesh_job.seq, mesh_job.urgent};
@@ -1095,6 +1100,17 @@ uint8_t Chunk_Manager::view_ring_of(const glm::ivec3& position) const {
     return static_cast<uint8_t>(std::min(ring, 255));
 }
 
+int Chunk_Manager::desired_lod_stride(int cx, int cz, int current_stride) const {
+    // Coarse LOD is deliberately disabled for now. The current block-majority
+    // downsampler can erase thin terrain features and create visible bands on hills.
+    // First optimize first-mesh latency and the full-resolution GPU path; LOD needs
+    // dedicated transition geometry before it is safe to enable again.
+    (void)cx;
+    (void)cz;
+    (void)current_stride;
+    return 1;
+}
+
 void Chunk_Manager::refresh_view_rings() {
     ++m_view_generation;
     std::vector<glm::ivec3> entered_near;   // чанки, которые только что вошли в кольца 0–1 без меша
@@ -1234,7 +1250,7 @@ int Chunk_Manager::first_incomplete_ring() {
     return m_ring_cache_value;
 }
 
-void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent) {
+void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent, int lod_stride) {
     const glm::ivec3 position{cx, cy, cz};
     Chunk* target = get_chunk(cx, cy, cz);
     if (!target) {
@@ -1265,6 +1281,9 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent) {
     job.own_blocks = target->get_blocks();
     job.own_light = target->get_light_grid();
     job.generation_id = m_generation_id;
+    job.lod_stride = static_cast<uint8_t>(capture_active() ? 1 :
+        (lod_stride > 0 ? (lod_stride >= 4 ? 4 : (lod_stride >= 2 ? 2 : 1))
+                        : desired_lod_stride(cx, cz, target->get_meshes().lod_stride)));
     // Счётчик пометок снимаем вместе со снимком данных: правка после этого момента его изменит.
     job.dirty_epoch = target->get_dirty_epoch();
     job.instance_id = target->get_instance_id();
@@ -1350,15 +1369,18 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent) {
         }
     }
 
-    // Меньше = срочнее. Правка блока получает самый высокий приоритет, затем близкие
-    // чанки, затем обычные фоновые пересборки после генерации соседей.
-    // Сначала по кольцу (ближе — срочнее), внутри кольца — по квадрату расстояния.
+    // Smaller values run first. Urgent edits stay first; first-time meshes come
+    // before background remeshes so a newly generated chunk fills a hole immediately.
+    // Within each class, prioritize view ring and squared player distance.
     const int dx = std::abs(cx - m_player_chunk.x);
     const int dz = std::abs(cz - m_player_chunk.y);
     const int dy = std::abs(cy - m_player_chunk_y);
+    const bool first_mesh = target->get_mesh_version() == 0;
     const bool visible = m_visible_chunks.contains(cx, cy, cz);
-    job.priority = (visible ? 0 : 8192) + static_cast<int>(target->get_view_ring()) * 128 +
-                   std::min(dx * dx + dz * dz + dy * dy * 4, 127);
+    const int distance_priority = static_cast<int>(target->get_view_ring()) * 128 +
+        std::min(dx * dx + dz * dz + dy * dy * 4, 127);
+    job.priority = first_mesh ? 256 + distance_priority
+                              : (visible ? 8192 : 16384) + distance_priority;
     if (urgent) job.priority = 0;   // правка игрока: самый первый бакет очереди
 
     const int priority = job.priority;
@@ -1550,14 +1572,21 @@ void Chunk_Manager::collect_finished_chunks() {
 
     bool any_chunk_inserted = false;
 
-    // Вставок в кадр тем больше, чем быстрее летит игрок: при 4 за кадр скорость подгрузки
-    // ограничена сверху (~240 чанков/с), и на большой скорости дальние слои не успевают.
+    // Insert completed chunks in short bursts. The old four-chunk cap throttled the
+    // hand-off to meshing even when workers had already finished many chunks.
+    // A time budget protects frame time; the soft cap guarantees steady queue progress.
     const float speed = glm::length(m_player_velocity);
-    const size_t chunk_cap = capture_active()
+    const size_t chunk_soft_cap = capture_active()
         ? capture_max_finished_chunks_per_frame
-        : std::max(max_finished_chunks_per_frame, static_cast<size_t>(4.0f + speed / 8.0f));
+        : std::min<size_t>(64, std::max<size_t>(12, static_cast<size_t>(12.0f + speed / 4.0f)));
+    const size_t chunk_hard_cap = capture_active() ? capture_max_finished_chunks_per_frame : 96;
+    constexpr double chunk_apply_budget_ms = 1.5;
+    const auto chunk_apply_start = std::chrono::steady_clock::now();
     size_t processed_chunks = 0;
-    while (processed_chunks < chunk_cap) {
+    while (processed_chunks < chunk_hard_cap) {
+        if (!capture_active() && processed_chunks >= chunk_soft_cap &&
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - chunk_apply_start).count() >= chunk_apply_budget_ms) break;
         Chunk_Result result;
         if (!m_completed_jobs.try_pop(result)) break;
         ++processed_chunks;
@@ -1579,7 +1608,12 @@ void Chunk_Manager::collect_finished_chunks() {
                                                        result.position.z, std::move(result.chunk));
         any_chunk_inserted = true;
         new_chunk->set_view_ring(view_ring_of(result.position), m_view_generation);
-        if (new_chunk->get_view_ring() <= 1 && new_chunk->get_mesh_version() == 0) {
+
+        // The first mesh is the latency-critical path: enqueue it immediately after
+        // insertion, before optional block/light scans below. Missing neighbors are
+        // sampled from World_Generator and later neighbor arrivals schedule a remesh.
+        if (new_chunk->get_mesh_version() == 0) {
+            new_chunk->mark_mesh_dirty();
             enqueue_mesh_rebuild(result.position.x, result.position.y, result.position.z);
         }
         ++m_chunk_set_epoch;
@@ -1661,10 +1695,6 @@ void Chunk_Manager::collect_finished_chunks() {
             }
         }
 
-        // Mesh generation is intentionally deferred until insertion: only then can
-        // the async job snapshot include currently loaded neighbors.
-        new_chunk->mark_mesh_dirty();
-
         // Все 26 соседей: AO читает клетки по рёбрам и углам, а также вертикальные швы по Y
         // (потолок пещеры на границе секции), поэтому помечаем весь куб окрестности.
         for (int dz = -1; dz <= 1; ++dz) {
@@ -1678,6 +1708,7 @@ void Chunk_Manager::collect_finished_chunks() {
                 }
             }
         }
+
     }
 
     // Новые чанки родились с пустой (нулевой) сеткой света — если рядом уже есть источники,
@@ -1750,14 +1781,13 @@ void Chunk_Manager::collect_finished_chunks() {
 
 void Chunk_Manager::collect_finished_mesh_jobs() {
 
-    const size_t mesh_cap = capture_active() ? capture_max_finished_meshes_per_frame
-                                             : max_finished_meshes_per_frame;
+    const size_t mesh_cap = capture_active() ? capture_max_finished_meshes_per_frame : 32;
     size_t processed_meshes = 0;
-    // Минимум mesh_cap результатов за вызов, дальше — пока не вышел бюджет времени (потолок 8x):
-    // фиксированные 4 штуки не успевали за воркерами, а дорогие кадры от этого не появляются.
-    constexpr double apply_budget_ms = 1.0;
+    // Applying a completed mesh only moves its packed GPU payload and section metadata.
+    // Drain bursts instead of leaving finished work queued behind a four-result limit.
+    constexpr double apply_budget_ms = 1.5;
     const auto apply_start = std::chrono::steady_clock::now();
-    const size_t mesh_hard_cap = mesh_cap * 8;
+    const size_t mesh_hard_cap = capture_active() ? mesh_cap : 192;
     while (true) {
         Mesh_Result result;
         // Срочные результаты (правка блока) применяются сразу, без лимита кадра.
@@ -1803,11 +1833,16 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
         const bool dirtied_after_snapshot = chunk->get_dirty_epoch() != result.dirty_epoch;
         chunk->apply_mesh(std::move(result.meshes));
 
-        // Блок поменялся ещё раз, пока эта пересборка считалась в фоне — снимок, с которым
-        // она стартовала, уже устарел. Ставим ещё одну задачу со свежими данными, чтобы
-        // не потерять последнюю правку молча.
+        // Если данные изменились во время обычного мешинга, не запускаем ещё один
+        // проход немедленно: оставляем чанк dirty, чтобы rebuild_dirty_chunks дождался
+        // соседей/света и объединил несколько изменений в одну финальную пересборку.
+        // Срочные пользовательские правки сохраняют немедленный приоритет.
         if (should_requeue || dirtied_after_snapshot) {
-            enqueue_mesh_rebuild(result.position.x, result.position.y, result.position.z);
+            if (result.urgent) {
+                enqueue_mesh_rebuild(result.position.x, result.position.y, result.position.z, true);
+            } else {
+                chunk->mark_mesh_dirty();
+            }
         }
     }
 }
@@ -1844,10 +1879,8 @@ void Chunk_Manager::rebuild_dirty_chunks() {
         return true;
     };
 
-    // Меши появляются строго от центра к краю: чанк кольца r строится, только когда все нужные чанки колец
-    // до r включительно загружены (иначе порядок задавало бы время генерации, и картина шла бы пятнами).
-    const int ring_limit = (capture_active() || stream_idle) ? std::numeric_limits<int>::max()
-                                                             : first_incomplete_ring();
+    // Initial meshes are queued directly from collect_finished_chunks(). Keep the scan
+    // focused on follow-up remeshes and do not serialize first-time meshes by load ring.
 
     // Нет грязных чанков, и с прошлого скана никто грязным не стал — сканировать нечего.
     if (m_dirty_scan_clean && m_dirty_scan_events == Chunk::dirty_event_count() &&
@@ -1862,15 +1895,14 @@ void Chunk_Manager::rebuild_dirty_chunks() {
     std::vector<Candidate> candidates;
     m_chunks.for_each([&](const glm::ivec3& key, const Chunk_Ptr& chunk) {
         if (!chunk->is_mesh_dirty()) return;
-        ++dirty_seen;
-        if (ring_limit != std::numeric_limits<int>::max() && chunk->get_mesh_version() == 0 &&
-            static_cast<int>(view_ring_of(key)) + 1 >= ring_limit) return;
         if (m_pending_mesh_rebuilds.contains(key.x, key.y, key.z)) return;
-        if (!capture_active() && !m_columns_pending_sky_recompute.empty() &&
+        ++dirty_seen;
+        const bool first_mesh = chunk->get_mesh_version() == 0;
+        if (!first_mesh && !capture_active() && !m_columns_pending_sky_recompute.empty() &&
             m_columns_pending_sky_recompute.count(
                 (static_cast<uint64_t>(static_cast<uint32_t>(key.x)) << 32) |
-                static_cast<uint32_t>(key.z))) return;   // свет неба колонки ещё не посчитан
-        if (!neighbors_settled(key)) return;
+                static_cast<uint32_t>(key.z))) return;   // для повторной сборки ждём готовый свет
+        if (!first_mesh && !neighbors_settled(key)) return;
         int score = 0;
         if (have_player) {
             const int dx = key.x - m_player_chunk.x;
@@ -3055,7 +3087,7 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     const glm::vec3* camera_position,
     int flora_render_distance_chunks,
     bool spectator
-) const {
+) {
     std::vector<Renderable_Chunk> result;
     result.reserve(m_loaded_cache.size() / 2 + 16);
     m_visible_chunks.clear();
@@ -3129,6 +3161,14 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
             has_visible_section = has_visible_section || visible;
         }
         if (!has_visible_section) continue;
+
+        const int wanted_lod = desired_lod_stride(key.x, key.z, meshes.lod_stride);
+        if (wanted_lod != meshes.lod_stride &&
+            !m_pending_mesh_rebuilds.contains(key.x, key.y, key.z)) {
+            // Перестраиваем только реально видимые чанки. Старый меш остаётся на экране,
+            // пока worker не закончит новую LOD-версию.
+            enqueue_mesh_rebuild(key.x, key.y, key.z, false, wanted_lod);
+        }
 
         if (camera_position && flora_render_distance_chunks >= 0) {
             const int camera_chunk_x = static_cast<int>(

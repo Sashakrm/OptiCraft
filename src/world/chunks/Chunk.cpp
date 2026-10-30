@@ -345,6 +345,8 @@ namespace {
     // аллоцировать ~100 КБ на каждую задачу.
     struct Mesh_Scratch {
         std::array<Block_ID, kVoxels> blocks;      // id блоков чанка, плоско (y, z, x)
+        std::array<Block_ID, kVoxels> lod_blocks;  // coarse-копия только для greedy-мешера
+        std::array<uint8_t, kVoxels> lod_meta;   // метаданные выбранного представителя coarse-группы
         std::array<uint8_t, kVoxels> light;        // упакованный свет, плоско
         std::array<uint8_t, kVoxels> meta;         // метаданные блоков, плоско
         // Грани соседей за границей чанка: блоки, метаданные и свет, ячейка (a,b) -> b*32+a.
@@ -542,9 +544,12 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
                                   const Chunk_Neighbor_Lookup& neighbor_lookup,
                                   const Chunk_Light_Lookup& light_lookup,
                                   const Chunk_Meta_Lookup& meta_lookup,
-                                  bool only_positive_faces) {
+                                  bool only_positive_faces,
+                                  int lod_stride) {
     Chunk_Meshes meshes;
     meshes.positive_faces_only = only_positive_faces;
+    lod_stride = (lod_stride >= 4) ? 4 : (lod_stride >= 2 ? 2 : 1);
+    meshes.lod_stride = static_cast<uint8_t>(lod_stride);
 
     const int base_x = chunk_x * kN;
     const int base_y = chunk_y * kH;
@@ -562,6 +567,7 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     Mesh_Scratch& S = mesh_scratch();
     const Mesh_Tables& tab = mesh_tables();
     blocks.unpack(S.blocks.data());
+
 
     // Виды геометрии по секциям и связность для отсечения укрытий.
     std::array<uint8_t, Config::chunk_section_count> section_kinds{};
@@ -607,6 +613,93 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     if (blocks.has_meta()) {
         for (const auto& [linear_index, value] : blocks.meta_entries()) {
             S.meta[linear_index] = value;
+        }
+    }
+
+    // Дальние solid-чанки получают coarse-воксельную копию. Внешняя полоса шириной
+    // lod_stride остаётся точной: границы соседних чанков поэтому совпадают даже при
+    // разных LOD. Для каждой группы выбираем самый частый greedy-блок вместе с его
+    // метаданными (ориентация/активное состояние); сложная геометрия по-прежнему
+    // строится mesh_misc.comp из полноразмерного канала 0.
+    if (lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u) {
+        S.lod_blocks.fill(static_cast<Block_ID>(Block_Types::Air));
+        S.lod_meta.fill(0);
+        // Сохраняем исходные блоки и метаданные по всему периметру чанка.
+        for (int y = 0; y < kH; ++y) {
+            for (int z = 0; z < kN; ++z) {
+                for (int x = 0; x < kN; ++x) {
+                    if (x < lod_stride || x >= kN - lod_stride ||
+                        y < lod_stride || y >= kH - lod_stride ||
+                        z < lod_stride || z >= kN - lod_stride) {
+                        const size_t index = (static_cast<size_t>(y) * kN + z) * kN + x;
+                        S.lod_blocks[index] = S.blocks[index];
+                        S.lod_meta[index] = S.meta[index];
+                    }
+                }
+            }
+        }
+
+        std::array<Block_ID, 64> ids{};
+        std::array<uint8_t, 64> metas{};
+        std::array<uint8_t, 64> counts{};
+        for (int y = lod_stride; y < kH - lod_stride; y += lod_stride) {
+            for (int z = lod_stride; z < kN - lod_stride; z += lod_stride) {
+                for (int x = lod_stride; x < kN - lod_stride; x += lod_stride) {
+                    ids.fill(static_cast<Block_ID>(Block_Types::Air));
+                    metas.fill(0);
+                    counts.fill(0);
+                    int unique_count = 0;
+                    int greedy_count = 0;
+
+                    for (int dy = 0; dy < lod_stride; ++dy) {
+                        for (int dz = 0; dz < lod_stride; ++dz) {
+                            for (int dx = 0; dx < lod_stride; ++dx) {
+                                const size_t index = (static_cast<size_t>(y + dy) * kN + (z + dz)) * kN + (x + dx);
+                                const Block_ID id = S.blocks[index];
+                                if (id == static_cast<Block_ID>(Block_Types::Air) ||
+                                    (tab.flags[id] & kFlagGreedy) == 0u) continue;
+
+                                ++greedy_count;
+                                const uint8_t meta = S.meta[index];
+                                int candidate = 0;
+                                while (candidate < unique_count &&
+                                       (ids[candidate] != id || metas[candidate] != meta)) ++candidate;
+                                if (candidate == unique_count) {
+                                    ids[unique_count] = id;
+                                    metas[unique_count] = meta;
+                                    counts[unique_count] = 0;
+                                    ++unique_count;
+                                }
+                                ++counts[candidate];
+                            }
+                        }
+                    }
+
+                    Block_ID representative = static_cast<Block_ID>(Block_Types::Air);
+                    uint8_t representative_meta = 0;
+                    // Небольшие одиночные блоки не должны разрастаться в целый LOD-куб.
+                    // Четверти заполнения достаточно, чтобы сохранить тонкий рельефный слой.
+                    const int minimum_occupancy = (lod_stride * lod_stride * lod_stride) / 4;
+                    if (unique_count > 0 && greedy_count >= minimum_occupancy) {
+                        int best = 0;
+                        for (int i = 1; i < unique_count; ++i) {
+                            if (counts[i] > counts[best]) best = i;
+                        }
+                        representative = ids[best];
+                        representative_meta = metas[best];
+                    }
+
+                    for (int dy = 0; dy < lod_stride; ++dy) {
+                        for (int dz = 0; dz < lod_stride; ++dz) {
+                            for (int dx = 0; dx < lod_stride; ++dx) {
+                                const size_t index = (static_cast<size_t>(y + dy) * kN + (z + dz)) * kN + (x + dx);
+                                S.lod_blocks[index] = representative;
+                                S.lod_meta[index] = representative_meta;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -681,6 +774,15 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     }
     pack_channel(S.ring_block.data(), Chunk_Ring::kSize, meshes.gpu_words, meshes.gpu_channels[15]);
     pack_channel(S.ring_meta.data(), Chunk_Ring::kSize, meshes.gpu_words, meshes.gpu_channels[22]);
+    if (lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u) {
+        pack_channel(S.lod_blocks.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[23]);
+        pack_channel(S.lod_meta.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[24]);
+    } else {
+        const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
+        const uint8_t zero = 0;
+        pack_channel(&air, 1, meshes.gpu_words, meshes.gpu_channels[23]);
+        pack_channel(&zero, 1, meshes.gpu_words, meshes.gpu_channels[24]);
+    }
     meshes.gpu_upload_pending = true;
     return meshes;
 }

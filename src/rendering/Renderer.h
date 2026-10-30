@@ -65,7 +65,9 @@ private:
         std::array<uint32_t, kGpuStreams> gpu_first{};
         std::array<uint32_t, kGpuStreams> gpu_cap{};
         std::array<uint32_t, kGpuStreams> gpu_wanted{};
-        bool gpu_regrow = false;   // счётчики показали, что ёмкость потоков надо поменять: чанк мешится заново
+        bool gpu_regrow = false;   // счётчики показали, что ёмкости не хватило: чанк мешится заново
+        std::array<bool, kGpuStreams> gpu_capacity_observed{}; // не сжимаем первый allocation каждого потока
+        bool gpu_flora_skipped = false; // состав GPU-меша зависит от дистанции прорисовки флоры
     };
 
     std::unordered_map<glm::ivec3, Chunk_GL_Resources, Chunk_Key_Hash> m_chunk_gl_cache;
@@ -133,14 +135,14 @@ private:
     bool m_occlusion_enabled = false;
 
     // Параметры GPU-мешера. Единица пула — блок из kGpuBlockQuads квадов (16 байт каждый).
-    static constexpr int kGpuBatchChunks = 64;
+    static constexpr int kGpuBatchChunks = 512;
     static constexpr uint32_t kGpuBlockQuads = 32;
-    static constexpr uint32_t kGpuInitialPoolBlocks = 8192;   // 256 К квадов = 4 МБ, дальше пул растёт
-    // Стартовая ёмкость потока по виду (квады); после первого readback'а она подгоняется под фактическое число.
-    static constexpr std::array<uint32_t, kGpuKindCount> kGpuInitialQuads = {256, 64, 256, 256};
+    static constexpr uint32_t kGpuInitialPoolBlocks = 16384;  // 512 К квадов = 8 МБ, дальше пул растёт
+    // Стартовая ёмкость потока по виду (квады); при переполнении увеличивается по точному readback-счётчику.
+    static constexpr std::array<uint32_t, kGpuKindCount> kGpuInitialQuads = {1024, 128, 2048, 1024};
     // Бюджет загрузки за кадр по объёму слов GPU-нагрузки. Ближние чанки грузятся первыми; дальние
     // ждут следующего кадра. Хотя бы один чанк в кадре грузится всегда, даже если он больше бюджета.
-    static constexpr size_t kGpuFrameBudgetBytes = 2u * 1024u * 1024u;
+    static constexpr size_t kGpuFrameBudgetBytes = 16u * 1024u * 1024u;
     static constexpr int kGpuReadbackRing = 8;
     struct Gpu_Readback {
         unsigned int buffer = 0;

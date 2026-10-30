@@ -99,7 +99,10 @@ uint64_t current_connectivity_epoch();
 // 3..8 блоки граней соседей (-X,+X,-Y,+Y,-Z,+Z); 9..14 свет граней соседей; 15 — кольцо блоков
 // рёбер и углов (AO у границ чанка, высоты жидкости); 16..21 метаданные граней соседей (уровень
 // жидкости); 22 — метаданные кольца. См. mesh_greedy.comp и mesh_misc.comp.
-inline constexpr int kGpuMeshChannelCount = 23;
+// Канал 23 — coarse-сетка блоков для solid LOD; канал 24 — соответствующие метаданные,
+// чтобы сохранять ориентацию и активное состояние блоков. Канал 0 остаётся полноразмерным
+// для блоков сложной формы, флоры и жидкостей.
+inline constexpr int kGpuMeshChannelCount = 25;
 // Заголовок чанка в батче GPU: слот, (флаги, маска видов) + по одному uvec4 на канал.
 inline constexpr int kGpuHeaderStride = 2 + kGpuMeshChannelCount;
 
@@ -166,6 +169,8 @@ struct Chunk_Meshes {
     std::array<Chunk_Section_Range, Config::chunk_section_count> sections;
     // Объединение видов геометрии всех секций (0 — рисовать нечего).
     uint8_t gpu_kinds = 0;
+    // 1 = full detail, 2 = medium LOD, 4 = distant LOD.
+    uint8_t lod_stride = 1;
     // Снимок области захвата (изометрия): отрицательные грани не строятся — рисуются только +X/+Y/+Z.
     bool positive_faces_only = false;
     // Полезная нагрузка для видеокарты (палитры и битово упакованные значения каналов).
@@ -465,7 +470,8 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
                                   const Chunk_Neighbor_Lookup& neighbor_lookup,
                                   const Chunk_Light_Lookup& light_lookup,
                                   const Chunk_Meta_Lookup& meta_lookup,
-                                  bool only_positive_faces);
+                                  bool only_positive_faces,
+                                  int lod_stride = 1);
 
 // Таблицы правил мешеров для GPU.
 struct Gpu_Mesh_Tables {

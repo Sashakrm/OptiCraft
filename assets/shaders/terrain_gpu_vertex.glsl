@@ -59,6 +59,7 @@ void main() {
     const float w = float(((w0 >> 18u) & 31u) + 1u);
     const float h = float(((w0 >> 23u) & 31u) + 1u);
     const bool rot = ((w0 >> 28u) & 1u) != 0u;
+    const float normal_extent = float(1u << ((w0 >> 29u) & 3u));
 
     // AO углов: два бита на угол (код fu + 2*fv), см. face_ao в Chunk.cpp. Диагональ идёт через
     // более тёмную пару углов, поэтому порядок вершин выбирается по AO.
@@ -73,7 +74,7 @@ void main() {
     const float fu = float(code & 1);
     const float fv = float((code >> 1) & 1);
     const vec3 base = origins[sec >> 2u].xyz + cell;
-    const float plane = pos ? 1.0 : 0.0;
+    const float plane = pos ? normal_extent : 0.0;
 
     vec3 p;
     vec2 local;
