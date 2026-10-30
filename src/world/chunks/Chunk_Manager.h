@@ -6,6 +6,7 @@
 #define OPTICRAFT_CHUNK_MANAGER_H
 
 #include <unordered_set>
+#include <unordered_map>
 #include <chrono>
 #include <memory>
 #include <limits>
@@ -17,6 +18,7 @@
 #include <queue>
 #include <thread>
 #include <optional>
+#include <variant>
 #include <vector>
 #include <glm/glm.hpp>
 #include "world/chunks/Chunk.h"
@@ -61,13 +63,38 @@ private:
     struct Chunk_Job {
         glm::ivec3 position;
         uint64_t generation_id;
-        // Ниже = обрабатывается раньше. Считается один раз при постановке в очередь
-        // (enqueue_chunk_load), от позиции игрока НА ТОТ МОМЕНТ — не пересчитывается заново,
-        // пока задача уже сидит в очереди (см. комментарий у m_pending_jobs про то, почему
-        // это осознанный компромисс, а не недосмотр).
+        // Ниже = обрабатывается раньше. Считается при постановке в очередь.
         int priority;
     };
 
+    // Работа генерации поставляется по вертикальным колонкам: одна задача может содержать
+    // до девяти уровней Y. Это уменьшает очередь/синхронизацию и даёт генератору переиспользовать
+    // 2D-поля для всех уровней колонки. Все chunks в задаче имеют одинаковые X/Z.
+    struct Chunk_Column_Job {
+        int chunk_x = 0;
+        int chunk_z = 0;
+        uint64_t generation_id = 0;
+        int priority = 0;
+        std::vector<Chunk_Job> chunks;
+    };
+
+    // После однократной подготовки X/Z-данных уровни колонки распараллеливаются внутри
+    // того же пула воркеров. Подготовка immutable и живёт, пока последние уровни не готовы.
+    struct Chunk_Build_Job {
+        Chunk_Job job{};
+        Chunk_Ptr chunk{};
+        std::shared_ptr<World_Generator::Prepared_Column> prepared{};
+        size_t prepared_index = 0;
+    };
+    struct Region_Prep_Job {
+        int chunk_x = 0;
+        int chunk_z = 0;
+        uint64_t generation_id = 0;
+        int priority = 0;
+        int64_t region_key = 0;
+        uint8_t parts_mask = 0;
+    };
+    using Generation_Job = std::variant<Chunk_Column_Job, Chunk_Build_Job>;
 
     struct Chunk_Result {
         glm::ivec3 position;
@@ -173,8 +200,8 @@ private:
     glm::vec3 m_last_player_pos{0.0f};
     std::chrono::steady_clock::time_point m_last_pos_time{};
     bool m_has_last_pos = false;
-    // Полуширина вертикального окна в чанках: слоёв = 2 * m_vertical_half. Обычно 4 (8 слоёв),
-    // при быстром вертикальном движении или малой дальности прорисовки — 2 (4 слоя).
+    // Полуширина вертикального окна в чанках (оба края включительно): обычно 4 (9 уровней),
+    // при быстром вертикальном движении или малой дальности прорисовки — 2 (5 уровней).
     int m_vertical_half = 4;
     // Остались ли в окне незапрошенные чанки (load_around упёрся в лимит очереди). Тогда
     // update_player_position доливает их по мере освобождения очереди.
@@ -193,7 +220,10 @@ private:
     // не меняется во времени, так что обычный инвариант std::priority_queue не нарушается
     // (в отличие от гипотетического компаратора, читающего живую позицию игрока "на лету").
     // Задачи генерации: корзины по приоритету, без замков (см. Priority_Bucket_Queue).
-    Priority_Bucket_Queue<Chunk_Job> m_pending_jobs;
+    // Regional cache preparation must not be starved behind a continuous mesh queue.
+    // It is a small, mutex-protected priority deque and is popped before mesh jobs.
+    std::deque<Region_Prep_Job> m_pending_region_prep_jobs;
+    Priority_Bucket_Queue<Generation_Job> m_pending_jobs;
     std::atomic<size_t> m_pending_job_count{0};
     std::atomic<int> m_sleepers{0};
     void wake_workers();
@@ -251,6 +281,14 @@ private:
     std::condition_variable m_job_available;
     bool m_stop_workers = false;
 
+    // Cold regional cave/hydrology calculations are scheduled as distinct jobs in the same
+    // worker pool. Columns waiting for a missing region sit here; only warm columns enter
+    // the ordinary generation queue. This prevents all workers from blocking on one future.
+    std::unordered_map<int64_t, std::vector<Chunk_Column_Job>> m_region_waiting_columns;
+    std::unordered_map<int64_t, uint64_t> m_regions_preparing;
+    // Bits scheduled for this region/generation: caves=1, rivers=2. They can build in parallel.
+    std::unordered_map<int64_t, uint8_t> m_region_prep_queued_mask;
+
     // Позиции блоков-источников света (Sun Stone и любой будущий блок с light_emission > 0),
     // сейчас размещённых игроком. Уровень не хранится тут отдельно — при пересчёте читается
     // заново через get_block_world(pos), так что если блок под источником вдруг изменился
@@ -305,6 +343,7 @@ private:
 
     void unload_chunk(int cx, int cy, int cz);
     void enqueue_chunk_load(int cx, int cy, int cz);
+    void enqueue_chunk_column_load(int cx, int cz, const std::vector<Chunk_Job>& chunks);
     // Приоритет задачи генерации: квадрат расстояния до игрока, вертикаль весит в 4 раза сильнее.
     int chunk_job_priority(int cx, int cy, int cz) const;
     // Лимит одновременно запрошенных чанков: растёт со скоростью игрока.
@@ -322,6 +361,12 @@ private:
     void start_workers();
     void disk_reader_loop();
     void requeue_generation(const Chunk_Job& job);
+    void enqueue_generation_column(Chunk_Column_Job column);
+    void schedule_region_preparation_locked(int chunk_x, int chunk_z, uint64_t generation_id,
+                                            int priority, int64_t region_key, uint8_t missing_parts);
+    // Starts cave/hydrology region work before the player reaches a region boundary.
+    // These are background jobs; no chunk worker waits on a cold region future.
+    void prewarm_generation_regions_near_player();
     void stop_workers();
     void worker_loop(bool mesh_dedicated = false);
 

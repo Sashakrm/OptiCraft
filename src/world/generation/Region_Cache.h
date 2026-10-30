@@ -11,6 +11,7 @@
 // Результат от порядка построения не зависит: регионы детерминированы по мировым координатам.
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <future>
@@ -62,6 +63,16 @@ public:
         }
     }
 
+    // Non-blocking readiness probe used by the chunk scheduler. A cold regional build
+    // must never be started by a latency-sensitive chunk worker: the scheduler puts that
+    // column behind a separate regional preparation task instead.
+    bool is_ready(int64_t key) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto found = m_entries.find(key);
+        return found != m_entries.end() &&
+               found->second.first.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    }
+
     void clear() {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_lru.clear();
@@ -71,7 +82,7 @@ public:
 private:
     using Future = std::shared_future<std::shared_ptr<const T>>;
 
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::list<int64_t> m_lru;   // самый свежий ключ — в начале
     std::unordered_map<int64_t, std::pair<Future, std::list<int64_t>::iterator>> m_entries;
 };

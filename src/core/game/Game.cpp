@@ -685,6 +685,12 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
         static_cast<float>(spawn_surface + 2),
         static_cast<float>(spawn_z));
     const glm::vec3 start = saved_position ? *saved_position : m_spawn_position;
+    // Prepare the landing region before the chunk stream starts. The first visible column
+    // must not be the one that pays for a cold cave + hydrology cache; subsequent regions
+    // are prepared by Chunk_Manager's movement lookahead on background workers.
+    m_world_generator->prewarm_generation_region_for_chunk(
+        static_cast<int>(std::floor(start.x / static_cast<float>(Config::chunk_size))),
+        static_cast<int>(std::floor(start.z / static_cast<float>(Config::chunk_size))));
     m_player_ptr->set_position(start);
 
     m_camera_ptr = std::make_unique<Camera>(
@@ -1047,6 +1053,11 @@ void Game::reload_world(const std::string& generation_folder) {
 
     const int player_cx = static_cast<int>(std::floor(spawn_x / static_cast<float>(Config::chunk_size)));
     const int player_cz = static_cast<int>(std::floor(spawn_z / static_cast<float>(Config::chunk_size)));
+
+    // A generation-preset reload is another cold-cache entry point. Warm this region before
+    // asking the manager for its first chunk column; otherwise its first column waits on the
+    // entire regional hydrology solve despite the column worker itself being asynchronous.
+    m_world_generator->prewarm_generation_region_for_chunk(player_cx, player_cz);
 
     m_chunk_manager_ptr->update_player_position(
         static_cast<float>(spawn_x),

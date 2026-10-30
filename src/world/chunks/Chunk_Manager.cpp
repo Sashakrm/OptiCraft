@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <chrono>
+#include <exception>
 
 namespace {
     constexpr size_t max_finished_chunks_per_frame = 4;
@@ -39,6 +40,15 @@ namespace {
         int q = value / divisor;
         if ((value % divisor != 0) && ((value < 0) != (divisor < 0))) --q;
         return q;
+    }
+
+    int64_t generation_region_key_for_chunk(int cx, int cz) {
+        // Cave and river regions are both 256 blocks wide; chunks are 32 blocks wide.
+        const int rx = floor_div_chunk(cx, 8);
+        const int rz = floor_div_chunk(cz, 8);
+        const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(rx)) << 32) |
+                                static_cast<uint32_t>(rz);
+        return static_cast<int64_t>(packed);
     }
 
     // --- Освещение: общие быстрые примитивы для recompute_lighting и recompute_sky_lighting ---
@@ -310,12 +320,12 @@ void Chunk_Manager::start_workers() {
 
     m_workers.reserve(worker_count);
     m_disk_reader = std::thread(&Chunk_Manager::disk_reader_loop, this);
-    // Один поток всегда оставляем свободным именно под меши. При длинной очереди
-    // генерации это гарантирует, что редактирование блока не ждёт завершения
-    // процедурной генерации десятков соседних чанков.
+    // Все worker-потоки обслуживают обе очереди. Внутри worker_loop меши имеют
+    // приоритет над генерацией, поэтому отдельный «только mesh» поток простаивал
+    // при пустой очереди мешей, пока генерация была ограничена worker_count - 1.
+    // Разрешаем всем потокам помогать генерации, не лишая меши приоритета.
     for (unsigned int i = 0; i < worker_count; ++i) {
-        const bool mesh_dedicated = (i == worker_count - 1);
-        m_workers.emplace_back(&Chunk_Manager::worker_loop, this, mesh_dedicated);
+        m_workers.emplace_back(&Chunk_Manager::worker_loop, this, false);
     }
 }
 
@@ -324,10 +334,14 @@ void Chunk_Manager::stop_workers() {
         std::lock_guard<std::mutex> lock(m_job_mutex);
         m_stop_workers = true;
         m_pending_jobs.clear();
+        m_pending_region_prep_jobs.clear();
         m_pending_job_count.store(0);
         m_pending_mesh_jobs.clear();
         m_pending_mesh_count.store(0);
         m_pending_disk_reads.clear();
+        m_region_waiting_columns.clear();
+        m_regions_preparing.clear();
+        m_region_prep_queued_mask.clear();
     }
     m_job_available.notify_all();
 
@@ -343,9 +357,125 @@ void Chunk_Manager::stop_workers() {
 }
 
 void Chunk_Manager::requeue_generation(const Chunk_Job& job) {
-    m_pending_jobs.push(job, job.priority);
-    m_pending_job_count.fetch_add(1);
-    wake_workers();
+    Chunk_Column_Job column;
+    column.chunk_x = job.position.x;
+    column.chunk_z = job.position.z;
+    column.generation_id = job.generation_id;
+    column.priority = job.priority;
+    column.chunks.push_back(job);
+    enqueue_generation_column(std::move(column));
+}
+
+void Chunk_Manager::enqueue_generation_column(Chunk_Column_Job column) {
+    if (column.chunks.empty()) return;
+    const World_Generator* generator = m_world_generator;
+    const uint8_t missing_parts = generator
+        ? generator->generation_region_missing_parts_for_chunk(column.chunk_x, column.chunk_z) : 0;
+    const int64_t key = generation_region_key_for_chunk(column.chunk_x, column.chunk_z);
+    bool wake = false;
+    {
+        std::lock_guard<std::mutex> lock(m_job_mutex);
+        if (m_stop_workers || column.generation_id != m_generation_id) return;
+        const int priority = column.priority == std::numeric_limits<int>::max()
+            ? 0 : column.priority;
+        if (missing_parts == 0) {
+            m_pending_jobs.push(Generation_Job{std::move(column)}, priority);
+            m_pending_job_count.fetch_add(1);
+            wake = true;
+        } else {
+            const uint64_t generation = column.generation_id;
+            m_region_waiting_columns[key].push_back(std::move(column));
+            schedule_region_preparation_locked(
+                m_region_waiting_columns[key].front().chunk_x,
+                m_region_waiting_columns[key].front().chunk_z,
+                generation, priority, key, missing_parts);
+            wake = true;
+        }
+    }
+    if (wake) wake_workers();
+}
+
+// Caller holds m_job_mutex. Each regional subsystem is prepared by a separate task so
+// cave carving and hydrology can occupy different workers at the same time.
+void Chunk_Manager::schedule_region_preparation_locked(int chunk_x, int chunk_z,
+        uint64_t generation_id, int priority, int64_t region_key, uint8_t missing_parts) {
+    if (missing_parts == 0 || m_stop_workers || generation_id != m_generation_id) return;
+    const auto active = m_regions_preparing.find(region_key);
+    if (active == m_regions_preparing.end() || active->second != generation_id) {
+        m_regions_preparing[region_key] = generation_id;
+        m_region_prep_queued_mask[region_key] = 0;
+    }
+    uint8_t& queued_mask = m_region_prep_queued_mask[region_key];
+    for (const uint8_t part : {World_Generator::kRegionPartCaves,
+                               World_Generator::kRegionPartRivers}) {
+        if ((missing_parts & part) == 0 || (queued_mask & part) != 0) continue;
+        Region_Prep_Job prep{chunk_x, chunk_z, generation_id, priority, region_key, part};
+        const auto position = std::upper_bound(m_pending_region_prep_jobs.begin(),
+            m_pending_region_prep_jobs.end(), prep.priority,
+            [](int wanted_priority, const Region_Prep_Job& queued) {
+                return wanted_priority < queued.priority;
+            });
+        m_pending_region_prep_jobs.insert(position, prep);
+        queued_mask |= part;
+    }
+}
+
+void Chunk_Manager::prewarm_generation_regions_near_player() {
+    if (!m_world_generator || m_player_chunk.x == std::numeric_limits<int>::min()) return;
+
+    // The region lattice is 256 blocks = 8 chunks. Prepare the player's current region
+    // first, then start the next region while still several chunks away from its boundary.
+    // That lead time is intentional: a river region is much more expensive than filling a
+    // 32x32x32 chunk, and should be built concurrently with work for the current region.
+    const int rx = floor_div_chunk(m_player_chunk.x, 8);
+    const int rz = floor_div_chunk(m_player_chunk.y, 8);
+    std::vector<std::pair<int, int>> targets;
+    targets.reserve(4);
+    targets.emplace_back(rx, rz);
+
+    const int local_x = m_player_chunk.x - rx * 8;
+    const int local_z = m_player_chunk.y - rz * 8;
+    int step_x = 0;
+    int step_z = 0;
+    constexpr float kMinLookaheadSpeed = 1.0f;
+    if (std::abs(m_player_velocity.x) >= kMinLookaheadSpeed) {
+        if (m_player_velocity.x > 0.0f && local_x >= 3) step_x = 1;
+        else if (m_player_velocity.x < 0.0f && local_x <= 4) step_x = -1;
+    }
+    if (std::abs(m_player_velocity.z) >= kMinLookaheadSpeed) {
+        if (m_player_velocity.z > 0.0f && local_z >= 3) step_z = 1;
+        else if (m_player_velocity.z < 0.0f && local_z <= 4) step_z = -1;
+    }
+    if (step_x != 0) targets.emplace_back(rx + step_x, rz);
+    if (step_z != 0) targets.emplace_back(rx, rz + step_z);
+    if (step_x != 0 && step_z != 0) targets.emplace_back(rx + step_x, rz + step_z);
+
+    // Remove duplicate region coordinates (the current region may overlap with no lookahead,
+    // but this also keeps the helper safe if thresholds are changed in the future).
+    std::sort(targets.begin(), targets.end());
+    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    const int current_rx = rx;
+    const int current_rz = rz;
+    bool wake = false;
+    for (const auto& [target_rx, target_rz] : targets) {
+        // Probe outside m_job_mutex: the generator's readiness query only inspects its cache.
+        const int sample_cx = target_rx * 8 + 4;
+        const int sample_cz = target_rz * 8 + 4;
+        const uint8_t missing = m_world_generator->generation_region_missing_parts_for_chunk(
+            sample_cx, sample_cz);
+        if (missing == 0) continue;
+        const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(target_rx)) << 32) |
+                                static_cast<uint32_t>(target_rz);
+        const int priority = (target_rx == current_rx && target_rz == current_rz) ? -4096 : -2048;
+        {
+            std::lock_guard<std::mutex> lock(m_job_mutex);
+            if (m_stop_workers || m_generation_id == 0) continue;
+            schedule_region_preparation_locked(sample_cx, sample_cz, m_generation_id,
+                priority, static_cast<int64_t>(packed), missing);
+        }
+        wake = true;
+    }
+    if (wake) wake_workers();
 }
 
 void Chunk_Manager::wake_workers() {
@@ -429,9 +559,14 @@ void Chunk_Manager::disk_reader_loop() {
 
 void Chunk_Manager::worker_loop(bool mesh_dedicated) {
     while (true) {
-        Chunk_Job job;
+        Generation_Job generation_item;
+        Chunk_Column_Job column_job;
+        Chunk_Build_Job build_job;
+        Region_Prep_Job region_prep_job;
         Mesh_Job mesh_job;
         bool has_generation_job = false;
+        bool has_build_job = false;
+        bool has_region_prep_job = false;
         bool has_mesh_job = false;
         const World_Generator* generator = nullptr;
         World_File world_file;
@@ -441,21 +576,22 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             m_sleepers.fetch_add(1);
             m_job_available.wait(lock, [this, mesh_dedicated] {
                 if (m_stop_workers) return true;
+                if (!m_pending_region_prep_jobs.empty()) return true;
                 if (m_pending_mesh_count.load() > 0) return true;
                 return !mesh_dedicated && m_pending_job_count.load() > 0;
             });
             m_sleepers.fetch_sub(1);
-
-            if (m_stop_workers) {
-                return;
+            if (m_stop_workers) return;
+            if (!m_pending_region_prep_jobs.empty()) {
+                region_prep_job = m_pending_region_prep_jobs.front();
+                m_pending_region_prep_jobs.pop_front();
+                has_region_prep_job = true;
             }
-
-            // Меши всегда имеют абсолютный приоритет над генерацией. Это критично для
-            // интерактивности: даже если вокруг ещё строится огромный вертикальный мир,
-            // ломание/постановка блока должно получить новый меш как можно быстрее.
         }
 
-        if (m_pending_mesh_count.load() > 0) {
+        // Cold-region preparation is popped first (above) so it cannot be starved by meshes.
+        // Otherwise meshes retain priority over ordinary column/build tasks.
+        if (!has_region_prep_job && m_pending_mesh_count.load() > 0) {
             std::unique_ptr<Mesh_Job> pending;
             if (m_pending_mesh_jobs.try_pop(pending)) {
                 mesh_job = std::move(*pending);
@@ -464,70 +600,195 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             }
         }
 
-        if (!has_mesh_job) {
-            // Задачи генерации берём без замка: корзины по приоритету.
-            if (mesh_dedicated || !m_pending_jobs.try_pop(job)) {
-                continue;
-            }
+        if (!has_region_prep_job && !has_mesh_job) {
+            if (mesh_dedicated || !m_pending_jobs.try_pop(generation_item)) continue;
             m_pending_job_count.fetch_sub(1);
+            if (auto* column = std::get_if<Chunk_Column_Job>(&generation_item)) {
+                column_job = std::move(*column);
+            } else if (auto* build = std::get_if<Chunk_Build_Job>(&generation_item)) {
+                build_job = std::move(*build);
+                has_build_job = true;
+            }
         }
 
-        // Снимок состояния мира берётся под тем же мьютексом, что и задача: главный поток может
-        // сменить мир (clear/set_world_storage), и воркер не должен записать чанк в чужой регион.
+        // Take a consistent world snapshot before touching a chunk or writing a save record.
         {
             std::lock_guard<std::mutex> lock(m_job_mutex);
             if (!has_mesh_job) {
-                // Задача от прошлого мира (до clear/смены мира) не должна ни генерироваться, ни писаться.
-                has_generation_job = job.generation_id == m_generation_id;
+                const uint64_t task_generation = has_build_job
+                    ? build_job.job.generation_id
+                    : (has_region_prep_job ? region_prep_job.generation_id : column_job.generation_id);
+                has_generation_job = task_generation == m_generation_id;
             }
             generator = m_world_generator;
             world_file = m_world_file;
             generation_folder = m_generation_folder;
         }
 
-        if (has_generation_job) {
-            if (!generator) {
-                continue;
+        if (has_generation_job && has_region_prep_job) {
+            if (!generator) continue;
+            bool prep_failed = false;
+            try {
+                generator->prewarm_generation_region_parts_for_chunk(
+                    region_prep_job.chunk_x, region_prep_job.chunk_z, region_prep_job.parts_mask);
+            } catch (const std::exception& e) {
+                prep_failed = true;
+                LOG_WARN(std::string("Regional generation prewarm failed: ") + e.what());
+            } catch (...) {
+                prep_failed = true;
+                LOG_WARN("Regional generation prewarm failed with an unknown exception");
             }
+            const uint8_t missing_parts = prep_failed ? 0 :
+                generator->generation_region_missing_parts_for_chunk(
+                    region_prep_job.chunk_x, region_prep_job.chunk_z);
+            const bool region_ready = missing_parts == 0;
 
-            Chunk_Ptr chunk(m_chunk_pool->acquire(job.position.x, job.position.y, job.position.z, *generator),
-                            Chunk_Slot_Release{m_chunk_pool.get()});
-            if (!chunk) {
-                // Пул слотов исчерпан: результат без чанка. Главный поток снимет «запрошено», и загрузка
-                // повторится на следующем кадре, если чанк всё ещё нужен.
-                m_completed_jobs.push({job.position, job.generation_id, nullptr});
-                continue;
-            }
-            chunk->set_texture_atlas(m_texture_atlas);
+            {
+                std::lock_guard<std::mutex> lock(m_job_mutex);
+                const auto active = m_regions_preparing.find(region_prep_job.region_key);
+                if (!m_stop_workers && region_prep_job.generation_id == m_generation_id &&
+                    active != m_regions_preparing.end() &&
+                    active->second == region_prep_job.generation_id) {
+                    auto queued = m_region_prep_queued_mask.find(region_prep_job.region_key);
+                    if (queued != m_region_prep_queued_mask.end())
+                        queued->second = static_cast<uint8_t>(queued->second & ~region_prep_job.parts_mask);
 
-            // Persistent-world rule: an existing chunk file ALWAYS wins over procedural
-            // generation. A missing file means this is genuinely new terrain.
-            // Логи убраны намеренно: это тысячи std::endl (каждый со сбросом
-            // потока) из нескольких воркеров сразу — и лишняя работа, и точка
-            // конкуренции на std::cout при массовой загрузке мира.
-            if (world_file.load_chunk(job.position.x, job.position.y, job.position.z,
-                                      generation_folder,
-                                      chunk->get_blocks_mutable())) {
-                chunk->recalculate_metadata();
-                // Чанк только что прочитан с диска — он уже сохранён.
-                chunk->clear_modified();
-            } else {
-                chunk->generate_blocks();
-                // Каждый сгенерированный чанк сразу пишется на диск. При быстром перемещении
-                // (игрок проходит десятки блоков в секунду) повторная генерация дороже чтения,
-                // а чанк, который уже лежит на диске, при следующей загрузке читается без генерации.
-                // Чанк ещё не передан главному потоку, поэтому запись из воркера безопасна.
-                const Region_File::Key key{job.position.x, job.position.y, job.position.z};
-                const auto region = Region_File::get(world_file.get_region_path(generation_folder));
-                if (!region || !m_chunk_io->enqueue_write(region, key, chunk->get_blocks())) {
-                    if (!world_file.save_chunk(job.position.x, job.position.y, job.position.z,
-                                               generation_folder, chunk->get_blocks())) {
-                        LOG_WARN("Cannot save generated chunk " + std::to_string(job.position.x) + " " +
-                                 std::to_string(job.position.y) + " " + std::to_string(job.position.z));
+                    if (region_ready) {
+                        const auto waiting = m_region_waiting_columns.find(region_prep_job.region_key);
+                        if (waiting != m_region_waiting_columns.end()) {
+                            for (Chunk_Column_Job& ready_column : waiting->second) {
+                                if (ready_column.generation_id != m_generation_id || ready_column.chunks.empty())
+                                    continue;
+                                if (prep_failed) {
+                                    // A failed regional build must not create an infinite retry loop.
+                                    for (const Chunk_Job& job : ready_column.chunks)
+                                        m_completed_jobs.push({job.position, job.generation_id, nullptr});
+                                    continue;
+                                }
+                                const int priority = ready_column.priority == std::numeric_limits<int>::max()
+                                    ? 0 : ready_column.priority;
+                                m_pending_jobs.push(Generation_Job{std::move(ready_column)}, priority);
+                                m_pending_job_count.fetch_add(1);
+                            }
+                            m_region_waiting_columns.erase(waiting);
+                        }
+                        m_regions_preparing.erase(active);
+                        m_region_prep_queued_mask.erase(region_prep_job.region_key);
+                    } else {
+                        const auto waiting = m_region_waiting_columns.find(region_prep_job.region_key);
+                        const int retry_priority = waiting != m_region_waiting_columns.end() &&
+                            !waiting->second.empty() ? waiting->second.front().priority : region_prep_job.priority;
+                        schedule_region_preparation_locked(region_prep_job.chunk_x,
+                            region_prep_job.chunk_z, region_prep_job.generation_id,
+                            retry_priority, region_prep_job.region_key, missing_parts);
                     }
                 }
             }
-            m_completed_jobs.push({job.position, job.generation_id, std::move(chunk)});
+            wake_workers();
+            continue;
+        }
+
+        // Cache eviction or a concurrent cache reset can occur between scheduling and execution.
+        // Never let an ordinary chunk worker pay a cold regional build: route the whole column
+        // back through the prewarm queue instead of blocking six generation workers on one future.
+        if (has_generation_job && !has_build_job && !has_region_prep_job && generator &&
+            !generator->generation_region_ready_for_chunk(column_job.chunk_x, column_job.chunk_z)) {
+            enqueue_generation_column(std::move(column_job));
+            continue;
+        }
+
+        if (has_generation_job) {
+            if (!generator) continue;
+            const auto save_and_publish = [&](const Chunk_Job& job, Chunk_Ptr chunk,
+                                              const std::shared_ptr<Region_File>& region) {
+                if (!chunk) {
+                    m_completed_jobs.push({job.position, job.generation_id, nullptr});
+                    return;
+                }
+                const Region_File::Key key{job.position.x, job.position.y, job.position.z};
+                if (!region || !m_chunk_io->enqueue_write(region, key, chunk->get_blocks())) {
+                    if (!world_file.save_chunk(job.position.x, job.position.y, job.position.z,
+                                               generation_folder, chunk->get_blocks())) {
+                        LOG_WARN("Cannot save generated chunk " +
+                            std::to_string(job.position.x) + " " +
+                            std::to_string(job.position.y) + " " +
+                            std::to_string(job.position.z));
+                    }
+                }
+                m_completed_jobs.push({job.position, job.generation_id, std::move(chunk)});
+            };
+
+            if (has_build_job) {
+                if (!build_job.chunk || !build_job.prepared) continue;
+                generator->generate_prepared_chunk(build_job.prepared, build_job.prepared_index,
+                    *build_job.chunk);
+                build_job.chunk->finish_generation(false, true);
+                const auto region = Region_File::get(
+                    world_file.get_region_path(generation_folder));
+                save_and_publish(build_job.job, std::move(build_job.chunk), region);
+            } else {
+                if (column_job.chunks.empty()) continue;
+                struct Fresh_Chunk {
+                    Chunk_Job job;
+                    Chunk_Ptr chunk;
+                };
+                std::vector<Fresh_Chunk> fresh;
+                fresh.reserve(column_job.chunks.size());
+                const auto region = Region_File::get(
+                    world_file.get_region_path(generation_folder));
+
+                // Disk data wins over procedural generation. Definitively empty chunks are
+                // completed immediately; all remaining Y levels share one immutable context.
+                for (const Chunk_Job& job : column_job.chunks) {
+                    if (job.generation_id != column_job.generation_id) continue;
+                    Chunk_Ptr chunk(m_chunk_pool->acquire(job.position.x, job.position.y,
+                                                           job.position.z, *generator),
+                                    Chunk_Slot_Release{m_chunk_pool.get()});
+                    if (!chunk) {
+                        m_completed_jobs.push({job.position, job.generation_id, nullptr});
+                        continue;
+                    }
+                    chunk->set_texture_atlas(m_texture_atlas);
+                    if (world_file.load_chunk(job.position.x, job.position.y, job.position.z,
+                                              generation_folder, chunk->get_blocks_mutable())) {
+                        chunk->recalculate_metadata();
+                        chunk->clear_modified();
+                        m_completed_jobs.push({job.position, job.generation_id, std::move(chunk)});
+                        continue;
+                    }
+
+                    if (generator->chunk_is_definitely_air(job.position.x, job.position.y,
+                                                           job.position.z)) {
+                        chunk->get_blocks_mutable().fill(Block_Types::Air);
+                        chunk->finish_generation(true);
+                        save_and_publish(job, std::move(chunk), region);
+                    } else {
+                        fresh.push_back({job, std::move(chunk)});
+                    }
+                }
+
+                if (!fresh.empty()) {
+                    std::vector<int> chunk_ys;
+                    chunk_ys.reserve(fresh.size());
+                    for (const Fresh_Chunk& item : fresh) chunk_ys.push_back(item.job.position.y);
+                    auto prepared = generator->prepare_chunk_column(
+                        column_job.chunk_x, column_job.chunk_z, chunk_ys);
+
+                    // Fan out only the expensive independent per-chunk fill/pack phase. Every
+                    // task carries its own Chunk_Ptr; the shared prepared data is read-only.
+                    for (size_t i = 0; i < fresh.size(); ++i) {
+                        Chunk_Build_Job build;
+                        build.job = fresh[i].job;
+                        build.chunk = std::move(fresh[i].chunk);
+                        build.prepared = prepared;
+                        build.prepared_index = i;
+                        const int priority = build.job.priority;
+                        m_pending_jobs.push(Generation_Job{std::move(build)}, priority);
+                        m_pending_job_count.fetch_add(1);
+                    }
+                    wake_workers();
+                }
+            }
         } else if (has_mesh_job) {
             if (!m_texture_atlas) {
                 continue;
@@ -710,40 +971,79 @@ void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
 }
 
 void Chunk_Manager::enqueue_chunk_load(int cx, int cy, int cz) {
-    if (is_chunk_loaded(cx, cy, cz) || m_requested_chunks.contains(cx, cy, cz)) {
-        return;
-    }
+    if (is_chunk_loaded(cx, cy, cz) || m_requested_chunks.contains(cx, cy, cz)) return;
     if (!m_world_generator) {
         LOG_ERROR("Chunk_Manager::enqueue_chunk_load: World_Generator is not set");
         return;
     }
-
-    m_requested_chunks.insert(cx, cy, cz);
-
-    // Если чанк уже сохранён (на диске или в очереди записи), его читает пачками m_disk_reader,
-    // иначе генерирует воркер.
-    const Region_File::Key key{cx, cy, cz};
-    const auto region = Region_File::get(m_world_file.get_region_path(m_generation_folder));
-    const bool on_disk = region && m_chunk_io->has_saved(region, key);
-
-    // Вертикаль весим сильнее горизонтали: игроку важнее сначала получить свой собственный
-    // "этаж" мира по всем сторонам, чем далёкое небо/подземелье в двух шагах по горизонтали.
-    // Так пользователь видит законченный, стоящий на земле мир вокруг себя быстрее — даже
-    // если весь остальной столбец (все 8 чанков по Y, см. load_around) всё равно рано или
-    // поздно догрузится следом.
     const int priority = chunk_job_priority(cx, cy, cz);
+    const Chunk_Job chunk{{cx, cy, cz}, m_generation_id, priority};
+    enqueue_chunk_column_load(cx, cz, std::vector<Chunk_Job>{chunk});
+}
 
-    if (on_disk) {
+void Chunk_Manager::enqueue_chunk_column_load(int cx, int cz, const std::vector<Chunk_Job>& requested) {
+    if (!m_world_generator || requested.empty()) return;
+
+    Chunk_Column_Job generation_column;
+    generation_column.chunk_x = cx;
+    generation_column.chunk_z = cz;
+    generation_column.generation_id = m_generation_id;
+    generation_column.priority = std::numeric_limits<int>::max();
+    generation_column.chunks.reserve(requested.size());
+    std::vector<Chunk_Job> disk_jobs;
+    disk_jobs.reserve(requested.size());
+
+    const auto region = Region_File::get(m_world_file.get_region_path(m_generation_folder));
+    for (const Chunk_Job& input : requested) {
+        const int cy = input.position.y;
+        if (input.position.x != cx || input.position.z != cz ||
+            is_chunk_loaded(cx, cy, cz) || m_requested_chunks.contains(cx, cy, cz))
+            continue;
+
+        m_requested_chunks.insert(cx, cy, cz);
+        const Chunk_Job job{{cx, cy, cz}, m_generation_id,
+                            input.priority >= 0 ? input.priority : chunk_job_priority(cx, cy, cz)};
+        const Region_File::Key key{cx, cy, cz};
+        const bool on_disk = region && m_chunk_io->has_saved(region, key);
+        if (on_disk) {
+            disk_jobs.push_back(job);
+        } else {
+            generation_column.priority = std::min(generation_column.priority, job.priority);
+            generation_column.chunks.push_back(job);
+        }
+    }
+
+    if (!disk_jobs.empty()) {
         {
             std::lock_guard<std::mutex> lock(m_job_mutex);
-            m_pending_disk_reads.push_back({{cx, cy, cz}, m_generation_id, priority});
+            for (const Chunk_Job& job : disk_jobs) m_pending_disk_reads.push_back(job);
         }
         m_job_available.notify_all();
-    } else {
-        const Chunk_Job job{{cx, cy, cz}, m_generation_id, priority};
-        m_pending_jobs.push(job, priority);
-        m_pending_job_count.fetch_add(1);
-        wake_workers();
+
+        // Even disk-loaded chunks can ask World_Generator for procedural neighbour samples
+        // while their mesh is built. Start warming this region before those mesh jobs need it.
+        if (generation_column.chunks.empty()) {
+            const uint8_t missing_parts = m_world_generator->generation_region_missing_parts_for_chunk(cx, cz);
+            if (missing_parts != 0) {
+                const int64_t key = generation_region_key_for_chunk(cx, cz);
+                bool wake = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_job_mutex);
+                    if (!m_stop_workers && generation_column.generation_id == m_generation_id) {
+                        schedule_region_preparation_locked(cx, cz, generation_column.generation_id,
+                            chunk_job_priority(cx, m_player_chunk_y, cz), key, missing_parts);
+                        wake = true;
+                    }
+                }
+                if (wake) wake_workers();
+            }
+        }
+    }
+
+    if (!generation_column.chunks.empty()) {
+        if (generation_column.priority == std::numeric_limits<int>::max())
+            generation_column.priority = 0;
+        enqueue_generation_column(std::move(generation_column));
     }
 }
 
@@ -813,24 +1113,47 @@ void Chunk_Manager::refresh_view_rings() {
 }
 
 void Chunk_Manager::reprioritize_pending_jobs() {
-    // Вызывается только с главного потока: забираем все задачи и кладём обратно с новым приоритетом.
-    // Задача, которую в этот момент взял воркер, из очереди уже не выйдет повторно.
-    std::vector<Chunk_Job> jobs;
-    Chunk_Job taken;
+    // Re-score both not-yet-prepared columns and individual chunk-build tasks. When the player
+    // moves, stale individual tasks are released (including their shared prepared context).
+    std::vector<Generation_Job> jobs;
+    Generation_Job taken;
     while (m_pending_jobs.try_pop(taken)) {
         m_pending_job_count.fetch_sub(1);
-        jobs.push_back(taken);
+        jobs.push_back(std::move(taken));
+        taken = Generation_Job{};
     }
-    for (Chunk_Job& job : jobs) {
-        const glm::ivec3& p = job.position;
-        if (!is_chunk_wanted(p)) {
-            // Игрок ушёл, чанк больше не нужен: задача снимается, а не генерируется впустую.
-            m_requested_chunks.erase(p.x, p.y, p.z);
-            continue;
+
+    for (Generation_Job& item : jobs) {
+        if (auto* column = std::get_if<Chunk_Column_Job>(&item)) {
+            std::vector<Chunk_Job> kept;
+            kept.reserve(column->chunks.size());
+            int column_priority = std::numeric_limits<int>::max();
+            for (Chunk_Job& job : column->chunks) {
+                const glm::ivec3& p = job.position;
+                if (!is_chunk_wanted(p)) {
+                    m_requested_chunks.erase(p.x, p.y, p.z);
+                    continue;
+                }
+                job.priority = chunk_job_priority(p.x, p.y, p.z);
+                column_priority = std::min(column_priority, job.priority);
+                kept.push_back(job);
+            }
+            if (kept.empty()) continue;
+            column->chunks = std::move(kept);
+            column->priority = column_priority;
+            m_pending_jobs.push(Generation_Job{std::move(*column)}, column_priority);
+            m_pending_job_count.fetch_add(1);
+        } else if (auto* build = std::get_if<Chunk_Build_Job>(&item)) {
+            const glm::ivec3& p = build->job.position;
+            if (!is_chunk_wanted(p)) {
+                m_requested_chunks.erase(p.x, p.y, p.z);
+                continue;
+            }
+            build->job.priority = chunk_job_priority(p.x, p.y, p.z);
+            const int priority = build->job.priority;
+            m_pending_jobs.push(Generation_Job{std::move(*build)}, priority);
+            m_pending_job_count.fetch_add(1);
         }
-        job.priority = chunk_job_priority(p.x, p.y, p.z);
-        m_pending_jobs.push(job, job.priority);
-        m_pending_job_count.fetch_add(1);
     }
 }
 
@@ -1076,9 +1399,8 @@ void Chunk_Manager::set_load_radius(int radius) {
 }
 
 void Chunk_Manager::load_around(int player_cx, int player_cz) {
-    // Кандидаты — все незагруженные и незапрошенные чанки окна; ставятся в очередь по приоритету
-    // и не больше лимита, чтобы очередь не раздувалась на быстром движении. Остальное доливается
-    // из update_player_position, когда очередь освободится.
+    // Берём бюджет чанков, но планируем работу целыми X/Z-колонками. Так девять соседних
+    // вертикальных уровней обычно попадают в одну задачу и используют общие 2D-вычисления.
     const size_t cap = max_inflight_chunks();
     const size_t inflight = m_requested_chunks.size();
     if (inflight >= cap) {
@@ -1086,30 +1408,54 @@ void Chunk_Manager::load_around(int player_cx, int player_cz) {
         return;
     }
 
-    struct Candidate { glm::ivec3 position; int priority; };
-    std::vector<Candidate> candidates;
+    struct ColumnCandidate {
+        int cx = 0, cz = 0;
+        int priority = std::numeric_limits<int>::max();
+        std::vector<Chunk_Job> chunks;
+    };
+    std::vector<ColumnCandidate> columns;
     const int min_cy = std::max(Config::world_min_chunk_y, m_player_chunk_y - m_vertical_half);
-    const int max_cy = std::min(Config::world_max_chunk_y, m_player_chunk_y + m_vertical_half - 1);
+    // Include both ends of the vertical radius: normal mode queues 9 levels (-4..+4),
+    // reduced mode queues 5 (-2..+2), matching is_chunk_wanted().
+    const int max_cy = std::min(Config::world_max_chunk_y, m_player_chunk_y + m_vertical_half);
+
     for (int cx = player_cx - m_load_radius; cx <= player_cx + m_load_radius; ++cx) {
         for (int cz = player_cz - m_load_radius; cz <= player_cz + m_load_radius; ++cz) {
+            ColumnCandidate column;
+            column.cx = cx;
+            column.cz = cz;
+            column.chunks.reserve(static_cast<size_t>(max_cy - min_cy + 1));
             for (int cy = min_cy; cy <= max_cy; ++cy) {
                 if (is_chunk_loaded(cx, cy, cz) || m_requested_chunks.contains(cx, cy, cz)) continue;
-                candidates.push_back({{cx, cy, cz}, chunk_job_priority(cx, cy, cz)});
+                const int priority = chunk_job_priority(cx, cy, cz);
+                column.chunks.push_back({{cx, cy, cz}, m_generation_id, priority});
+                column.priority = std::min(column.priority, priority);
             }
+            if (!column.chunks.empty()) columns.push_back(std::move(column));
         }
     }
 
-    const size_t budget = cap - inflight;
-    const size_t take = std::min(budget, candidates.size());
-    std::partial_sort(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(take),
-                      candidates.end(), [](const Candidate& a, const Candidate& b) {
-                          return a.priority < b.priority;
-                      });
-    for (size_t i = 0; i < take; ++i) {
-        const glm::ivec3& p = candidates[i].position;
-        enqueue_chunk_load(p.x, p.y, p.z);
+    std::sort(columns.begin(), columns.end(), [](const ColumnCandidate& a, const ColumnCandidate& b) {
+        return a.priority < b.priority;
+    });
+
+    size_t budget = cap - inflight;
+    bool skipped = false;
+    for (const ColumnCandidate& column : columns) {
+        // Не разрываем девятиуровневую пачку, если она помещается в бюджет. Если она не
+        // помещается, пробуем следующие более компактные колонки (например, у границ мира).
+        if (column.chunks.size() > budget) {
+            skipped = true;
+            continue;
+        }
+        enqueue_chunk_column_load(column.cx, column.cz, column.chunks);
+        budget -= column.chunks.size();
+        if (budget == 0) {
+            skipped = true;
+            break;
+        }
     }
-    m_load_backlog = candidates.size() > take;
+    m_load_backlog = skipped;
 }
 
 void Chunk_Manager::unload_distant(int center_cx, int center_cz, int max_distance) {
@@ -1189,6 +1535,7 @@ void Chunk_Manager::update_player_position(float player_x, float player_y, float
     m_player_chunk = {player_cx, player_cz};
     m_player_chunk_y = player_cy;
     refresh_view_rings();
+    prewarm_generation_regions_near_player();
 
     // Очередь пересортировывается по новой позиции до постановки новых задач: ближайшие к игроку
     // чанки всегда идут первыми, а дальние задачи, оставшиеся позади, снимаются.
@@ -1570,9 +1917,13 @@ void Chunk_Manager::clear() {
     {
         std::lock_guard<std::mutex> lock(m_job_mutex);
         m_pending_jobs.clear();
+        m_pending_region_prep_jobs.clear();
         m_pending_job_count.store(0);
         m_pending_mesh_jobs.clear();
         m_pending_mesh_count.store(0);
+        m_region_waiting_columns.clear();
+        m_regions_preparing.clear();
+        m_region_prep_queued_mask.clear();
     }
     m_completed_jobs.clear();
     m_completed_mesh_jobs.clear();
@@ -3108,7 +3459,11 @@ void Chunk_Manager::end_capture_region() {
     {
         std::lock_guard<std::mutex> lock(m_job_mutex);
         m_pending_jobs.clear();
+        m_pending_region_prep_jobs.clear();
         m_pending_job_count.store(0);
+        m_region_waiting_columns.clear();
+        m_regions_preparing.clear();
+        m_region_prep_queued_mask.clear();
     }
     m_requested_chunks.clear();
 

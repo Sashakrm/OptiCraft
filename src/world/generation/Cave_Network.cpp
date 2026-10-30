@@ -3,7 +3,9 @@
 #include "OpenSimplex2S.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -151,16 +153,31 @@ private:
         const int zb = std::min(m_region.z0 + kRegion - 1, static_cast<int>(std::ceil(cz + rxz)));
         const int ya = std::max(Cave_Network::kNetworkMinY, static_cast<int>(std::floor(cy - ry)));
         const int yb = std::min(Cave_Network::kNetworkMaxY, static_cast<int>(std::ceil(cy + ry)));
+        // The same vertical distance is reused for every X/Z cell in the worm's bounds.
+        // Cache its square, then hoist dx/dz out of the Y loop; columns outside the X/Z
+        // projection of the ellipsoid cannot contain any carved voxel.
+        std::array<double, kNetNY> dy_squared;
+        for (int y = ya; y <= yb; ++y) {
+            const double dy = (y + 0.5 - cy) / ry;
+            dy_squared[static_cast<size_t>(y - ya)] = dy * dy;
+        }
+        constexpr size_t kPlane = static_cast<size_t>(kRegion) * kRegion;
         for (int wz = za; wz <= zb; ++wz) {
+            const double dz = (wz + 0.5 - cz) / rxz;
+            const double dz2 = dz * dz;
+            const size_t row = static_cast<size_t>(wz - m_region.z0) * kRegion;
             for (int wx = xa; wx <= xb; ++wx) {
+                const double dx = (wx + 0.5 - cx) / rxz;
+                const double dx2 = dx * dx;
+                if (dx2 + dz2 > 1.0) continue;
                 const int h = height(wx, wz);
                 const int limit = shaft ? h : h - kRoof;
+                if (ya > limit) continue;
+                const size_t base = static_cast<size_t>(ya - Cave_Network::kNetworkMinY) * kPlane +
+                    row + static_cast<size_t>(wx - m_region.x0);
                 for (int y = ya; y <= yb && y <= limit; ++y) {
-                    const double dx = (wx + 0.5 - cx) / rxz;
-                    const double dy = (y + 0.5 - cy) / ry;
-                    const double dz = (wz + 0.5 - cz) / rxz;
-                    if (dx * dx + dy * dy + dz * dz > 1.0) continue;
-                    set_bit(m_region.net, net_index(wx - m_region.x0, y, wz - m_region.z0));
+                    if (dx2 + dy_squared[static_cast<size_t>(y - ya)] + dz2 > 1.0) continue;
+                    set_bit(m_region.net, base + static_cast<size_t>(y - ya) * kPlane);
                 }
             }
         }
@@ -284,14 +301,25 @@ private:
         const int zb = std::min(m_region.z0 + kRegion - 1, static_cast<int>(std::ceil(cz + rxz)));
         const int ya = std::max(Cave_Network::kSealedMinY, static_cast<int>(std::floor(cy - ry)));
         const int yb = std::min(Cave_Network::kSealedMaxY, static_cast<int>(std::ceil(cy + ry)));
+        std::array<double, kSealedNY> dy_squared;
+        for (int y = ya; y <= yb; ++y) {
+            const double dy = (y + 0.5 - cy) / ry;
+            dy_squared[static_cast<size_t>(y - ya)] = dy * dy;
+        }
+        constexpr size_t kPlane = static_cast<size_t>(kRegion) * kRegion;
         for (int wz = za; wz <= zb; ++wz) {
+            const double dz = (wz + 0.5 - cz) / rxz;
+            const double dz2 = dz * dz;
+            const size_t row = static_cast<size_t>(wz - m_region.z0) * kRegion;
             for (int wx = xa; wx <= xb; ++wx) {
+                const double dx = (wx + 0.5 - cx) / rxz;
+                const double dx2 = dx * dx;
+                if (dx2 + dz2 > 1.0) continue;
+                const size_t base = static_cast<size_t>(ya - Cave_Network::kSealedMinY) * kPlane +
+                    row + static_cast<size_t>(wx - m_region.x0);
                 for (int y = ya; y <= yb; ++y) {
-                    const double dx = (wx + 0.5 - cx) / rxz;
-                    const double dy = (y + 0.5 - cy) / ry;
-                    const double dz = (wz + 0.5 - cz) / rxz;
-                    if (dx * dx + dy * dy + dz * dz > 1.0) continue;
-                    const size_t i = sealed_index(wx - m_region.x0, y, wz - m_region.z0);
+                    if (dx2 + dy_squared[static_cast<size_t>(y - ya)] + dz2 > 1.0) continue;
+                    const size_t i = base + static_cast<size_t>(y - ya) * kPlane;
                     set_bit(m_region.sealed, i);
                     if (flood) set_bit(m_region.flood, i);
                 }
@@ -300,25 +328,51 @@ private:
     }
 
     // Вода сети: воздух сети ниже уровня моря, который соприкасается с водяной колонкой.
-    // Вода распространяется только по прямому контакту — это локальное, детерминированное
-    // правило, не требующее обхода связности через границы регионов.
+    // Перебираем только единичные биты `net`, вместо проверки каждого вокселя региона
+    // (до ~21 млн проверок на регион). Установленные биты идут по возрастанию индекса,
+    // то есть порядок обхода [y][z][x] и порядок проверки шести соседей остаются прежними.
     void mark_water() {
-        for (int lz = 0; lz < kRegion; ++lz) {
-            for (int lx = 0; lx < kRegion; ++lx) {
-                const int wx = m_region.x0 + lx, wz = m_region.z0 + lz;
-                const int ymax = std::min(Cave_Network::kNetworkMaxY, m_sea);
-                for (int y = Cave_Network::kNetworkMinY; y <= ymax; ++y) {
-                    const size_t i = net_index(lx, y, lz);
-                    if (!get_bit(m_region.net, i)) continue;
-                    const int nx[6] = {wx + 1, wx - 1, wx, wx, wx, wx};
-                    const int nz[6] = {wz, wz, wz, wz, wz + 1, wz - 1};
-                    const int ny[6] = {y, y, y + 1, y - 1, y, y};
-                    for (int k = 0; k < 6; ++k) {
-                        if (ny[k] <= m_sea && ny[k] > height(nx[k], nz[k])) {
-                            set_bit(m_region.water, i);
-                            break;
-                        }
-                    }
+        const int ymax = std::min(Cave_Network::kNetworkMaxY, m_sea);
+        if (ymax < Cave_Network::kNetworkMinY) return;
+
+        // Заполняем кэш высот для области региона плюс один соседний столбец со всех сторон.
+        // После этого все шесть тестов могут читать m_hval напрямую вместо повторных вызовов
+        // height(), чьи границы/кэш-проверки повторялись для каждого пещерного вокселя.
+        for (int lz = -1; lz <= kRegion; ++lz) {
+            const int wz = m_region.z0 + lz;
+            for (int lx = -1; lx <= kRegion; ++lx) {
+                (void)height(m_region.x0 + lx, wz);
+            }
+        }
+
+        constexpr size_t kPlane = static_cast<size_t>(kRegion) * kRegion;
+        constexpr size_t kRow = static_cast<size_t>(kRegion);
+        const size_t cells_to_scan = static_cast<size_t>(ymax - Cave_Network::kNetworkMinY + 1) * kPlane;
+        const size_t words_to_scan = cells_to_scan / 64;
+        const size_t cached_center = static_cast<size_t>(kMargin) * m_area + kMargin;
+
+        for (size_t wi = 0; wi < words_to_scan; ++wi) {
+            uint64_t bits = m_region.net[wi];
+            while (bits != 0) {
+                const unsigned bit = std::countr_zero(bits);
+                bits &= bits - 1;
+                const size_t i = wi * 64 + bit;
+
+                const int y = Cave_Network::kNetworkMinY + static_cast<int>(i / kPlane);
+                const size_t within_plane = i & (kPlane - 1);
+                const int lx = static_cast<int>(within_plane & (kRow - 1));
+                const int lz = static_cast<int>(within_plane / kRow);
+                const size_t hidx = cached_center + static_cast<size_t>(lz) * m_area + lx;
+                const int center_h = m_hval[hidx];
+
+                // Preserve the original short-circuit order: +X, -X, +Y, -Y, +Z, -Z.
+                if (y > m_hval[hidx + 1] ||
+                    y > m_hval[hidx - 1] ||
+                    (y + 1 <= m_sea && y + 1 > center_h) ||
+                    (y - 1 <= m_sea && y - 1 > center_h) ||
+                    y > m_hval[hidx + m_area] ||
+                    y > m_hval[hidx - m_area]) {
+                    set_bit(m_region.water, i);
                 }
             }
         }
@@ -354,6 +408,18 @@ Cave_Network::~Cave_Network() = default;
 
 void Cave_Network::clear_cache() const {
     m_regions.clear();
+}
+
+bool Cave_Network::region_ready_at(int world_x, int world_z) const {
+    const int rx = floordiv(world_x, kRegion);
+    const int rz = floordiv(world_z, kRegion);
+    const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(rx)) << 32) |
+                            static_cast<uint32_t>(rz);
+    return m_regions.is_ready(static_cast<int64_t>(packed));
+}
+
+void Cave_Network::prewarm_region_at(int world_x, int world_z) const {
+    (void)fetch_region(floordiv(world_x, kRegion), floordiv(world_z, kRegion));
 }
 
 std::shared_ptr<const Cave_Network::Region> Cave_Network::fetch_region(int rx, int rz) const {
@@ -408,3 +474,61 @@ Cave_Kind Cave_Network::kind_at(int world_x, int world_y, int world_z) const {
     }
     return Cave_Kind::None;
 }
+
+void Cave_Network::fill_column_kinds(int world_x, int world_z, int first_y, int count,
+                                     Cave_Kind* out, size_t y_stride) const {
+    if (!out || count <= 0 || y_stride == 0) return;
+
+    const int last_y = first_y + count - 1;
+    if (last_y < kSealedMinY || first_y > kNetworkMaxY) {
+        for (int i = 0; i < count; ++i) out[static_cast<size_t>(i) * y_stride] = Cave_Kind::None;
+        return;
+    }
+
+    const int rx = floordiv(world_x, kRegion);
+    const int rz = floordiv(world_z, kRegion);
+    struct Last_Region {
+        uint64_t owner = 0;
+        int rx = 0, rz = 0;
+        std::shared_ptr<const Region> region;
+    };
+    thread_local Last_Region last;
+    if (!(last.region && last.owner == m_id && last.rx == rx && last.rz == rz)) {
+        last.region = fetch_region(rx, rz);
+        last.owner = m_id;
+        last.rx = rx;
+        last.rz = rz;
+    }
+
+    const Region& r = *last.region;
+    const int lx = world_x - r.x0;
+    const int lz = world_z - r.z0;
+    const size_t xz = static_cast<size_t>(lz) * kRegion + lx;
+    const size_t net_xz = xz;
+    const size_t sealed_xz = xz;
+    const size_t net_y_stride = static_cast<size_t>(kRegion) * kRegion;
+    const size_t sealed_y_stride = net_y_stride;
+
+    for (int i = 0; i < count; ++i) {
+        const int y = first_y + i;
+        Cave_Kind result = Cave_Kind::None;
+        if (y >= kNetworkMinY && y <= kNetworkMaxY) {
+            const size_t index = static_cast<size_t>(y - kNetworkMinY) * net_y_stride + net_xz;
+            const uint64_t bit = uint64_t{1} << (index & 63);
+            const uint64_t word = r.net[index >> 6];
+            if (word & bit) {
+                result = (r.water[index >> 6] & bit) ? Cave_Kind::Water : Cave_Kind::Air;
+            }
+        }
+        if (result == Cave_Kind::None && y >= kSealedMinY && y <= kSealedMaxY) {
+            const size_t index = static_cast<size_t>(y - kSealedMinY) * sealed_y_stride + sealed_xz;
+            const uint64_t bit = uint64_t{1} << (index & 63);
+            const uint64_t word = r.sealed[index >> 6];
+            if (word & bit) {
+                result = (r.flood[index >> 6] & bit) ? Cave_Kind::Sealed_Flooded : Cave_Kind::Sealed_Dry;
+            }
+        }
+        out[static_cast<size_t>(i) * y_stride] = result;
+    }
+}
+

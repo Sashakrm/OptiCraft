@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <queue>
 #include <utility>
 #include <vector>
@@ -42,6 +45,162 @@ inline int64_t region_key(int rx, int rz) {
 constexpr int kNeighborDx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 constexpr int kNeighborDz[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
+// The priority-flood is a monotone shortest-path style process: every newly pushed
+// filled height is max(smooth[cell], popped_height), and can never be below the last
+// popped height. A radix heap exploits that property and avoids O(log N) heap work for
+// each of ~590k cells. It preserves std::pair<double,int> order exactly: numeric height
+// first, cell index second (including treating -0.0 and +0.0 as equal, like double ==).
+class Index_Bitset_Min_Queue {
+public:
+    explicit Index_Bitset_Min_Queue(size_t count)
+        : m_words0((count + 63) / 64, 0),
+          m_words1((m_words0.size() + 63) / 64, 0),
+          m_words2((m_words1.size() + 63) / 64, 0) {}
+
+    bool empty() const { return m_top == 0; }
+
+    void push(int index) {
+        const size_t word0 = static_cast<size_t>(index) >> 6;
+        const uint64_t bit0 = uint64_t{1} << (static_cast<unsigned>(index) & 63u);
+        if (m_words0[word0] & bit0) return; // cells are unique; defensive against duplicates
+        const bool was_empty0 = m_words0[word0] == 0;
+        m_words0[word0] |= bit0;
+        if (!was_empty0) return;
+
+        const size_t word1 = word0 >> 6;
+        const uint64_t bit1 = uint64_t{1} << (word0 & 63u);
+        const bool was_empty1 = m_words1[word1] == 0;
+        m_words1[word1] |= bit1;
+        if (!was_empty1) return;
+
+        const size_t word2 = word1 >> 6;
+        const uint64_t bit2 = uint64_t{1} << (word1 & 63u);
+        const bool was_empty2 = m_words2[word2] == 0;
+        m_words2[word2] |= bit2;
+        if (was_empty2) m_top |= uint64_t{1} << word2;
+    }
+
+    int pop_min() {
+        const size_t word2 = static_cast<size_t>(std::countr_zero(m_top));
+        const size_t word1 = word2 * 64 + static_cast<size_t>(std::countr_zero(m_words2[word2]));
+        const size_t word0 = word1 * 64 + static_cast<size_t>(std::countr_zero(m_words1[word1]));
+        const unsigned bit0_index = std::countr_zero(m_words0[word0]);
+        const int result = static_cast<int>(word0 * 64 + bit0_index);
+        m_words0[word0] &= ~(uint64_t{1} << bit0_index);
+        if (m_words0[word0] != 0) return result;
+
+        m_words1[word1] &= ~(uint64_t{1} << (word0 & 63u));
+        if (m_words1[word1] != 0) return result;
+
+        m_words2[word2] &= ~(uint64_t{1} << (word1 & 63u));
+        if (m_words2[word2] == 0) m_top &= ~(uint64_t{1} << word2);
+        return result;
+    }
+
+private:
+    std::vector<uint64_t> m_words0;
+    std::vector<uint64_t> m_words1;
+    std::vector<uint64_t> m_words2;
+    uint64_t m_top = 0; // current workload has fewer than 64 words at level 2
+};
+
+class Monotone_Double_Queue {
+public:
+    explicit Monotone_Double_Queue(const std::vector<double>& values)
+        : m_values(values), m_zero(values.size()) {
+        m_buckets.resize(65);
+    }
+
+    void set_initial_floor(double value) {
+        // Seed cells are inserted before the flood begins and their heights are not
+        // monotonic in scan order. Start at their minimum to keep the radix invariant.
+        m_last = sortable_key(value);
+    }
+
+    void reserve(size_t count) {
+        // Buckets are re-used on every redistribution. Reserving the top buckets avoids
+        // large reallocations for the bulk of entries, while the zero-key set is bit-packed.
+        m_buckets[64].reserve(count / 8);
+        m_buckets[63].reserve(count / 8);
+    }
+
+    bool empty() const { return m_size == 0; }
+
+    void push(int index) {
+        const uint64_t key = sortable_key(m_values[static_cast<size_t>(index)]);
+        // With a valid priority flood, keys never go below m_last after seeding. Keep
+        // a defensive fallback should a future update violate that invariant.
+        if (key < m_last) {
+            m_last = key;
+            redistribute_all();
+        }
+        push_with_key(index, key);
+        ++m_size;
+    }
+
+    int pop_min() {
+        if (m_zero.empty()) refill_zero();
+        const int result = m_zero.pop_min();
+        --m_size;
+        return result;
+    }
+
+private:
+    static uint64_t sortable_key(double value) {
+        if (value == 0.0) value = 0.0; // coalesce negative zero to match pair<double,int>
+        const uint64_t bits = std::bit_cast<uint64_t>(value);
+        return (bits & (uint64_t{1} << 63)) ? ~bits : (bits ^ (uint64_t{1} << 63));
+    }
+
+    static unsigned bucket_for(uint64_t diff) {
+        return std::bit_width(diff); // 0 for equal keys; 1..64 otherwise
+    }
+
+    void push_with_key(int index, uint64_t key) {
+        const unsigned bucket = bucket_for(key ^ m_last);
+        if (bucket == 0) m_zero.push(index);
+        else m_buckets[bucket].push_back(index);
+    }
+
+    void refill_zero() {
+        size_t bucket = 1;
+        while (bucket < m_buckets.size() && m_buckets[bucket].empty()) ++bucket;
+        if (bucket == m_buckets.size()) return;
+
+        uint64_t next = UINT64_MAX;
+        for (const int index : m_buckets[bucket])
+            next = std::min(next, sortable_key(m_values[static_cast<size_t>(index)]));
+        m_last = next;
+
+        auto& source = m_buckets[bucket];
+        for (const int index : source) {
+            const uint64_t key = sortable_key(m_values[static_cast<size_t>(index)]);
+            const unsigned target = bucket_for(key ^ m_last);
+            if (target == 0) m_zero.push(index);
+            else m_buckets[target].push_back(index);
+        }
+        source.clear();
+    }
+
+    void redistribute_all() {
+        // Unreachable in normal priority flood. Preserve correctness if a future terrain
+        // rule violates monotonicity; this path is not taken by valid terrain inputs.
+        std::vector<int> all;
+        for (auto& bucket : m_buckets) {
+            all.insert(all.end(), bucket.begin(), bucket.end());
+            bucket.clear();
+        }
+        while (!m_zero.empty()) all.push_back(m_zero.pop_min());
+        for (const int index : all)
+            push_with_key(index, sortable_key(m_values[static_cast<size_t>(index)]));
+    }
+
+    const std::vector<double>& m_values;
+    Index_Bitset_Min_Queue m_zero;
+    std::vector<std::vector<int>> m_buckets;
+    uint64_t m_last = 0;
+    size_t m_size = 0;
+};
 } // namespace
 
 struct River_Network::Region {
@@ -74,6 +233,18 @@ void River_Network::clear_cache() const {
     m_regions.clear();
 }
 
+bool River_Network::region_ready_at(int world_x, int world_z) const {
+    const int rx = floordiv(world_x, kRegion);
+    const int rz = floordiv(world_z, kRegion);
+    const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(rx)) << 32) |
+                            static_cast<uint32_t>(rz);
+    return m_regions.is_ready(static_cast<int64_t>(packed));
+}
+
+void River_Network::prewarm_region_at(int world_x, int world_z) const {
+    (void)fetch_region(floordiv(world_x, kRegion), floordiv(world_z, kRegion));
+}
+
 std::shared_ptr<const River_Network::Region> River_Network::fetch_region(int rx, int rz) const {
     // Построение идёт без общего замка: см. Region_Cache.
     return m_regions.get(region_key(rx, rz), static_cast<size_t>(kCacheRegions),
@@ -90,6 +261,7 @@ std::shared_ptr<const River_Network::Region> River_Network::fetch_region(int rx,
 //  6) реки — клетки с большим водосбором; их уровень воды чуть ниже рельефа, поэтому русло идёт
 //     по склону и не режет горы глубже нескольких блоков.
 std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int rz) const {
+
     auto region = std::make_shared<Region>();
     region->x0 = rx * kRegion;
     region->z0 = rz * kRegion;
@@ -127,22 +299,42 @@ std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int r
     // 2) Сглаживание рельефа: box-фильтр, отдельно по X и по Z (разделимый).
     std::vector<double> tmp(n_cells);
     std::vector<double> smooth(n_cells);
+    // Keep exactly the same left-to-right sum order as the original radius-2 box filter,
+    // but use a branch-free interior path. More than 99% of samples are interior, where
+    // the old inner loop performed five clamps and five index calculations per cell.
     for (int lz = 0; lz < kWin; ++lz) {
+        const size_t row = static_cast<size_t>(lz) * kWin;
         for (int lx = 0; lx < kWin; ++lx) {
             double sum = 0.0;
-            for (int d = -kSmoothRadius; d <= kSmoothRadius; ++d) {
-                const int x = std::clamp(lx + d, 0, kWin - 1);
-                sum += height[static_cast<size_t>(lz) * kWin + x];
+            if (lx >= kSmoothRadius && lx < kWin - kSmoothRadius) {
+                sum += height[row + static_cast<size_t>(lx - 2)];
+                sum += height[row + static_cast<size_t>(lx - 1)];
+                sum += height[row + static_cast<size_t>(lx)];
+                sum += height[row + static_cast<size_t>(lx + 1)];
+                sum += height[row + static_cast<size_t>(lx + 2)];
+            } else {
+                for (int d = -kSmoothRadius; d <= kSmoothRadius; ++d) {
+                    const int x = std::clamp(lx + d, 0, kWin - 1);
+                    sum += height[row + static_cast<size_t>(x)];
+                }
             }
-            tmp[static_cast<size_t>(lz) * kWin + lx] = sum / (2 * kSmoothRadius + 1);
+            tmp[row + static_cast<size_t>(lx)] = sum / (2 * kSmoothRadius + 1);
         }
     }
     for (int lz = 0; lz < kWin; ++lz) {
         for (int lx = 0; lx < kWin; ++lx) {
             double sum = 0.0;
-            for (int d = -kSmoothRadius; d <= kSmoothRadius; ++d) {
-                const int z = std::clamp(lz + d, 0, kWin - 1);
-                sum += tmp[static_cast<size_t>(z) * kWin + lx];
+            if (lz >= kSmoothRadius && lz < kWin - kSmoothRadius) {
+                sum += tmp[static_cast<size_t>(lz - 2) * kWin + lx];
+                sum += tmp[static_cast<size_t>(lz - 1) * kWin + lx];
+                sum += tmp[static_cast<size_t>(lz) * kWin + lx];
+                sum += tmp[static_cast<size_t>(lz + 1) * kWin + lx];
+                sum += tmp[static_cast<size_t>(lz + 2) * kWin + lx];
+            } else {
+                for (int d = -kSmoothRadius; d <= kSmoothRadius; ++d) {
+                    const int z = std::clamp(lz + d, 0, kWin - 1);
+                    sum += tmp[static_cast<size_t>(z) * kWin + lx];
+                }
             }
             smooth[static_cast<size_t>(lz) * kWin + lx] = sum / (2 * kSmoothRadius + 1);
         }
@@ -152,42 +344,75 @@ std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int r
     // filled — уровень, до которого поднимается вода в клетке (для не-низин совпадает с рельефом).
     // parent — куда стекает клетка; order — порядок выхода из очереди (потомки после предков).
     std::vector<double> filled(n_cells, 0.0);
+    // parent also tracks visitation: -1 = not discovered, -2 = drainage seed/root,
+    // >= 0 = parent cell. This removes a separate byte-per-cell array and a memory touch
+    // on every neighbour visit while preserving the parent's later accumulation semantics.
     std::vector<int> parent(n_cells, -1);
-    std::vector<uint8_t> visited(n_cells, 0);
     std::vector<int> order;
     order.reserve(n_cells);
 
-    using Entry = std::pair<double, int>;   // (filled, index)
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> queue;
+    Monotone_Double_Queue queue(filled);
+    queue.reserve(n_cells);
+    // Initialize the radix lower bound to the minimum seed key. Without this pass,
+    // negative terrain cells inserted later in scan order would trigger expensive
+    // whole-queue redistributions before the priority flood had even started.
+    double minimum_seed_height = std::numeric_limits<double>::infinity();
+    for (int lz = 0; lz < kWin; ++lz) {
+        for (int lx = 0; lx < kWin; ++lx) {
+            const size_t k = static_cast<size_t>(lz) * kWin + lx;
+            const bool edge = lx == 0 || lz == 0 || lx == kWin - 1 || lz == kWin - 1;
+            if (height[k] <= m_sea_level || edge)
+                minimum_seed_height = std::min(minimum_seed_height, smooth[k]);
+        }
+    }
+    queue.set_initial_floor(minimum_seed_height);
     for (int lz = 0; lz < kWin; ++lz) {
         for (int lx = 0; lx < kWin; ++lx) {
             const size_t k = static_cast<size_t>(lz) * kWin + lx;
             const bool edge = lx == 0 || lz == 0 || lx == kWin - 1 || lz == kWin - 1;
             if (height[k] <= m_sea_level || edge) {
-                visited[k] = 1;
+                parent[k] = -2;
                 filled[k] = smooth[k];
-                queue.emplace(filled[k], static_cast<int>(k));
+                queue.push(static_cast<int>(k));
             }
         }
     }
+    // Flat, fixed-order neighbour discovery avoids eight coordinate-pair calculations
+    // and a direction loop for every one of ~590k cells. The order is exactly the same as
+    // kNeighborDx/kNeighborDz above, which matters because ties are resolved by cell index.
+#define OPTICRAFT_DISCOVER_NEIGHBOR(N) do { \
+        const size_t ni = static_cast<size_t>(N); \
+        if (parent[ni] == -1) { \
+            parent[ni] = c; \
+            const double ground = smooth[ni]; \
+            filled[ni] = ground < spill ? spill : ground; \
+            queue.push(static_cast<int>(ni)); \
+        } \
+    } while (false)
     while (!queue.empty()) {
-        const int c = queue.top().second;
-        queue.pop();
+        const int c = queue.pop_min();
         order.push_back(c);
         const int cx = c % kWin;
-        const int cz = c / kWin;
-        for (int dir = 0; dir < 8; ++dir) {
-            const int nx = cx + kNeighborDx[dir];
-            const int nz = cz + kNeighborDz[dir];
-            if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
-            const size_t n = static_cast<size_t>(nz) * kWin + nx;
-            if (visited[n]) continue;
-            visited[n] = 1;
-            parent[n] = c;
-            filled[n] = std::max(smooth[n], filled[c]);
-            queue.emplace(filled[n], static_cast<int>(n));
+        const bool left = cx != 0;
+        const bool right = cx != kWin - 1;
+        const bool up = c >= kWin;
+        const bool down = c < static_cast<int>(n_cells) - kWin;
+        const double spill = filled[static_cast<size_t>(c)];
+        // Keep the original neighbour order: NW, N, NE, W, E, SW, S, SE.
+        if (up) {
+            if (left) OPTICRAFT_DISCOVER_NEIGHBOR(c - kWin - 1);
+            OPTICRAFT_DISCOVER_NEIGHBOR(c - kWin);
+            if (right) OPTICRAFT_DISCOVER_NEIGHBOR(c - kWin + 1);
+        }
+        if (left) OPTICRAFT_DISCOVER_NEIGHBOR(c - 1);
+        if (right) OPTICRAFT_DISCOVER_NEIGHBOR(c + 1);
+        if (down) {
+            if (left) OPTICRAFT_DISCOVER_NEIGHBOR(c + kWin - 1);
+            OPTICRAFT_DISCOVER_NEIGHBOR(c + kWin);
+            if (right) OPTICRAFT_DISCOVER_NEIGHBOR(c + kWin + 1);
         }
     }
+#undef OPTICRAFT_DISCOVER_NEIGHBOR
 
     // 4) Водосбор: сколько клеток стекает через каждую (сама клетка тоже). Потомки обрабатываются раньше
     // предков: порядок обратный выходу из очереди.
@@ -204,22 +429,25 @@ std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int r
         double spill = 0.0;
         double bottom = 1e9;
         long inflow = 0;
-        std::vector<int> cells;
     };
     std::vector<Basin> basins;
+    basins.reserve(n_cells / 64);
+    // Reuse one stack for all components. The former implementation allocated a new
+    // vector for every basin and stored every component cell twice (stack + cells).
+    std::vector<int> stack;
+    stack.reserve(n_cells / 8);
     for (size_t start = 0; start < n_cells; ++start) {
         if (basin[start] != -1) continue;
         if (height[start] <= m_sea_level || filled[start] <= smooth[start] + 0.5) continue;
         const int id = static_cast<int>(basins.size());
-        basins.emplace_back();
+        basins.push_back(Basin{filled[start], smooth[start], 0});
         Basin& b = basins.back();
-        b.spill = filled[start];
-        std::vector<int> stack{static_cast<int>(start)};
+        stack.clear();
+        stack.push_back(static_cast<int>(start));
         basin[start] = id;
         while (!stack.empty()) {
             const int c = stack.back();
             stack.pop_back();
-            b.cells.push_back(c);
             b.bottom = std::min(b.bottom, smooth[c]);
             const int cx = c % kWin;
             const int cz = c / kWin;
@@ -237,37 +465,35 @@ std::shared_ptr<River_Network::Region> River_Network::build_region(int rx, int r
         }
     }
 
-    // Приток в низину: водосборы соседних клеток вне низины, которые стекают в неё.
-    for (size_t id = 0; id < basins.size(); ++id) {
-        Basin& b = basins[id];
-        for (const int c : b.cells) {
-            const int cx = c % kWin;
-            const int cz = c / kWin;
-            for (int dir = 0; dir < 8; ++dir) {
-                const int nx = cx + kNeighborDx[dir];
-                const int nz = cz + kNeighborDz[dir];
-                if (nx < 0 || nz < 0 || nx >= kWin || nz >= kWin) continue;
-                const size_t n = static_cast<size_t>(nz) * kWin + nx;
-                if (basin[n] == static_cast<int>(id)) continue;
-                if (parent[n] == c) b.inflow += area[n];
-            }
-        }
+    // Equivalent to walking every basin's neighbour list: every non-root cell has one
+    // parent, so each external inflow edge can be counted once in a flat linear pass.
+    // This avoids millions of neighbour checks and per-basin cell vectors.
+    for (size_t n = 0; n < n_cells; ++n) {
+        const int p = parent[n];
+        if (p < 0) continue;
+        const int parent_basin = basin[static_cast<size_t>(p)];
+        if (parent_basin >= 0 && basin[n] != parent_basin)
+            basins[static_cast<size_t>(parent_basin)].inflow += area[n];
     }
 
-    // Уровень озера: глубина растёт с притоком. Без притока достаточной реки озера нет.
-    std::vector<uint8_t> lake(n_cells, 0);
-    std::vector<int> lake_level(n_cells, 0);
-    for (const Basin& b : basins) {
+    // Compute each lake's level once, then paint its component in a cache-friendly pass.
+    std::vector<double> basin_lake_level(basins.size(), -1e30);
+    for (size_t id = 0; id < basins.size(); ++id) {
+        const Basin& b = basins[id];
         if (b.inflow < kRiverArea) continue;
         const double doublings = std::log2(static_cast<double>(b.inflow) / kRiverArea);
         const double depth = std::min(b.spill - b.bottom, kLakeDepthPerDoubling * (1.0 + doublings));
-        const double level = b.bottom + depth;
-        for (const int c : b.cells) {
-            if (smooth[c] < level) {
-                lake[c] = 1;
-                lake_level[c] = static_cast<int>(std::floor(level));
-            }
-        }
+        basin_lake_level[id] = b.bottom + depth;
+    }
+    std::vector<uint8_t> lake(n_cells, 0);
+    std::vector<int> lake_level(n_cells, 0);
+    for (size_t k = 0; k < n_cells; ++k) {
+        const int id = basin[k];
+        if (id < 0) continue;
+        const double level = basin_lake_level[static_cast<size_t>(id)];
+        if (level < -1e20 || smooth[k] >= level) continue;
+        lake[k] = 1;
+        lake_level[k] = static_cast<int>(std::floor(level));
     }
 
     // 6) Реки: клетки с достаточным водосбором вне озёр. Вода — чуть ниже рельефа, поэтому русло

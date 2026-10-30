@@ -55,6 +55,9 @@ public:
     Column column_at(int world_x, int world_z) const;
     River_Kind kind_at(int world_x, int world_y, int world_z) const;
     void clear_cache() const;
+    // Async chunk scheduling API: probe without waiting, then warm on a preparation worker.
+    bool region_ready_at(int world_x, int world_z) const;
+    void prewarm_region_at(int world_x, int world_z) const;
 
     struct Region;
 

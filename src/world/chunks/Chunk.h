@@ -277,8 +277,9 @@ public:
     void fill(Block_Types type) {
         m_palette.assign(1, static_cast<Block_ID>(type));
         m_counts.assign(1, static_cast<uint16_t>(voxel_count));
+        // Оставляем буфер упакованных слов у чанка: при повторном использовании
+        // слота/чанка это исключает лишнюю пару free/alloc.
         m_words.clear();
-        m_words.shrink_to_fit();
         apply_bits(0);
         m_meta.clear();
     }
@@ -531,6 +532,14 @@ public:
     void set_texture_atlas(const Texture_Atlas* atlas) { m_texture_atlas = atlas; }
 
     void generate_blocks();
+    // Завершает пакетную генерацию: размещает декорации, уплотняет палитру и обновляет metadata.
+    // already_known_air=true разрешён только после точной для генератора проверки chunk_is_definitely_air.
+    void finish_generation(bool already_known_air = false,
+                           bool layer_metadata_precomputed = false);
+    // Used by World_Generator when per-layer occupied counts were computed during filling.
+    void set_layer_block_counts(const std::array<int, Config::chunk_height>& counts) {
+        m_layer_block_count = counts;
+    }
     void recalculate_metadata();
     void apply_mesh(Chunk_Meshes meshes);
     void touch_mesh_version();

@@ -121,8 +121,9 @@ void Chunk_Block_Grid::assign_flat(const Block_ID* flat) {
     apply_bits(bits_for_palette(m_palette.size()));
     m_meta.clear();
     if (m_bits == 0) {
+        // Сохраняем capacity: shrink_to_fit на каждом пустом чанке приводит к
+        // повторным освобождениям/выделениям при стриминге мира.
         m_words.clear();
-        m_words.shrink_to_fit();
     } else {
         const size_t per_word = static_cast<size_t>(1) << m_word_shift;
         m_words.assign(voxel_count / per_word, 0);
@@ -214,50 +215,47 @@ void Chunk::generate_blocks() {
         return;
     }
 
-    const int start_x = m_chunk_x * Config::chunk_size;
-    const int start_z = m_chunk_z * Config::chunk_size;
-
-    // Чанк целиком выше рельефа, воды и парящих островов — генерировать нечего.
-    // На вертикальный столбец из 17 чанков таких обычно 10-14 штук.
     if (m_world_generator->chunk_is_definitely_air(m_chunk_x, m_chunk_y, m_chunk_z)) {
+        finish_generation(true);
+        return;
+    }
+
+    // Генерация базового террейна. При пакетной загрузке этот вызов выполняется
+    // для нескольких вертикальных чанков сразу через World_Generator::generate_chunk_column.
+    m_world_generator->generate_chunk(m_blocks, m_chunk_x, m_chunk_y, m_chunk_z);
+    finish_generation(false);
+}
+
+void Chunk::finish_generation(bool already_known_air, bool layer_metadata_precomputed) {
+    if (!m_world_generator) return;
+
+    if (already_known_air) {
         m_blocks.fill(Block_Types::Air);
         m_layer_block_count.fill(0);
         m_is_modified = false;
         return;
     }
 
-    // Пакетная генерация: климат и высота считаются один раз на колонку, а не на
-    // каждый из 32768 вокселей (см. World_Generator::generate_chunk).
-    m_world_generator->generate_chunk(m_blocks, m_chunk_x, m_chunk_y, m_chunk_z);
+    const int start_x = m_chunk_x * Config::chunk_size;
+    const int start_z = m_chunk_z * Config::chunk_size;
 
-    // Generate decorations from nearby source columns too, so a tree or
-    // structure crossing a border is reproduced by both affected chunks.
-    // Чанк, до высот которого не дотягивается ни одна колонка области (подземелье глубоко под
-    // поверхностью, воздух над ней), пропускается целиком: раньше для каждого из 2304 колонок
-    // всё равно спрашивалась Column и сразу следовал ранний выход.
+    // Декорации размещаются только после базового рельефа всех чанков колонки. Это важно
+    // для деревьев/структур на границе Y: порядок готовности отдельных чанков не меняет результат.
     if (m_world_generator->may_decorate_chunk(m_chunk_x, m_chunk_y, m_chunk_z)) {
         for (int x = -Config::decoration_overhang;
              x < Config::chunk_size + Config::decoration_overhang; ++x) {
             for (int z = -Config::decoration_overhang;
                  z < Config::chunk_size + Config::decoration_overhang; ++z) {
-                m_world_generator->decorate_column(
-                    *this,
-                    start_x + x,
-                    start_z + z
-                );
+                m_world_generator->decorate_column(*this, start_x + x, start_z + z);
             }
         }
     }
 
-    // Декорации правили сетку через set() — выкидываем ставшие ненужными записи палитры.
+    // Декорации меняют сетку через set() — выкидываем ставшие ненужными записи палитры.
     m_blocks.compact();
-    recalculate_metadata();
-
-    // Декорации ставятся через set_block и взвели бы флаг правки, хотя чанк
-    // ровно такой, каким его выдаёт генератор.
+    if (!layer_metadata_precomputed) recalculate_metadata();
     m_is_modified = false;
 }
-
 
 // ---------------------------------------------------------------------------
 //  Подготовка меша чанка для GPU
