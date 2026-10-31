@@ -30,37 +30,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="увеличение производительности генератора мира">
-      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/blocks.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/blocks.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/recipe.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/recipe.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/sky_object_fragment.glsl" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/sky_object_fragment.glsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/commands/Command_System.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/Command_System.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Game.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Game.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Inventory.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Inventory.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Inventory.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Inventory.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Player.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Player.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/entities/player/Player.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/entities/player/Player.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/mobs/Mob.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Mob.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/mobs/Mobs_Update.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Mobs_Update.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/mobs/Mobs_Update.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Mobs_Update.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_misc.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_misc.comp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/Config.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/Config.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Interaction.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Interaction.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Interaction.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Interaction.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/blocks/Block_Types.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/blocks/Block_Types.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/crafting/Sapling_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/crafting/Sapling_Manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/logic/Logic_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/logic/Logic_Manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/logic/Logic_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/logic/Logic_Manager.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/World_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/World_File.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/World_File.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/World_File.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

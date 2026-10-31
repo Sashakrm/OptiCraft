@@ -2,6 +2,7 @@
 #define OPTICRAFT_KNIGHT_AI_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <glm/glm.hpp>
@@ -48,6 +49,20 @@ enum class Knight_State : uint8_t {
     Dead
 };
 
+// Долговременные стратегии, которые рыцарь распознаёт по повторяющимся
+// манёврам/действиям. Это не описание того, что игрок делает в данный кадр.
+enum class Knight_Player_Pattern : uint8_t {
+    None = 0,
+    Rear_Flank,
+    Orbit_Left,
+    Orbit_Right,
+    Kiting,
+    Repeated_Jump,
+    Melee_Spam,
+    Straight_Rush,
+    Count
+};
+
 // Полноценный босс-рыцарь. Модель обязательна: assets/mobs/knight.glb.
 // Размер арены: 5x5 чанков x 3 чанка высотой (32 блока на чанк).
 class Knight_Ai {
@@ -66,6 +81,8 @@ public:
     void render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient) const;
 
     bool take_damage(float amount, const glm::vec3& attacker_position);
+    // Вызывается только после реально зарегистрированного попадания игрока.
+    void observe_player_hit(const glm::vec3& attacker_position);
     bool kill();
     void apply_effect(Status_Effect effect, float duration, int amplifier) { m_effects.apply(effect, duration, amplifier); }
 
@@ -76,6 +93,9 @@ public:
     int get_phase() const { return m_phase; }
     Knight_State get_state() const { return m_state; }
     Knight_Attack get_current_attack() const { return m_current_attack; }
+    Knight_Player_Pattern get_learned_pattern() const { return m_learned_pattern; }
+    float get_learning_confidence() const { return m_learning_confidence; }
+    float get_pattern_evidence() const;
     bool is_dying() const { return m_dying; }
     bool is_removable() const { return m_dying && m_death_timer >= 3.0f; }
 
@@ -123,14 +143,25 @@ private:
     bool m_dying = false;
     std::string m_current_animation;
 
-    // Экспоненциальная память о привычках игрока.
-    float m_rear_attempts = 0.0f;
-    float m_front_approaches = 0.0f;
-    float m_left_orbits = 0.0f;
-    float m_right_orbits = 0.0f;
+    // Долговременная память. Evidence растёт только после завершённого
+    // поведенческого эпизода, а не каждый кадр нахождения игрока с одной стороны.
+    static constexpr std::size_t PATTERN_COUNT = static_cast<std::size_t>(Knight_Player_Pattern::Count);
+    std::array<float, PATTERN_COUNT> m_pattern_evidence{};
+    Knight_Player_Pattern m_learned_pattern = Knight_Player_Pattern::None;
+    Knight_Player_Pattern m_candidate_pattern = Knight_Player_Pattern::None;
+    float m_learning_confidence = 0.0f;
+    int m_learned_flank_direction = 0;
     float m_learning_timer = 0.0f;
-    float m_rear_habit = 0.0f;
-    int m_preferred_orbit = 0;
+    float m_episode_cooldown = 0.0f;
+    float m_candidate_duration = 0.0f;
+    float m_candidate_gap_time = 0.0f;
+    float m_candidate_angular_travel = 0.0f;
+    float m_candidate_distance_travel = 0.0f;
+    int m_candidate_direction = 0;
+    bool m_previous_player_airborne = false;
+    float m_jump_pattern_window = 0.0f;
+    int m_jump_pattern_events = 0;
+    float m_player_hit_event_cooldown = 0.0f;
 
     static constexpr float BODY_HALF_X = 1.15f;
     static constexpr float BODY_HALF_Z = 0.62f;
@@ -142,6 +173,9 @@ private:
     bool can_occupy(const glm::vec3& feet_position, const Chunk_Manager& chunks) const;
     bool has_ground_below(const glm::vec3& feet_position, const Chunk_Manager& chunks) const;
     void update_learning(const Knight_Player_View& player, float dt);
+    void record_pattern_episode(Knight_Player_Pattern pattern, int direction = 0);
+    void refresh_learned_pattern();
+    void reset_pattern_candidate();
     glm::vec3 predict_player(const Knight_Player_View& player, float seconds) const;
     void rotate_towards(const glm::vec3& target, float dt, float multiplier = 1.0f);
     bool facing_player(const Knight_Player_View& player) const;

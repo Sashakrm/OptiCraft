@@ -236,36 +236,254 @@ bool Knight_Ai::has_ground_below(const glm::vec3& feet, const Chunk_Manager& chu
     return feet.y <= m_arena.floor_y + 0.02f;
 }
 
+void Knight_Ai::reset_pattern_candidate() {
+    m_candidate_pattern = Knight_Player_Pattern::None;
+    m_candidate_duration = 0.0f;
+    m_candidate_gap_time = 0.0f;
+    m_candidate_angular_travel = 0.0f;
+    m_candidate_distance_travel = 0.0f;
+    m_candidate_direction = 0;
+}
+
+float Knight_Ai::get_pattern_evidence() const {
+    float total = 0.0f;
+    for (float value : m_pattern_evidence) total += value;
+    return total;
+}
+
+void Knight_Ai::refresh_learned_pattern() {
+    float total = 0.0f;
+    float best_score = 0.0f;
+    Knight_Player_Pattern best_pattern = Knight_Player_Pattern::None;
+
+    for (std::size_t i = 1; i < PATTERN_COUNT; ++i) {
+        const float score = m_pattern_evidence[i];
+        total += score;
+        if (score > best_score) {
+            best_score = score;
+            best_pattern = static_cast<Knight_Player_Pattern>(i);
+        }
+    }
+
+    if (total <= 0.001f || best_pattern == Knight_Player_Pattern::None) {
+        m_learned_pattern = Knight_Player_Pattern::None;
+        m_learning_confidence = 0.0f;
+        return;
+    }
+
+    const float best_confidence = best_score / total;
+    constexpr float kLearnEvidence = 4.25f;  // минимум примерно 5 распознанных повторов
+    constexpr float kLearnConfidence = 0.62f;
+
+    if (m_learned_pattern == Knight_Player_Pattern::None) {
+        if (best_score >= kLearnEvidence && best_confidence >= kLearnConfidence)
+            m_learned_pattern = best_pattern;
+    } else {
+        const std::size_t current_index = static_cast<std::size_t>(m_learned_pattern);
+        const float current_score = m_pattern_evidence[current_index];
+        const float current_confidence = current_score / total;
+
+        // Гистерезис: рыцарь не переучивается от одного нового манёвра.
+        // Старую стратегию он забывает постепенно, а новую принимает только
+        // когда та накопила достаточно независимых подтверждений.
+        if (current_score < 2.2f || current_confidence < 0.40f) {
+            m_learned_pattern = Knight_Player_Pattern::None;
+        } else if (best_pattern != m_learned_pattern &&
+                   best_score >= kLearnEvidence &&
+                   best_confidence >= kLearnConfidence &&
+                   best_score >= current_score * 1.35f) {
+            m_learned_pattern = best_pattern;
+        }
+    }
+
+    if (m_learned_pattern != Knight_Player_Pattern::None) {
+        const std::size_t index = static_cast<std::size_t>(m_learned_pattern);
+        m_learning_confidence = m_pattern_evidence[index] / total;
+    } else {
+        m_learning_confidence = best_confidence;
+    }
+}
+
+void Knight_Ai::record_pattern_episode(Knight_Player_Pattern pattern, int direction) {
+    if (pattern == Knight_Player_Pattern::None || pattern == Knight_Player_Pattern::Count)
+        return;
+
+    const std::size_t index = static_cast<std::size_t>(pattern);
+    m_pattern_evidence[index] = std::min(16.0f, m_pattern_evidence[index] + 1.0f);
+
+    refresh_learned_pattern();
+    // Направление используется только для долгосрочного перехвата фланга.
+    // Само наблюдение никак не меняет текущий поворот или текущую атаку.
+    if (m_learned_pattern == pattern && direction != 0 &&
+        (pattern == Knight_Player_Pattern::Rear_Flank ||
+         pattern == Knight_Player_Pattern::Orbit_Left ||
+         pattern == Knight_Player_Pattern::Orbit_Right)) {
+        m_learned_flank_direction = direction;
+    }
+}
+
 void Knight_Ai::update_learning(const Knight_Player_View& player, float dt) {
+    // Долгая память: полураспад около трёх минут. Один необычный манёвр
+    // практически не меняет накопленную модель поведения.
+    constexpr float kMemoryHalfLife = 180.0f;
+    const float decay = std::exp(-0.69314718056f * dt / kMemoryHalfLife);
+    for (float& evidence : m_pattern_evidence) evidence *= decay;
+
+    m_episode_cooldown = std::max(0.0f, m_episode_cooldown - dt);
+    m_player_hit_event_cooldown = std::max(0.0f, m_player_hit_event_cooldown - dt);
+    m_jump_pattern_window = std::max(0.0f, m_jump_pattern_window - dt);
+    if (m_jump_pattern_window <= 0.0f) m_jump_pattern_events = 0;
+
+    // Прыжки распознаются по новым отрывам от земли, а не по числу кадров в воздухе.
+    const bool airborne = player.velocity.y > 2.2f;
+    if (player.alive && airborne && !m_previous_player_airborne && m_episode_cooldown <= 0.0f) {
+        if (m_jump_pattern_window <= 0.0f) {
+            m_jump_pattern_window = 18.0f;
+            m_jump_pattern_events = 0;
+        }
+        ++m_jump_pattern_events;
+        if (m_jump_pattern_events >= 3) {
+            record_pattern_episode(Knight_Player_Pattern::Repeated_Jump);
+            m_jump_pattern_events = 0;
+            m_jump_pattern_window = 0.0f;
+            m_episode_cooldown = 3.0f;
+        }
+    }
+    m_previous_player_airborne = airborne;
+
     m_learning_timer += dt;
-    const float decay = std::exp(-dt * 0.055f);
-    m_rear_attempts *= decay;
-    m_front_approaches *= decay;
-    m_left_orbits *= decay;
-    m_right_orbits *= decay;
-    if (m_learning_timer < 0.12f) return;
+    if (m_learning_timer < 0.16f) {
+        refresh_learned_pattern();
+        return;
+    }
+
+    const float sample_dt = m_learning_timer;
     m_learning_timer = 0.0f;
 
-    glm::vec3 direction = player.position - m_position;
-    direction.y = 0.0f;
-    const float distance = glm::length(direction);
-    if (distance < 0.1f || distance > 24.0f) return;
-    direction /= distance;
-    const glm::vec3 forward = forward_from_yaw(m_yaw);
-    const float facing = glm::dot(forward, direction);
-    const glm::vec3 right(forward.z, 0.0f, -forward.x);
-    const float side = glm::dot(right, direction);
+    if (!player.alive) {
+        reset_pattern_candidate();
+        refresh_learned_pattern();
+        return;
+    }
 
-    if (facing < -0.18f) m_rear_attempts += 1.0f;
-    else if (facing > 0.45f) m_front_approaches += 1.0f;
-    if (side < -0.35f) m_left_orbits += 1.0f;
-    if (side > 0.35f) m_right_orbits += 1.0f;
+    glm::vec3 relative = player.position - m_position;
+    relative.y = 0.0f;
+    const float distance = glm::length(relative);
+    if (distance < 2.5f || distance > 40.0f) {
+        reset_pattern_candidate();
+        refresh_learned_pattern();
+        return;
+    }
 
-    const float total = m_rear_attempts + m_front_approaches + 0.001f;
-    m_rear_habit = m_rear_attempts / total;
-    if (m_left_orbits > m_right_orbits * 1.18f) m_preferred_orbit = -1;
-    else if (m_right_orbits > m_left_orbits * 1.18f) m_preferred_orbit = 1;
-    else m_preferred_orbit = 0;
+    // Используем скорость самого игрока относительно радиуса босса. Так рыцарь,
+    // который сам преследует игрока, не маскирует kiting/strafe своим движением.
+    const glm::vec3 radial = relative / distance;
+    const float player_radial_speed = player.velocity.x * radial.x + player.velocity.z * radial.z;
+    const float signed_tangential_speed = radial.z * player.velocity.x - radial.x * player.velocity.z;
+    const float tangential_speed = std::abs(signed_tangential_speed);
+    const float angular_step = tangential_speed / std::max(distance, 0.1f) * sample_dt;
+
+    if (m_episode_cooldown > 0.0f) {
+        refresh_learned_pattern();
+        return;
+    }
+
+    const bool orbiting = distance >= 3.0f && distance <= 17.0f &&
+                          tangential_speed >= 1.30f && angular_step >= 0.015f;
+    const bool kiting = distance >= 7.0f && player_radial_speed >= 1.65f;
+    const bool rushing = distance >= 5.0f && player_radial_speed <= -1.85f;
+
+    if (orbiting) {
+        const int direction = signed_tangential_speed >= 0.0f ? 1 : -1;
+        const Knight_Player_Pattern pattern = direction > 0
+            ? Knight_Player_Pattern::Orbit_Right
+            : Knight_Player_Pattern::Orbit_Left;
+
+        if (m_candidate_pattern != pattern) {
+            reset_pattern_candidate();
+            m_candidate_pattern = pattern;
+            m_candidate_direction = direction;
+        }
+
+        m_candidate_gap_time = 0.0f;
+        m_candidate_duration += sample_dt;
+        m_candidate_angular_travel += angular_step;
+        m_candidate_distance_travel += tangential_speed * sample_dt;
+
+        // Полуоборот за непрерывным движением означает именно попытку обойти
+        // рыцаря за спину. Регистрируется один завершённый эпизод.
+        if (m_candidate_angular_travel >= 1.75f && m_candidate_duration >= 1.0f) {
+            record_pattern_episode(Knight_Player_Pattern::Rear_Flank, direction);
+            reset_pattern_candidate();
+            m_episode_cooldown = 3.5f;
+        } else if (m_candidate_duration >= 2.8f && m_candidate_angular_travel >= 0.95f) {
+            record_pattern_episode(pattern, direction);
+            reset_pattern_candidate();
+            m_episode_cooldown = 3.5f;
+        }
+    } else if (kiting || rushing) {
+        const Knight_Player_Pattern pattern = kiting
+            ? Knight_Player_Pattern::Kiting
+            : Knight_Player_Pattern::Straight_Rush;
+
+        if (m_candidate_pattern != pattern) {
+            reset_pattern_candidate();
+            m_candidate_pattern = pattern;
+        }
+
+        m_candidate_gap_time = 0.0f;
+        m_candidate_duration += sample_dt;
+        m_candidate_distance_travel += std::abs(player_radial_speed) * sample_dt;
+        if (m_candidate_duration >= 1.0f && m_candidate_distance_travel >= 4.0f) {
+            record_pattern_episode(pattern);
+            reset_pattern_candidate();
+            m_episode_cooldown = 3.5f;
+        }
+    } else {
+        // Если орбитальный манёвр завершился/игрок сменил направление,
+        // фиксируем его как самостоятельное наблюдение, если он был достаточно длинным.
+        m_candidate_gap_time += sample_dt;
+        if (m_candidate_gap_time <= 0.40f) {
+            refresh_learned_pattern();
+            return;
+        }
+
+        if ((m_candidate_pattern == Knight_Player_Pattern::Orbit_Left ||
+             m_candidate_pattern == Knight_Player_Pattern::Orbit_Right) &&
+            m_candidate_duration >= 1.0f && m_candidate_angular_travel >= 0.95f) {
+            if (m_candidate_angular_travel >= 1.75f)
+                record_pattern_episode(Knight_Player_Pattern::Rear_Flank, m_candidate_direction);
+            else
+                record_pattern_episode(m_candidate_pattern, m_candidate_direction);
+            m_episode_cooldown = 3.5f;
+        }
+        reset_pattern_candidate();
+    }
+
+    refresh_learned_pattern();
+}
+
+void Knight_Ai::observe_player_hit(const glm::vec3& attacker_position) {
+    // Считаем только отдельные реальные попадания. Удар из задней полусферы
+    // подтверждает фланговую тактику; фронтальный/боковой удар — повторный
+    // ближний бой. Одиночный удар не меняет тактику босса.
+    if (m_player_hit_event_cooldown > 0.0f || m_dying) return;
+
+    glm::vec3 to_attacker = attacker_position - m_position;
+    to_attacker.y = 0.0f;
+    if (glm::dot(to_attacker, to_attacker) > 0.001f) {
+        to_attacker = glm::normalize(to_attacker);
+        const glm::vec3 forward = forward_from_yaw(m_yaw);
+        const float facing_dot = glm::dot(forward, to_attacker);
+        if (facing_dot < -0.20f) {
+            const glm::vec3 right(forward.z, 0.0f, -forward.x);
+            const int flank_direction = glm::dot(right, to_attacker) >= 0.0f ? 1 : -1;
+            record_pattern_episode(Knight_Player_Pattern::Rear_Flank, flank_direction);
+        } else {
+            record_pattern_episode(Knight_Player_Pattern::Melee_Spam);
+        }
+    }
+    m_player_hit_event_cooldown = 1.05f;
 }
 
 glm::vec3 Knight_Ai::predict_player(const Knight_Player_View& player, float seconds) const {
@@ -369,7 +587,7 @@ Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const C
     const float distance = horizontal_distance(m_position, player.position);
     std::array<Knight_Attack, 8> candidates{};
     std::array<float, 8> weights{};
-    size_t count = 0;
+    std::size_t count = 0;
     for (int value = static_cast<int>(Knight_Attack::Swipe);
          value < static_cast<int>(Knight_Attack::Count); ++value) {
         const auto attack = static_cast<Knight_Attack>(value);
@@ -387,8 +605,37 @@ Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const C
             case Knight_Attack::Rage_Strike:  weight = distance < 10.5f ? 2.2f : 0.35f; break;
             default: break;
         }
-        if (m_rear_habit > 0.55f && (attack == Knight_Attack::Spin_Attack || attack == Knight_Attack::Ground_Slam))
-            weight *= 1.65f;
+        // Контрмеры включаются только после подтверждения устойчивой стратегии
+        // игрока несколькими завершёнными эпизодами, а не по текущей позиции.
+        switch (m_learned_pattern) {
+            case Knight_Player_Pattern::Rear_Flank:
+            case Knight_Player_Pattern::Orbit_Left:
+            case Knight_Player_Pattern::Orbit_Right:
+                if (attack == Knight_Attack::Ground_Slam || attack == Knight_Attack::Spin_Attack)
+                    weight *= 2.35f;
+                else if (attack == Knight_Attack::Double_Swipe)
+                    weight *= 1.35f;
+                break;
+            case Knight_Player_Pattern::Kiting:
+                if (attack == Knight_Attack::Charge || attack == Knight_Attack::Leap_Strike)
+                    weight *= 2.6f;
+                break;
+            case Knight_Player_Pattern::Repeated_Jump:
+                if (attack == Knight_Attack::Ground_Slam || attack == Knight_Attack::Shockwave)
+                    weight *= 2.5f;
+                break;
+            case Knight_Player_Pattern::Melee_Spam:
+                if (attack == Knight_Attack::Ground_Slam || attack == Knight_Attack::Spin_Attack ||
+                    attack == Knight_Attack::Rage_Strike)
+                    weight *= 2.0f;
+                break;
+            case Knight_Player_Pattern::Straight_Rush:
+                if (attack == Knight_Attack::Ground_Slam || attack == Knight_Attack::Rage_Strike)
+                    weight *= 1.9f;
+                break;
+            default:
+                break;
+        }
         candidates[count] = attack;
         weights[count] = weight;
         ++count;
@@ -396,11 +643,11 @@ Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const C
     if (count == 0) return Knight_Attack::None;
 
     float total = 0.0f;
-    for (size_t i = 0; i < count; ++i) total += weights[i];
+    for (std::size_t i = 0; i < count; ++i) total += weights[i];
     // Детерминированное псевдослучайное число без выделения памяти/глобального RNG.
     const float noise = std::fmod(std::abs(std::sin(m_clock * 12.9898f + m_position.x * 0.17f) * 43758.5453f), 1.0f);
     float pick = noise * total;
-    for (size_t i = 0; i < count; ++i) {
+    for (std::size_t i = 0; i < count; ++i) {
         pick -= weights[i];
         if (pick <= 0.0f) return candidates[i];
     }
@@ -425,7 +672,7 @@ void Knight_Ai::move_towards(const glm::vec3& target, float speed, float dt, con
     const float distance = glm::length(delta);
     if (distance < 0.12f) return;
     const glm::vec3 direction = delta / distance;
-    rotate_towards(target, dt, 1.0f + (m_rear_habit > 0.45f ? 0.8f : 0.0f));
+    rotate_towards(target, dt);
 
     glm::vec3 step = direction * (speed * dt);
     if (distance < glm::length(step)) step = direction * distance;
@@ -682,18 +929,31 @@ void Knight_Ai::update_movement(float dt, const Knight_Player_View& player, cons
     const float speed = (m_phase == 1 ? 5.2f : (m_phase == 2 ? 7.8f : 10.6f)) * m_effects.speed_factor();
     glm::vec3 target = predict_player(player, 0.36f);
 
-    // Учитываем привычный обход с одного фланга. Чем чаще игрок заходит за спину,
-    // тем раньше рыцарь разворачивается и тем сильнее корректирует позицию.
-    if (m_rear_habit > 0.35f && distance < 15.0f) {
-        rotate_towards(target, dt, 1.7f + m_rear_habit);
-        if (m_preferred_orbit != 0 && distance > 4.5f) {
-            const glm::vec3 fwd = forward_from_yaw(m_yaw);
-            const glm::vec3 right(fwd.z, 0.0f, -fwd.x);
-            target += right * static_cast<float>(m_preferred_orbit) * 2.0f * m_rear_habit;
+    // Если игрок уже доказал, что систематически обходит рыцаря с одной стороны,
+    // рыцарь не дёргается за ним в реальном времени: он выбирает точку перехвата
+    // впереди привычной дуги движения. Смещение существует только при выученном
+    // паттерне и ограничено, поэтому не мешает обычному преследованию.
+    if ((m_learned_pattern == Knight_Player_Pattern::Rear_Flank ||
+         m_learned_pattern == Knight_Player_Pattern::Orbit_Left ||
+         m_learned_pattern == Knight_Player_Pattern::Orbit_Right) &&
+        distance > 4.5f && distance < 18.0f) {
+        glm::vec3 radial = target - m_position;
+        radial.y = 0.0f;
+        const float radial_length = glm::length(radial);
+        if (radial_length > 0.001f) {
+            radial /= radial_length;
+            const int direction = m_learned_flank_direction == 0 ? 1 : m_learned_flank_direction;
+            const glm::vec3 tangent(-radial.z * static_cast<float>(direction), 0.0f,
+                                    radial.x * static_cast<float>(direction));
+            const float lead = 1.5f + 2.0f * m_learning_confidence;
+            target += tangent * lead;
         }
     }
 
-    if (m_grounded && m_jump_cooldown <= 0.0f && distance > (m_phase == 1 ? 16.0f : 12.0f)) {
+    const float jump_distance = m_learned_pattern == Knight_Player_Pattern::Kiting
+        ? (m_phase == 1 ? 10.5f : 9.0f)
+        : (m_phase == 1 ? 16.0f : 12.0f);
+    if (m_grounded && m_jump_cooldown <= 0.0f && distance > jump_distance) {
         begin_jump(target, m_phase, false);
         return;
     }
@@ -702,7 +962,7 @@ void Knight_Ai::update_movement(float dt, const Knight_Player_View& player, cons
         move_towards(target, speed, dt, chunks);
         if (m_grounded && horizontal_distance(m_position, target) > 1.0f) set_animation("Walk", true);
     } else {
-        rotate_towards(target, dt, m_rear_habit > 0.4f ? 2.0f : 1.0f);
+        rotate_towards(target, dt);
         set_animation("Idle", true);
     }
 }
@@ -746,7 +1006,7 @@ void Knight_Ai::update_ai(float dt, const Knight_Player_View& player, const Chun
     if (in_awareness && !visible && m_state != Knight_State::Windup && m_state != Knight_State::Attacking &&
         m_state != Knight_State::Jumping && m_state != Knight_State::Recovery) {
         const glm::vec3 predicted = predict_player(player, 0.25f);
-        rotate_towards(predicted, dt, m_rear_habit > 0.35f ? 2.25f : 1.5f);
+        rotate_towards(predicted, dt, 1.5f);
         m_state = Knight_State::Chase;
         set_animation("Idle", true);
         return;

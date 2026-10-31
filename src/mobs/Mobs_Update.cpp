@@ -594,6 +594,21 @@ const char* knight_attack_name(Knight_Attack attack) {
     return "Unknown";
 }
 
+const char* knight_pattern_name(Knight_Player_Pattern pattern) {
+    switch (pattern) {
+        case Knight_Player_Pattern::None: return "Learning";
+        case Knight_Player_Pattern::Rear_Flank: return "Rear flank";
+        case Knight_Player_Pattern::Orbit_Left: return "Orbit left";
+        case Knight_Player_Pattern::Orbit_Right: return "Orbit right";
+        case Knight_Player_Pattern::Kiting: return "Kiting";
+        case Knight_Player_Pattern::Repeated_Jump: return "Jump spam";
+        case Knight_Player_Pattern::Melee_Spam: return "Melee spam";
+        case Knight_Player_Pattern::Straight_Rush: return "Straight rush";
+        case Knight_Player_Pattern::Count: break;
+    }
+    return "Unknown";
+}
+
 }  // namespace
 
 std::vector<std::string> Mobs_Update::debug_target_lines() const {
@@ -658,6 +673,9 @@ std::vector<std::string> Mobs_Update::debug_target_lines() const {
             lines.push_back("Phase: " + std::to_string(m_target_knight->get_phase()));
             lines.push_back(std::string("AI state: ") + knight_state_name(m_target_knight->get_state())
                             + "  Attack: " + knight_attack_name(m_target_knight->get_current_attack()));
+            lines.push_back(std::string("Learned tactic: ") + knight_pattern_name(m_target_knight->get_learned_pattern())
+                            + "  Confidence: " + format_float("%.0f", m_target_knight->get_learning_confidence() * 100.0f)
+                            + "%  Evidence: " + format_float("%.1f", m_target_knight->get_pattern_evidence()));
             if (m_target_knight->is_dying()) lines.emplace_back("Dying");
             break;
         }
@@ -866,6 +884,7 @@ Mob_Result Mobs_Update::interact(const Mob_Interact_Input& input, Dropped_Item_M
             const float d = survival ? damage : Knight_Ai::MAX_HEALTH * 100.0f;
             hit = true;
             m_target_knight->take_damage(d, input.player.position);
+            m_target_knight->observe_player_hit(input.player.position);
         }
         if (hit && survival) result.damage_held_tool = true;
     }
