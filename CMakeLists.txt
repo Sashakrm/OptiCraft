@@ -43,7 +43,10 @@ set(SOURCES
         ${SRC_DIR}/core/app/Application.cpp
         ${SRC_DIR}/core/game/Game.cpp
         ${SRC_DIR}/core/game/Day_Night_Cycle.cpp
+        ${SRC_DIR}/core/game/Weather_Cycle.cpp
         ${SRC_DIR}/core/game/Tick.cpp
+        ${SRC_DIR}/mobs/Boss.cpp
+        ${SRC_DIR}/mobs/Knight_Ai.cpp
         ${SRC_DIR}/mobs/Mobs_Update.cpp
 
         # entities
@@ -94,6 +97,7 @@ set(SOURCES
         ${SRC_DIR}/world/storage/World_File.cpp
         ${SRC_DIR}/world/fluids/Fluid_Simulator.cpp
         ${SRC_DIR}/world/dimensions/Dimension.cpp
+        ${SRC_DIR}/world/structures/Dungeon_Layout.cpp
 
         # physics
         ${SRC_DIR}/physics/Raycast.cpp
@@ -208,6 +212,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 
         ${SRC_DIR}/mobs/Mob_Model.h
         ${SRC_DIR}/mobs/Mob.h
+        ${SRC_DIR}/mobs/Knight_Ai.h
         ${SRC_DIR}/mobs/Mobs_Update.h
 
         ${SRC_DIR}/entities/animals/ai/Pig_AI.h

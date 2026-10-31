@@ -250,7 +250,10 @@ public:
                   const glm::mat4& view,
                   const glm::mat4& projection,
                   const glm::vec3& sun_direction,
-                  const glm::vec3& moon_direction);
+                  const glm::vec3& moon_direction,
+                  float moon_illumination,
+                  float sun_darkness,
+                  float moon_darkness);
 
     // Выпавшие предметы (см. entities/Dropped_Item.h): вершины уже в мировых координатах,
     // пересобираются каждый кадр (предметы крутятся), поэтому VBO динамический.

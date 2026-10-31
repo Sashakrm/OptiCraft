@@ -28,6 +28,9 @@ private:
 
     // Полёт
     bool m_is_flying = false;
+    bool m_double_jump_flight = false; // двойной прыжок переключает полёт (только творческий режим)
+    bool m_jump_was_down = false;      // Space был зажат в прошлом кадре — ловим фронт нажатия
+    float m_jump_tap_timer = 0.0f;     // > 0: идёт окно, в котором второе нажатие даст полёт
     bool m_noclip = false;    // полёт сквозь блоки (третья ступень F1: режим наблюдателя)
     float m_fly_speed = Config::player_fly_speed;
 
@@ -109,6 +112,9 @@ public:
     // Noclip — полёт без коллизий; имеет смысл только вместе с полётом.
     void set_noclip(bool noclip) { m_noclip = noclip && m_is_flying; }
     bool is_noclip() const { return m_noclip; }
+    // Творческий режим: два прыжка подряд (Space) переключают полёт. В выживании выключено.
+    void set_double_jump_flight(bool enabled) { m_double_jump_flight = enabled; m_jump_tap_timer = 0.0f; }
+    bool double_jump_flight() const { return m_double_jump_flight; }
 
     // Верховая езда
     bool is_riding() const { return m_is_riding; }
@@ -161,6 +167,7 @@ public:
     // Горизонталь уходит в m_impulse и затухает; вертикаль даётся сразу скоростью прыжка.
     void apply_impulse(const glm::vec3& direction, float speed);
     // Горизонтальная скорость тела (включая импульс и течение) — от неё зависит урон удара.
+    const glm::vec3& get_velocity() const { return m_velocity; }
     float get_horizontal_speed() const { return glm::length(glm::vec2(m_velocity.x, m_velocity.z)); }
 
     // Воздух (Survival): сколько секунд осталось и голова ли под водой (для HUD).

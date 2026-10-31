@@ -1296,7 +1296,10 @@ void Renderer::draw_sky(const glm::vec3& camera_position,
                        const glm::mat4& view,
                        const glm::mat4& projection,
                        const glm::vec3& sun_direction,
-                       const glm::vec3& moon_direction) {
+                       const glm::vec3& moon_direction,
+                       float moon_illumination,
+                       float sun_darkness,
+                       float moon_darkness) {
     // Классический приём "скайбокса": рисуем без теста/записи глубины, ДО обычной
     // непрозрачной геометрии мира — рельеф естественно перекрывает солнце/луну там, где
     // должен закрывать горизонт, без отдельной логики окклюзии для самих дисков.
@@ -1315,7 +1318,8 @@ void Renderer::draw_sky(const glm::vec3& camera_position,
 
     glBindVertexArray(m_sky_quad_vao);
 
-    const auto draw_disc = [&](const glm::vec3& direction, float radius, const glm::vec3& color, float alpha) {
+    const auto draw_disc = [&](const glm::vec3& direction, float radius, const glm::vec3& color, float alpha,
+                               float illumination, float core) {
         if (alpha <= 0.0f) return;
         const glm::vec3 center = camera_position + direction * distance;
         m_sky_shader_ptr->set_vec3("center", center);
@@ -1323,6 +1327,8 @@ void Renderer::draw_sky(const glm::vec3& camera_position,
         m_sky_shader_ptr->set_vec3("up", camera_up * radius);
         m_sky_shader_ptr->set_vec3("color", color);
         m_sky_shader_ptr->set_float("alpha", alpha);
+        m_sky_shader_ptr->set_float("illumination", illumination);
+        m_sky_shader_ptr->set_float("core", core);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     };
 
@@ -1332,8 +1338,18 @@ void Renderer::draw_sky(const glm::vec3& camera_position,
         return glm::clamp((elevation + 0.06f) / 0.12f, 0.0f, 1.0f);
     };
 
-    draw_disc(sun_direction, sun_radius, glm::vec3(1.0f, 0.95f, 0.75f), fade(sun_direction.y));
-    draw_disc(moon_direction, moon_radius, glm::vec3(0.85f, 0.87f, 0.92f), fade(moon_direction.y));
+    // Солнце: при фазе 32 оно чёрное и окружено ярким диском-проекцией (он темнеет вместе с
+    // фазой: sun_darkness 0..1). Ядро чёрное на весь диск при sun_darkness = 1.
+    const float sun_fade = fade(sun_direction.y);
+    constexpr float halo_radius_scale = 1.6f;
+    draw_disc(sun_direction, sun_radius * halo_radius_scale, glm::vec3(1.0f, 1.0f, 0.9f),
+              sun_fade * sun_darkness, 2.0f, 0.0f);
+    draw_disc(sun_direction, sun_radius, glm::vec3(1.0f, 0.95f, 0.75f), sun_fade, 2.0f, sun_darkness);
+
+    // Луна: яркость растёт к полнолунию (белый), при фазе 32 в центре чёрный диск на половине
+    // радиуса (core 0.5 * moon_darkness).
+    const glm::vec3 moon_color = glm::mix(glm::vec3(0.85f, 0.87f, 0.92f), glm::vec3(1.0f), moon_darkness);
+    draw_disc(moon_direction, moon_radius, moon_color, fade(moon_direction.y), moon_illumination, 0.5f * moon_darkness);
 
     glBindVertexArray(0);
     glDisable(GL_BLEND);

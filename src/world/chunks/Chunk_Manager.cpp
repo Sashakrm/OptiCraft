@@ -11,6 +11,7 @@
 #include "rendering/atlas/Texture_Atlas.h"
 #include "rendering/Frustum.h"
 #include <cmath>
+#include <limits>
 #include <cstdlib>
 #include <algorithm>
 #include <chrono>
@@ -2111,6 +2112,75 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
     return true;
 }
 
+void Chunk_Manager::set_blocks_world_batch(const std::vector<std::pair<glm::ivec3, Block_Types>>& writes,
+                                           std::vector<glm::ivec3>& out_changed) {
+    const bool* transparency = Block_Registry::get_instance().transparent_table();
+    glm::ivec3 light_lo(std::numeric_limits<int>::max());
+    glm::ivec3 light_hi(std::numeric_limits<int>::min());
+    bool any_light_change = false;
+
+    for (const auto& [pos, type] : writes) {
+        if (pos.y < Config::world_min_y || pos.y > Config::world_max_y) continue;
+        const int cx = Math_Helpers::floor_div(pos.x, Config::chunk_size);
+        const int cy = Math_Helpers::floor_div(pos.y, Config::chunk_height);
+        const int cz = Math_Helpers::floor_div(pos.z, Config::chunk_size);
+        const int lx = pos.x - cx * Config::chunk_size;
+        const int ly = pos.y - cy * Config::chunk_height;
+        const int lz = pos.z - cz * Config::chunk_size;
+
+        Chunk* chunk = get_chunk(cx, cy, cz);
+        if (!chunk) continue;
+
+        const Block_Types old_type = chunk->get_block(lx, ly, lz);
+        chunk->set_block(lx, ly, lz, type);
+        sync_block_entity(pos.x, pos.y, pos.z, old_type, type);
+        chunk->mark_modified();
+
+        // Меш: как в set_block_world, но запрос на пересборку — один на чанк (дедуп в очереди).
+        request_urgent_mesh_rebuild(cx, cy, cz);
+        if (lx == 0 || lx == Config::chunk_size - 1 || ly == 0 || ly == Config::chunk_height - 1 ||
+            lz == 0 || lz == Config::chunk_size - 1) {
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if ((dx | dy | dz) == 0) continue;
+                        if ((dx < 0 && lx != 0) || (dx > 0 && lx != Config::chunk_size - 1)) continue;
+                        if ((dy < 0 && ly != 0) || (dy > 0 && ly != Config::chunk_height - 1)) continue;
+                        if ((dz < 0 && lz != 0) || (dz > 0 && lz != Config::chunk_size - 1)) continue;
+                        if (get_chunk(cx + dx, cy + dy, cz + dz)) request_urgent_mesh_rebuild(cx + dx, cy + dy, cz + dz);
+                    }
+        }
+
+        // Источники света: учитываются по клетке, как в set_block_world.
+        const bool old_emits = get_block_props(old_type).light_emission > 0;
+        const bool new_emits = get_block_props(type).light_emission > 0;
+        if (old_emits) remove_light_source(pos);
+        if (new_emits) add_light_source(pos);
+
+        const bool light_unaffected =
+            transparency[static_cast<Block_ID>(old_type)] == transparency[static_cast<Block_ID>(type)] &&
+            !old_emits && !new_emits;
+        if (!light_unaffected) {
+            any_light_change = true;
+            light_lo = glm::min(light_lo, pos);
+            light_hi = glm::max(light_hi, pos);
+        }
+
+        m_fluids.notify_changed(*this, pos);
+        out_changed.push_back(pos);
+    }
+
+    // Один пересчёт света на коробку всех изменений с запасом max_light_level (как для одной правки).
+    if (any_light_change) {
+        constexpr int r = Config::max_light_level;
+        constexpr int shadow = Config::sky_shadow_range;
+        relight_block_light_box(light_lo.x - r, std::max(Config::world_min_y, light_lo.y - r), light_lo.z - r,
+                                light_hi.x + r, std::min(Config::world_max_y, light_hi.y + r), light_hi.z + r);
+        relight_sky_light_box(light_lo.x - r, std::max(Config::world_min_y, light_lo.y - shadow - r), light_lo.z - r,
+                              light_hi.x + r, std::min(Config::world_max_y, light_hi.y + r), light_hi.z + r);
+    }
+}
+
 glm::ivec3 Chunk_Manager::get_chunk_coords_for_world(int wx, int wy, int wz) const {
     return {
         Math_Helpers::floor_div(wx, Config::chunk_size),
@@ -2480,8 +2550,11 @@ void Chunk_Manager::relight_block_light_near(const glm::ivec3& p) {
     // Свет источника (<= max_light_level) за N шагов даёт max_light_level - N, поэтому правка в p
     // может изменить клетки не дальше чем в max_light_level - 1 от себя; берём радиус с запасом.
     constexpr int r = Config::max_light_level;
-    const int x0 = p.x - r, x1 = p.x + r, z0 = p.z - r, z1 = p.z + r;
-    const int y0 = std::max(Config::world_min_y, p.y - r), y1 = std::min(Config::world_max_y, p.y + r);
+    relight_block_light_box(p.x - r, std::max(Config::world_min_y, p.y - r), p.z - r,
+                            p.x + r, std::min(Config::world_max_y, p.y + r), p.z + r);
+}
+
+void Chunk_Manager::relight_block_light_box(int x0, int y0, int z0, int x1, int y1, int z1) {
     const int nx = x1 - x0 + 1, ny = y1 - y0 + 1, nz = z1 - z0 + 1;
     auto at = [&](int x, int y, int z) {
         return (static_cast<size_t>(y - y0) * nz + static_cast<size_t>(z - z0)) * nx + static_cast<size_t>(x - x0);
@@ -2631,9 +2704,12 @@ void Chunk_Manager::relight_sky_light_near(const glm::ivec3& p) {
     // p.y - sky_shadow_range - max_light_level до p.y + max_light_level по высоте.
     constexpr int r = Config::max_light_level;
     constexpr int shadow = Config::sky_shadow_range;
-    const int x0 = p.x - r, x1 = p.x + r, z0 = p.z - r, z1 = p.z + r;
-    const int y0 = std::max(Config::world_min_y, p.y - shadow - r);
-    const int y1 = std::min(Config::world_max_y, p.y + r);
+    relight_sky_light_box(p.x - r, std::max(Config::world_min_y, p.y - shadow - r), p.z - r,
+                          p.x + r, std::min(Config::world_max_y, p.y + r), p.z + r);
+}
+
+void Chunk_Manager::relight_sky_light_box(int x0, int y0, int z0, int x1, int y1, int z1) {
+    constexpr int shadow = Config::sky_shadow_range;
     const int nx = x1 - x0 + 1, ny = y1 - y0 + 1, nz = z1 - z0 + 1;
     auto at = [&](int x, int y, int z) {
         return (static_cast<size_t>(y - y0) * nz + static_cast<size_t>(z - z0)) * nx + static_cast<size_t>(x - x0);

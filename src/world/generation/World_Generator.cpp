@@ -92,6 +92,14 @@ inline int floordiv_int(int a, int b) {
         return x == tx && z == tz;
     }
 
+    // Плотность леса по биому: доля подходящих якорей, где реально растёт дерево. Якоря
+    // (is_tree_anchor) и так не ближе radius+1 друг к другу; этот отдельный хеш разреживает
+    // их, чтобы между стволами и кронами оставались просветы и по лесу можно было ходить.
+    constexpr int kTreeDensitySalt = 0x7DE5;
+    bool passes_tree_density(int x, int z, uint32_t seed, int percent) {
+        return hash_position(x, z, seed, kTreeDensitySalt) % 100 < static_cast<uint64_t>(percent);
+    }
+
     double interval_distance(double value, double min_value, double max_value) {
         if (value < min_value) return min_value - value;
         if (value > max_value) return value - max_value;
@@ -1041,6 +1049,8 @@ int World_Generator::get_height(int world_x, int world_z) const {
 Block_Types World_Generator::get_block(int world_x, int world_y, int world_z) const {
     if (world_y < Config::world_min_y || world_y > Config::world_max_y)
         return Block_Types::Air;
+    if (world_y == Config::world_min_y)
+        return Block_Types::Mantle_Stone;
 
     switch (m_dimension->terrain) {
         case Terrain_Mode::Flat: return m_dimension->flat_block_at(world_y);
@@ -1126,10 +1136,22 @@ Fast_Rng World_Generator::make_rng(int world_x, int world_z, int salt) const {
 // считал ВЕСЬ климат колонки (около 30 выборок шума) плюс поиск связности пещер.
 // Здесь колонка считается один раз на (x, z) — 1024 раза вместо 32768 — и дальше
 // заполнение столбца это просто сравнения целых чисел.
+// Нижний слой мира — мантийный камень во всех измерениях (аналог бедрока).
+namespace {
+void apply_mantle_floor(Chunk_Block_Grid& grid, int chunk_y) {
+    if (chunk_y != Config::world_min_chunk_y) return;
+    const int local_y = Config::world_min_y - chunk_y * Config::chunk_height;
+    for (int z = 0; z < Config::chunk_size; ++z)
+        for (int x = 0; x < Config::chunk_size; ++x)
+            grid.set(x, local_y, z, Block_Types::Mantle_Stone);
+}
+} // namespace
+
 void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                                      int chunk_x, int chunk_y, int chunk_z) const {
     Chunk_Block_Grid* output = &blocks;
     generate_chunks(&output, &chunk_y, 1, chunk_x, chunk_z);
+    apply_mantle_floor(blocks, chunk_y);
 }
 
 void World_Generator::generate_chunk_column(const std::vector<Chunk*>& chunks) const {
@@ -1255,12 +1277,14 @@ void World_Generator::generate_prepared_chunk(
     const std::shared_ptr<Prepared_Column>& prepared, size_t index,
     Chunk_Block_Grid& output) const {
     generate_prepared_chunk_impl(prepared, index, output, nullptr);
+    if (prepared && index < prepared->chunk_ys.size()) apply_mantle_floor(output, prepared->chunk_ys[index]);
 }
 
 void World_Generator::generate_prepared_chunk(
     const std::shared_ptr<Prepared_Column>& prepared, size_t index,
     Chunk& chunk) const {
     generate_prepared_chunk_impl(prepared, index, chunk.get_blocks_mutable(), &chunk);
+    if (prepared && index < prepared->chunk_ys.size()) apply_mantle_floor(chunk.get_blocks_mutable(), prepared->chunk_ys[index]);
 }
 
 void World_Generator::generate_prepared_chunk_impl(
@@ -1385,6 +1409,7 @@ void World_Generator::prewarm_generation_region_for_chunk(int chunk_x, int chunk
 
 bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chunk_z) const {
     const int start_y = chunk_y * Config::chunk_height;
+    if (chunk_y == Config::world_min_chunk_y) return false;   // там мантийный слой
     switch (m_dimension->terrain) {
         case Terrain_Mode::Void: return true;
         case Terrain_Mode::Flat: return start_y > m_dimension->flat_top_y();
@@ -1589,14 +1614,20 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     bool has_trees = false;
     Tree_Type tree_type = Tree_Type::Oak;
     int anchor_radius = 1;
+    // Процент подходящих якорей с деревом (см. passes_tree_density). Меньше — реже лес.
+    int tree_density = 100;
 
     switch (biome) {
-        // Лес проходимый: дубы стоят реже (радиус 2 между стволами), между кронами остаются просветы.
-        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;       anchor_radius = 2; break;
-        case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;     anchor_radius = 1; break;
-        case Biome_Id::Taiga:        has_trees = true; tree_type = Tree_Type::Spruce;    anchor_radius = 3; break;
-        case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle;    anchor_radius = 3; break;
-        case Biome_Id::Savanna:      has_trees = true; tree_type = Tree_Type::Acacia;    anchor_radius = 2; break;
+        // Обычные биомы: радиус — минимальный шаг между стволами, плотность — доля занятых мест.
+        // Лиственный лес: дубы с просветами, кроны не сливаются в стену.
+        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;    anchor_radius = 3; tree_density = 55; break;
+        // Берёзовый лес светлый и редкий: стволы стоят далеко друг от друга.
+        case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;  anchor_radius = 3; tree_density = 40; break;
+        // Тайга: ели широкие внизу, поэтому шаг больше, а часть мест пустует (поляны).
+        case Biome_Id::Taiga:        has_trees = true; tree_type = Tree_Type::Spruce; anchor_radius = 4; tree_density = 60; break;
+        case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle; anchor_radius = 4; tree_density = 50; break;
+        // Саванна: редкие зонтичные акации.
+        case Biome_Id::Savanna:      has_trees = true; tree_type = Tree_Type::Acacia; anchor_radius = 4; tree_density = 25; break;
                 // Слизовые ивы редкие: расстояние между ними 50+ блоков (см. is_sparse_tree_anchor).
         case Biome_Id::Slime:        has_trees = true; tree_type = Tree_Type::Slimewood; anchor_radius = 4; break;
         default: break;
@@ -1608,7 +1639,8 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     if (terrain_height >= kSeaLevel && has_trees &&
         (tree_type == Tree_Type::Slimewood
             ? is_sparse_tree_anchor(world_x, world_z, m_seed)
-            : is_tree_anchor(world_x, world_z, m_seed, anchor_radius))) {
+            : is_tree_anchor(world_x, world_z, m_seed, anchor_radius) &&
+              passes_tree_density(world_x, world_z, m_seed, tree_density))) {
         const auto setter = [&](int x, int y, int z, Block_Types type) {
             // Воксель вне этого чанка не меняется — полный get_block (колонка + шум) для него не нужен.
             const int lx = x - chunk.get_chunk_x() * Config::chunk_size;

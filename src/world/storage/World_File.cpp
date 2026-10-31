@@ -158,6 +158,7 @@ bool World_File::load(World_Settings& settings) const {
     settings.has_player_position = px && py && pz;
     if (settings.has_player_position) { settings.player_x = *px; settings.player_y = *py; settings.player_z = *pz; }
     if (const auto dt = read_float_field(contents, "day_time")) settings.day_time = *dt;
+    if (const auto dc = read_float_field(contents, "day_count")) settings.day_count = static_cast<int>(*dc);
 
     if (!parsed_any_field) {
         LOG_WARN("World settings file is invalid: " + m_path.string());
@@ -195,7 +196,8 @@ bool World_File::save(const World_Settings& settings) const {
              << "  \"player_y\": " << settings.player_y << ",\n"
              << "  \"player_z\": " << settings.player_z << ",\n";
     }
-    file << "  \"day_time\": " << settings.day_time << "\n"
+    file << "  \"day_time\": " << settings.day_time << ",\n"
+         << "  \"day_count\": " << settings.day_count << "\n"
          << "}\n";
 
     if (!file) {

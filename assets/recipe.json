@@ -157,7 +157,7 @@
         "SSS"
       ],
       "key": {
-        "S": "Stone"
+        "S": "Cobblestone"
       },
       "output": {
         "item": "Furnace",
@@ -292,7 +292,7 @@
         " S "
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -309,7 +309,7 @@
         " S"
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -326,7 +326,7 @@
         "S "
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -343,7 +343,7 @@
         "S"
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -360,7 +360,7 @@
         "S"
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -377,7 +377,7 @@
         " S"
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -394,7 +394,7 @@
         "S "
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -664,7 +664,7 @@
         "S"
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -747,7 +747,7 @@
         "S  "
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -764,7 +764,7 @@
         "  S"
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -849,7 +849,7 @@
         " S "
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {
@@ -900,7 +900,7 @@
         " S "
       ],
       "key": {
-        "M": "Stone",
+        "M": "Cobblestone",
         "S": "Stick"
       },
       "output": {

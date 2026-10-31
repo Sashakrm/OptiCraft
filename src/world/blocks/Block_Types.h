@@ -25,7 +25,7 @@ enum class Block_Types : Block_ID {
     Stone = 5,
     Oak_Leaf = 6,
     Water = 7,
-    // 8 зарезервирован (см. "reserved_block_ids" в assets/blocks.json) под будущий персистентный ID.
+    // 8 — динамит (раньше был зарезервирован под будущий персистентный ID).
     Rose = 9,
     Tall_Grass = 10,
     Sun_Stone = 11,
@@ -165,7 +165,12 @@ enum class Block_Types : Block_ID {
     Repeater = 163,            // выключен
     Repeater_On = 164,         // выдаёт сигнал вперёд
 
-    Count = 165
+    // Мантийный камень: нижний слой мира, нельзя сломать и взорвать (аналог бедрока).
+    Mantle_Stone = 165,
+    // Динамит: взрывается по сигналу красной логики (соседний включённый узел).
+    Dynamite = 8,            // раньше зарезервированный id; динамит, взрывается по сигналу красной логики
+
+    Count = 167
 };
 
 // Максимальная ёмкость реестра блоков: данные из blocks.json могут занимать любые id в этом
@@ -265,6 +270,9 @@ struct Block_Properties {
     Block_Mesh_Type mesh_type;
     Block_Mesh_Style mesh_style;
     Block_State state;
+
+    // hardness < 0 — блок нельзя ломать (как бедрок). Взрыв его тоже не трогает.
+    bool unbreakable() const { return hardness < 0.0f; }
 
     // UV-прямоугольники (u_min,v_min,u_max,v_max), уже разрешённые из
     // "atlas"+имя спрайта в blocks.json через Atlas_Registry на этапе

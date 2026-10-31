@@ -56,6 +56,12 @@ namespace Config {
     // остров высоко над землёй не даёт тени на поверхность. Пещеры выше этого значения будут
     // освещены сверху, поэтому дальность не стоит делать слишком большой.
     constexpr int sky_shadow_range = 32;
+    // Погода: сколько длится одно состояние (ясно / облачно / дождь), в секундах реального времени.
+    constexpr float weather_min_duration = 180.0f;
+    constexpr float weather_max_duration = 480.0f;
+
+    // Враги в выживании появляются только там, где освещение ниже этого значения (0..15).
+    constexpr int hostile_spawn_max_light = 3;   // спавн при свете < 4
     constexpr int decoration_overhang = 8;
     constexpr uint16_t seed =1327;
 
@@ -78,6 +84,7 @@ namespace Config {
     constexpr float player_step_height = 0.5f;             // подъём без прыжка: полублок (ступеньки, плиты)
     constexpr float player_sneak_edge_drop = 0.6f;         // Shift: не шагать туда, где под ногами пусто глубже этого
     constexpr float player_fly_speed = 198.0f;
+    constexpr float double_jump_window_seconds = 0.35f;
     // Бег: удержание Ctrl на земле при движении вперёд. Не работает при приседе и в полёте.
     constexpr float player_sprint_speed_multiplier = 1.3f;
     constexpr float exhaustion_sprint_per_meter = 0.1f;   // бег тратит сытость в 10 раз быстрее ходьбы

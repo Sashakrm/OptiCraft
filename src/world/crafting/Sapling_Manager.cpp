@@ -263,13 +263,13 @@ bool Sapling_Manager::try_grow(const glm::ivec3& origin, int size, Chunk_Manager
         if (!free_for_tree(chunk_manager.get_block_world(p.x, p.y, p.z))) return false;
     }
 
-    // 4) Ставим: сначала очищаем клетки саженцев, потом пишем дерево.
-    for (const glm::ivec3& c : cells_of(origin, size)) {
-        if (chunk_manager.set_block_world(c.x, c.y, c.z, Block_Types::Air)) out_changed.push_back(c);
-    }
-    for (const auto& [p, type] : plan) {
-        if (chunk_manager.set_block_world(p.x, p.y, p.z, type)) out_changed.push_back(p);
-    }
+    // 4) Ставим одной пакетной записью: сначала очищаем клетки саженцев, потом пишем дерево.
+    //    По одной клетке свет пересчитывался бы для каждого блока дерева (тысячи раз) — это и был фриз.
+    std::vector<std::pair<glm::ivec3, Block_Types>> writes;
+    writes.reserve(size * size + plan.size());
+    for (const glm::ivec3& c : cells_of(origin, size)) writes.emplace_back(c, Block_Types::Air);
+    for (const auto& [p, type] : plan) writes.emplace_back(p, type);
+    chunk_manager.set_blocks_world_batch(writes, out_changed);
 
     LOG_INFO("Sapling at " + std::to_string(origin.x) + " " + std::to_string(origin.y) + " " +
              std::to_string(origin.z) + " grew into a tree (" + std::to_string(plan.size()) + " blocks)");

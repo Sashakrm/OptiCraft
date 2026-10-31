@@ -105,12 +105,15 @@ public:
 
     // Клетки, которые менеджер изменил с прошлого вызова (для обновления мешей). Забирает Game.
     std::vector<glm::ivec3> take_changed();
+    // Динамит, по соседству с которым появился сигнал (взрыв делает Game). Забирает Game.
+    std::vector<glm::ivec3> take_triggered();
 
 private:
     // Единственная точка записи в мир: запоминает изменённые клетки.
     void write_block(const World_Access& world, glm::ivec3 pos, Block_Types type, uint8_t meta);
 
     std::vector<glm::ivec3> m_changed;
+    std::vector<glm::ivec3> m_triggered;
     std::set<Redstone_Key> m_nodes;
     struct Pending {
         int remaining = 0;

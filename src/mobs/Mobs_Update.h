@@ -46,6 +46,8 @@
 #include "entities/animals/Passive_Animal.h"
 #include "entities/animals/Horse.h"
 #include "entities/hostile/Hostile_Mob.h"
+#include "mobs/Boss.h"
+#include "mobs/Knight_Ai.h"
 #include "entities/items/Dropped_Item.h"
 #include "entities/effects/Status_Effects.h"
 #include "entities/player/Inventory.h"
@@ -60,7 +62,11 @@ struct Mob_Player_View {
     float eye_height = 1.62f;
     bool alive = true;
     bool sneaking = false;      // крадущегося игрока враги видят вдвое хуже
+    glm::vec3 forward{0.0f, 0.0f, -1.0f}; // куда смотрит игрок (боссы заходят за спину)
+    glm::vec3 velocity{0.0f}; // нужна для предсказания направления движения игрока
     bool night = false;         // ночь: пауки нападают на игрока только ночью
+    float sky_brightness = 1.0f; // 0..1: яркость неба по времени суток (под открытым небом свет = 15 * это)
+    int night_light_floor = 0;   // ночной минимум света (8 при полной луне), см. Day_Night_Cycle
     float horizontal_speed = 0.0f; // блоков/с: от скорости зависит урон удара по мобу
 };
 
@@ -100,11 +106,18 @@ class Mobs_Update {
 public:
     // --- Жизненный цикл ---------------------------------------------------------------------
     void clear();        // смена мира или телепорт: убрать всех мобов и состояние езды
+    // Взрыв: всем мобам в радиусе — урон, уменьшающийся к краю радиуса.
+    void damage_in_radius(const glm::vec3& center, float radius, float damage);
     void shutdown();     // выход из игры: clear() + сброс кэша моделей (порядок важен, см. выше)
     void reset_timers(); // новый мир: таймеры возрождения и атаки в ноль
 
     // Враги появляются только в Survival. Выключение убирает уже бегающих врагов.
     void set_hostiles_enabled(bool enabled);
+
+    // Какой биом в точке мира (Game отдаёт World_Generator). Нужен правилам спавна по биомам:
+    // см. natural_spawn_allowed() в Mobs_Update.cpp. Без него правила не действуют.
+    using Biome_Lookup = std::function<std::string(int, int, int)>;
+    void set_biome_lookup(Biome_Lookup lookup) { m_biome_at = std::move(lookup); }
 
     // --- Тики (мир и животные) --------------------------------------------------------------
     // Спавн и AI животных и врагов, размножение, уборка павших. Вызывается из Game::register_tick_systems.
@@ -138,6 +151,7 @@ public:
     int summon_zombies(int count, const glm::vec3& around);      // /summon zombie
     int summon_skeletons(int count, const glm::vec3& around);    // /summon skeleton
     int summon_spiders(int count, const glm::vec3& around);      // /summon spider
+    bool summon_boss(Boss_Kind kind, const glm::vec3& around, Chunk_Manager& chunks); // /boss
     // /breed: сразу «влюбляет» взрослых животных вида (pig|cow|sheep|horse). Возвращает число затронутых.
     int breed_all(const std::string& species);
 
@@ -161,15 +175,19 @@ public:
     void render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient) const;
 
 private:
-    enum class Target_Kind { None, Pig, Passive, Horse, Hostile };
+    enum class Target_Kind { None, Pig, Passive, Horse, Hostile, Boss, Knight };
 
     void spawn_missing_pigs(const glm::vec3& player_position, Chunk_Manager& chunks);
     void spawn_missing_passive(Passive_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks);
     int summon_passive(Passive_Kind kind, int count, const glm::vec3& around);
     int summon_hostile(Hostile_Kind kind, int count, const glm::vec3& around);
     void spawn_missing_horses(const glm::vec3& player_position, Chunk_Manager& chunks);
-    void spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks);
+    void spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks,
+                                float sky_brightness, int night_light_floor);
     void update_hostiles(float dt, const Mob_Player_View& player, Chunk_Manager& chunks, Mob_Result& result);
+    // Можно ли виду появиться естественно в этой точке (не /summon). Смотрит в таблицу запретных биомов.
+    bool natural_spawn_allowed(const char* species, const glm::vec3& position) const;
+    Biome_Lookup m_biome_at;
     void update_breeding();
 
     Mob_Result mount(Horse& horse, const Mob_Player_View& player);
@@ -179,6 +197,8 @@ private:
     std::vector<std::unique_ptr<Passive_Animal>> m_sheep;
     std::vector<std::unique_ptr<Horse>> m_horses;
     std::vector<std::unique_ptr<Hostile_Mob>> m_hostiles;
+    std::vector<std::unique_ptr<Boss>> m_bosses; // старые тестовые боссы
+    std::vector<std::unique_ptr<Knight_Ai>> m_knights;
     bool m_hostiles_enabled = false;
 
     std::vector<std::unique_ptr<Passive_Animal>>& passive_list(Passive_Kind kind);
@@ -203,6 +223,8 @@ private:
     Passive_Animal* m_target_passive = nullptr;
     Horse* m_target_horse = nullptr;
     Hostile_Mob* m_target_hostile = nullptr;
+    Boss* m_target_boss = nullptr;
+    Knight_Ai* m_target_knight = nullptr;
 };
 
 

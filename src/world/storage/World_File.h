@@ -21,6 +21,7 @@ struct World_Settings {
     bool has_player_position{false};
     float player_x{0.0f}, player_y{0.0f}, player_z{0.0f};
     float day_time{0.0f};                // нормализованное время суток [0,1)
+    int day_count{0};                    // сколько полных суток прошло (для фаз луны/солнца)
 };
 
 class World_File {

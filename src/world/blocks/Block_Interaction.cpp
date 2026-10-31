@@ -1,3 +1,6 @@
+#include <array>
+#include <random>
+#include <set>
 #include "world/blocks/Block_Interaction.h"
 #include "world/blocks/Block_Shapes.h"
 #include <glad/gl.h>
@@ -76,6 +79,50 @@ void invalidate_block_mesh(int wx, int wy, int wz, Chunk_Manager& chunk_manager,
 }
 
 Block_Interaction::Block_Interaction() = default;
+
+std::vector<glm::ivec3> Block_Interaction::explode(const glm::ivec3& center, float radius,
+                                                   Chunk_Manager& chunk_manager, Renderer& renderer) {
+    static std::mt19937 s_rng(std::random_device{}());
+    std::uniform_real_distribution<float> jitter(0.7f, 1.3f);
+    constexpr int k_rays = 16;          // лучи идут к граням куба 16x16x16 (поверхность сферы)
+    constexpr float k_step = 0.3f;
+    const glm::vec3 origin = glm::vec3(center) + glm::vec3(0.5f);
+    std::set<std::array<int, 3>> marked;
+
+    for (int i = 0; i <= k_rays; ++i) {
+        for (int j = 0; j <= k_rays; ++j) {
+            for (int k = 0; k <= k_rays; ++k) {
+                const bool on_surface = i == 0 || i == k_rays || j == 0 || j == k_rays || k == 0 || k == k_rays;
+                if (!on_surface) continue;
+                const glm::vec3 dir = glm::normalize(glm::vec3(i, j, k) / static_cast<float>(k_rays) * 2.0f - 1.0f);
+                float energy = radius * jitter(s_rng);
+                glm::vec3 pos = origin;
+                while (energy > 0.0f) {
+                    pos += dir * k_step;
+                    const glm::ivec3 b = glm::floor(pos);
+                    if (b.y < Config::world_min_y || b.y > Config::world_max_y) break;
+                    const Block_Types type = chunk_manager.get_block_world(b.x, b.y, b.z);
+                    if (type != Block_Types::Air) {
+                        const Block_Properties& props = get_block_props(type);
+                        if (!props.unbreakable()) marked.insert({b.x, b.y, b.z});
+                        energy -= (std::max(0.0f, props.blast_resistance) + 0.3f) * k_step;
+                    }
+                    energy -= 0.225f;
+                }
+            }
+        }
+    }
+
+    std::vector<glm::ivec3> destroyed;
+    for (const auto& m : marked) {
+        const glm::ivec3 b(m[0], m[1], m[2]);
+        if (chunk_manager.set_block_world(b.x, b.y, b.z, Block_Types::Air)) {
+            invalidate_chunk_and_neighbors(b.x, b.y, b.z, chunk_manager, renderer);
+            destroyed.push_back(b);
+        }
+    }
+    return destroyed;
+}
 
 bool Block_Interaction::can_harvest(Block_Types block, const Item_Stack& held) {
     const Block_Properties& props = get_block_props(block);
@@ -189,7 +236,8 @@ void Block_Interaction::update(float delta_time,
             m_break_progress = 0.0f;
         }
 
-        if (left_held && m_current_hit.hit && m_action_cooldown <= 0.0f) {
+        if (left_held && m_current_hit.hit && m_action_cooldown <= 0.0f &&
+            !get_block_props(m_current_hit.block_type).unbreakable()) {
             if (!m_is_mining) {
                 m_is_mining = true;
                 m_mining_pos = glm::ivec3(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z);
@@ -245,7 +293,8 @@ void Block_Interaction::update(float delta_time,
     }
 
     // Creative: мгновенная поломка по клику, как и раньше.
-    if (!survival && input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)) {
+    if (!survival && input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) &&
+        !get_block_props(m_current_hit.block_type).unbreakable()) {
         if (!chunk_manager.set_block_world(
             m_current_hit.block_x,
             m_current_hit.block_y,

@@ -1,7 +1,5 @@
 {
-  "reserved_block_ids": [
-    8
-  ],
+  "reserved_block_ids": [],
   "blocks": [
     {
       "id": 0,
@@ -3514,6 +3512,42 @@
       },
       "drop": "Repeater",
       "creative": false
+    },
+    {
+      "id": 165,
+      "name": "Mantle Stone",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": -1.0,
+      "blast_resistance": 3600000,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "deep_stone",
+        "side": "deep_stone",
+        "bottom": "deep_stone"
+      }
+    },
+    {
+      "id": 8,
+      "name": "Dynamite",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "red_sand",
+        "side": "red_sand",
+        "bottom": "red_sand"
+      }
     }
   ]
 }

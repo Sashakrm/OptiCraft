@@ -27,9 +27,18 @@ struct Item_Stack {
     int count = 0;
     // Сколько единиц прочности уже потрачено (только у инструментов; 0 = целый).
     int damage = 0;
+    // Уровень зачарования «Прочность» (0 — нет, максимум 3): +50 % к прочности за уровень.
+    int enchant_durability = 0;
 
     bool is_empty() const { return count <= 0 || type == Block_Types::Air; }
 };
+
+// Прочность с учётом зачарования; 0 — у предмета нет прочности.
+inline int effective_max_durability(const Item_Stack& stack) {
+    const int base = get_block_props(stack.type).max_durability;
+    if (base <= 0) return 0;
+    return base + base * stack.enchant_durability / 2;
+}
 
 // Размер стака: инструменты (есть прочность) не стакаются, всё остальное — до 64.
 inline int max_stack_for(Block_Types type) {
@@ -158,6 +167,9 @@ public:
     Item_Stack get_selected_stack() const;
     // Тратит прочность инструмента в активном слоте (Survival). true — инструмент сломался.
     bool damage_selected_tool(int amount = 1);
+    // Зачаровать предмет в выбранном слоте хотбара «Прочность» уровня level (1..3).
+    // false — там нет предмета с прочностью.
+    bool enchant_selected_durability(int level);
     // Списывает count штук из активного слота хотбара (Survival).
     bool consume_selected(int count = 1);
     bool has_resource(Block_Types type, int amount = 1) const;

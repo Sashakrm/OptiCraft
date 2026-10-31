@@ -3,6 +3,7 @@
 //
 
 #include "core/game/Game.h"
+#include "world/structures/Dungeon_Layout.h"
 #include "core/app/Application.h"
 #include "hud/layouts/Panel_Layouts.h"
 #include "utils/text/Localization.h"
@@ -336,8 +337,9 @@ Hud_Inventory_Slot make_hud_slot(const Item_Stack& stack, bool infinite_stack = 
     // UV уже предрасчитан Block_Registry при загрузке blocks.json — атлас тут
     // спрашивать по индексу больше не нужно, просто читаем готовый прямоугольник.
     float durability = -1.0f;
-    if (props.max_durability > 0 && stack.damage > 0) {
-        durability = 1.0f - static_cast<float>(stack.damage) / static_cast<float>(props.max_durability);
+    const int max_durability = effective_max_durability(stack);
+    if (max_durability > 0 && stack.damage > 0) {
+        durability = 1.0f - static_cast<float>(stack.damage) / static_cast<float>(max_durability);
     }
     Hud_Inventory_Slot slot{props.uv_icon, props.name, stack.count, false, durability};
     // Обычные блоки показываем кубом с тремя гранями; предметы и «крестики» — плоско.
@@ -561,6 +563,7 @@ void Game::save_world() {
     // Замороженное (Fixed) время не пишем: оно не принадлежит миру и не должно затирать сохранённое.
     if (!m_day_night_cycle.is_frozen()) {
         m_world_settings.day_time = m_day_night_cycle.get_normalized_time();
+        m_world_settings.day_count = m_day_night_cycle.get_day_count();
     }
     m_world_file.save(m_world_settings);
     m_chunk_manager_ptr->save_all();
@@ -624,6 +627,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_world_generator = std::make_unique<World_Generator>(m_generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
     m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
+    m_mobs.set_biome_lookup([this](int x, int y, int z) { return m_world_generator->get_biome_name(x, y, z); });
     m_block_interaction_ptr = std::make_unique<Block_Interaction>();
     m_crops_ptr = std::make_unique<Crop_Manager>();
     m_block_interaction_ptr->set_crop_manager(m_crops_ptr.get());
@@ -657,7 +661,8 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     }
     m_player_ptr->set_fall_damage_enabled(m_game_mode == Game_Mode::Survival);
     m_player_ptr->set_hunger_enabled(m_game_mode == Game_Mode::Survival);
-    m_player_ptr->set_flying(m_game_mode != Game_Mode::Survival);
+    m_player_ptr->set_flying(m_spectator);
+    m_player_ptr->set_double_jump_flight(m_game_mode == Game_Mode::Creative && !m_spectator);
     m_player_ptr->set_noclip(m_spectator);
     m_logic = Logic_Manager{};
     m_logic_scan_timer = 0.0f;
@@ -674,6 +679,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
         const bool fixed = dim.time_mode == Time_Mode::Fixed;
         m_day_night_cycle.set_frozen(fixed);
         m_day_night_cycle.set_normalized_time(fixed ? dim.fixed_time : m_world_settings.day_time);
+        if (!fixed) m_day_night_cycle.set_day_count(m_world_settings.day_count);
     }
 
     // Точка появления: в обычных измерениях — колонка (8, 8); в мире без земли — ближайший остров.
@@ -1034,6 +1040,7 @@ void Game::reload_world(const std::string& generation_folder) {
     m_world_generator = std::make_unique<World_Generator>(generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
     m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
+    m_mobs.set_biome_lookup([this](int x, int y, int z) { return m_world_generator->get_biome_name(x, y, z); });
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>();
     // Пересоздание менеджера не должно сбрасывать дальность прорисовки к значению
     // по умолчанию — иначе выбранная в настройках дальность терялась при смене
@@ -1079,6 +1086,7 @@ void Game::register_tick_systems() {
     using Phase = Tick_Phase;
     m_tick.add("day_night", Phase::Pre, 0, [this](float dt) {
         m_day_night_cycle.update(dt);
+        m_weather.update(dt);
     });
     m_tick.add("hunger", Phase::Pre, 10, [this](float dt) {
         m_player_ptr->update_hunger(dt);
@@ -1120,6 +1128,12 @@ void Game::register_tick_systems() {
         for (const glm::ivec3& pos : m_logic.take_changed()) {
             invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
         }
+        // Динамит, на который пришёл сигнал красной логики, взрывается.
+        for (const glm::ivec3& pos : m_logic.take_triggered()) {
+            if (m_chunk_manager_ptr->get_block_world(pos.x, pos.y, pos.z) == Block_Types::Dynamite) {
+                detonate(pos, 4.0f);
+            }
+        }
     });
     m_tick.add("dropped_items", Phase::Simulate, 40, [this](float dt) {
         // Подбирать предметы можно только в Survival и пока жив.
@@ -1151,8 +1165,12 @@ Mob_Player_View Game::mob_view() const {
     view.eye_height = m_player_ptr->get_eye_height();
     view.alive = m_player_ptr->is_alive();
     view.sneaking = m_player_ptr->is_crouching();
+    view.forward = m_camera_ptr->get_front();
+    view.velocity = m_player_ptr->get_velocity();
     view.horizontal_speed = m_player_ptr->get_horizontal_speed();
     view.night = m_day_night_cycle.get_normalized_time() >= Config::night_start_normalized;
+    view.sky_brightness = m_day_night_cycle.get_sky_brightness();
+    view.night_light_floor = m_day_night_cycle.get_night_light_floor();
     return view;
 }
 
@@ -1164,21 +1182,24 @@ Mob_Blocked_Fn Game::mob_blocked_fn() const {
 
 // Применяет результат Mobs_Update к игроку, камере, блок-взаимодействию и инвентарю.
 void Game::apply_mob_result(const Mob_Result& result) {
+    // Перемещение игрока — только одна из возможных частей результата мобов.
+    // Урон/истощение/износ предметов не должны зависеть от set_player_position:
+    // обычная атака врага возвращает только player_damage.
     if (result.set_player_position) {
         m_player_ptr->set_position(result.player_position);
         m_camera_ptr->set_position(result.player_position + glm::vec3(0.0f, m_player_ptr->get_eye_height(), 0.0f));
-        if (result.set_riding) m_player_ptr->set_riding(result.riding);
-        if (result.cancel_block_actions) m_block_interaction_ptr->cancel_actions();
-        if (result.consume_held_item) m_inventory_ptr->consume_selected(1);
-        if (result.damage_held_tool) m_inventory_ptr->damage_selected_tool(1);
-        if (result.exhaustion > 0.0f) m_player_ptr->add_exhaustion(result.exhaustion);
-        if (result.player_damage > 0) {
-            const int points = std::min(m_inventory_ptr->armor_points(), Config::armor_points_cap);
-            const float reduction = static_cast<float>(points) / Config::armor_points_divisor;
-            const int damage = static_cast<int>(std::ceil(static_cast<float>(result.player_damage) * (1.0f - reduction)));
-            m_player_ptr->take_damage(std::max(damage, 1));
-            m_inventory_ptr->damage_armor(1);
-        }
+    }
+    if (result.set_riding) m_player_ptr->set_riding(result.riding);
+    if (result.cancel_block_actions) m_block_interaction_ptr->cancel_actions();
+    if (result.consume_held_item) m_inventory_ptr->consume_selected(1);
+    if (result.damage_held_tool) m_inventory_ptr->damage_selected_tool(1);
+    if (result.exhaustion > 0.0f) m_player_ptr->add_exhaustion(result.exhaustion);
+    if (result.player_damage > 0 && m_player_ptr->is_alive()) {
+        const int points = std::min(m_inventory_ptr->armor_points(), Config::armor_points_cap);
+        const float reduction = static_cast<float>(points) / Config::armor_points_divisor;
+        const int damage = static_cast<int>(std::ceil(static_cast<float>(result.player_damage) * (1.0f - reduction)));
+        m_player_ptr->take_damage(std::max(damage, 1));
+        m_inventory_ptr->damage_armor(1);
     }
 }
 
@@ -1359,7 +1380,7 @@ void Game::render_gameplay(bool show_gameplay_hud) {
         return;
     }
 
-    const glm::vec3 sky_color = m_day_night_cycle.get_sky_color();
+    const glm::vec3 sky_color = m_weather.apply_to_sky(m_day_night_cycle.get_sky_color());
     m_renderer_ptr->clear_screen(sky_color.r, sky_color.g, sky_color.b);
 
     const float aspect_ratio = static_cast<float>(m_window_ptr->get_width()) /
@@ -1379,22 +1400,25 @@ void Game::render_gameplay(bool show_gameplay_hud) {
         view,
         projection,
         m_day_night_cycle.get_sun_direction(),
-        m_day_night_cycle.get_moon_direction()
+        m_day_night_cycle.get_moon_direction(),
+        m_day_night_cycle.get_moon_illumination(),
+        m_day_night_cycle.get_sun_darkness(),
+        m_day_night_cycle.get_moon_darkness()
     );
 
     // Мобы рисуются между непрозрачным миром и водой (см. before_liquid в Renderer::render_chunks),
     // чтобы вода закрывала их, когда они под поверхностью.
     const auto draw_mobs = [this, &view, &projection]() {
         if (Shader* mob_shader = m_renderer_ptr->get_mob_shader()) {
-            m_mobs.render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
+            m_mobs.render(*mob_shader, view, projection, scene_ambient());
             // Тело игрока: видно при взгляде вниз (голова скрыта, см. Player_Model).
             if (m_player_ptr->is_alive()) {
-                m_player_model.render_world(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
+                m_player_model.render_world(*mob_shader, view, projection, scene_ambient());
             }
         }
     };
     m_renderer_ptr->render_chunks(renderable, view, projection,
-                                  m_day_night_cycle.get_ambient_intensity(), m_spectator, draw_mobs);
+                                  scene_ambient(), m_spectator, draw_mobs);
 
     // Выпавшие предметы: одна динамическая геометрия на все, тем же атласом, что и блоки.
     m_dropped_items_mesh.clear();
@@ -1678,8 +1702,9 @@ void Game::apply_game_mode(Game_Mode mode, bool spectator) {
     m_mobs.set_hostiles_enabled(survival);
     m_player_ptr->set_fall_damage_enabled(survival);
     m_player_ptr->set_hunger_enabled(survival);
-    // Полёт привязан к Creative: в Survival его нет, в Creative — с коллизиями, в наблюдателе — сквозь блоки.
-    m_player_ptr->set_flying(!survival);
+    // Творческий режим: ходим по земле, полёт — двойным прыжком (или /fly). Наблюдатель летает всегда, сквозь блоки.
+    m_player_ptr->set_flying(m_spectator);
+    m_player_ptr->set_double_jump_flight(!survival && !m_spectator);
     m_player_ptr->set_noclip(m_spectator);
     m_block_interaction_ptr->cancel_actions();
     if (survival) {
@@ -1951,6 +1976,43 @@ void Game::set_game_mode(Game_Mode mode) {
 
 int Game::give_item(Block_Types type, int count) {
     return m_inventory_ptr->try_add(type, count);
+}
+
+bool Game::enchant_held_item(int level) {
+    return m_inventory_ptr->enchant_selected_durability(level);
+}
+
+bool Game::build_dungeon(const glm::ivec3& origin, std::uint32_t seed) {
+    const Dungeon_Layout layout = make_dungeon_layout(seed);
+    bool all_placed = true;
+    for (const Dungeon_Block& block : layout.blocks) {
+        all_placed &= set_block_at(origin.x + block.x, origin.y + block.y, origin.z + block.z, block.type);
+    }
+    return all_placed;
+}
+
+void Game::detonate(const glm::ivec3& center, float radius) {
+    m_block_interaction_ptr->explode(center, radius, *m_chunk_manager_ptr, *m_renderer_ptr);
+    const glm::vec3 c = glm::vec3(center) + glm::vec3(0.5f);
+    const float reach = radius * 2.0f;
+    constexpr float k_max_damage = 14.0f;
+    m_mobs.damage_in_radius(c, reach, k_max_damage);
+    const float d = glm::distance(m_player_ptr->get_position(), c);
+    if (d < reach) {
+        m_player_ptr->take_damage(static_cast<int>(std::ceil(k_max_damage * (1.0f - d / reach))));
+    }
+}
+
+bool Game::switch_dimension(const std::string& name) {
+    const Dimension_Info& info = get_dimension_info(dimension_from_name(name));
+    if (name != info.name) return false;
+    if (m_world_settings.dimension == info.name) return true;
+    // Сохраняем текущее измерение, меняем настройку и перестраиваем мир с сохранённой позицией x/z.
+    save_world();
+    m_world_settings.dimension = info.name;
+    reload_world(m_generation_folder);
+    save_world();
+    return true;
 }
 
 bool Game::set_block_at(int x, int y, int z, Block_Types type) {

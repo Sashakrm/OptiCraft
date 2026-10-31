@@ -39,6 +39,21 @@ void Player::update(float delta_time, const Chunk_Manager& chunk_manager) {
         return;
     }
 
+    // Двойной прыжок (творческий режим): фронт нажатия Space в пределах окна — переключает полёт.
+    // Работает до ветки полёта, чтобы переключение уже действовало в этом же кадре.
+    const bool jump_down = m_pending_input.jump;
+    const bool jump_pressed = jump_down && !m_jump_was_down;
+    m_jump_was_down = jump_down;
+    m_jump_tap_timer = std::max(0.0f, m_jump_tap_timer - delta_time);
+    if (jump_pressed && m_double_jump_flight) {
+        if (m_jump_tap_timer > 0.0f) {
+            m_jump_tap_timer = 0.0f;
+            toggle_flying();
+        } else {
+            m_jump_tap_timer = Config::double_jump_window_seconds;
+        }
+    }
+
     const glm::vec3 frame_start_position = m_position;
     glm::vec3 forward(m_view_forward.x, 0.0f, m_view_forward.z);
     glm::vec3 right(m_view_right.x, 0.0f, m_view_right.z);

@@ -378,12 +378,16 @@ private:
     // заново от источников внутри куба и от неизменённых клеток сразу за его границей. Меши
     // пересобираются только у чанков, где свет РЕАЛЬНО поменялся.
     void relight_block_light_near(const glm::ivec3& world_pos);
+    // То же для произвольной коробки мировых координат (включительно). Пакетная запись
+    // (set_blocks_world_batch) пересчитывает свет один раз на всю коробку дерева.
+    void relight_block_light_box(int x0, int y0, int z0, int x1, int y1, int z1);
     // Инкрементальный пересчёт для только что загруженных чанков (m_chunks_pending_block_light):
     // свет только прибавляется, очистка не нужна.
     void relight_block_light_new_chunks();
     // Локальный пересчёт света неба после правки: вертикальная тень пересчитывается только для
     // колонки правки, горизонтальное растекание — в кубе вокруг неё (см. реализацию).
     void relight_sky_light_near(const glm::ivec3& world_pos);
+    void relight_sky_light_box(int x0, int y0, int z0, int x1, int y1, int z1);
     // Грани соседа читают свет через границу: после смены света в чанках из changed_chunks
     // шесть соседей помечаются грязными, иначе их граница держала бы старый свет.
     void mark_light_neighbors_dirty(const std::unordered_set<glm::ivec3, Chunk_Key_Hash>& changed_chunks);
@@ -438,6 +442,11 @@ public:
     Block_Types get_block_world(int wx, int wy, int wz) const;
     // meta — метаданные нового блока (ориентация/активность, см. Block_Meta); 0 по умолчанию.
     bool set_block_world(int wx, int wy, int wz, Block_Types type, uint8_t meta = 0);
+    // Пакетная запись многих блоков (дерево растёт — тысячи клеток). Поведение то же, что у
+    // set_block_world по каждой клетке по порядку, но свет пересчитывается один раз на общую
+    // коробку, а меши помечаются по одному разу. Записанные клетки добавляются в out_changed.
+    void set_blocks_world_batch(const std::vector<std::pair<glm::ivec3, Block_Types>>& writes,
+                                std::vector<glm::ivec3>& out_changed);
     uint8_t get_block_meta_world(int wx, int wy, int wz) const;
     // Меняет только метаданные уже стоящего блока (печь загорелась, сменила текстуру).
     // Возвращает false, если чанк не загружен или значение не изменилось.

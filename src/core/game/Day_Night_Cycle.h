@@ -50,9 +50,31 @@ public:
     // выглядело бы некрасиво "выключенным").
     float get_ambient_intensity() const;
 
+    // Яркость неба без ночного "пола" (ambient выше никогда не опускается до 0.4): 1 — день,
+    // 0 — глубокая ночь. По ней считается уровень освещения под открытым небом для спавна врагов.
+    float get_sky_brightness() const;
+
+    // Фазы луны и солнца. Фаза луны идёт по дням: 1..32 и обратно 32..1 (период 64 суток).
+    // Солнце — зеркально: когда луна в максимальной фазе (32), солнце в минимальной (1).
+    // Смена фазы — раз в полные сутки (один круг day/night).
+    int get_day_count() const { return m_day_count; }
+    void set_day_count(int days) { m_day_count = days; }
+    int get_moon_phase() const;   // 1..32
+    int get_sun_phase() const;    // 33 - moon phase, 1..32
+    // Освещённая часть диска луны для шейдера: -1 — новолуние, 0 — половина, 1 — полнолуние.
+    float get_moon_illumination() const;
+    // Доля "тьмы" диска: 0 — обычный диск, 1 — максимальная фаза. Солнце темнеет при фазе 32
+    // (фаза солнца = 33 − фаза луны, поэтому солнце темнеет тогда, когда луна новая),
+    // луна — при фазе 32.
+    float get_sun_darkness() const;
+    float get_moon_darkness() const;
+    // Минимальный уровень освещения ночью (шкала 0..15): 8 при фазе луны 32, иначе 0.
+    int get_night_light_floor() const;
+
 private:
     float m_full_cycle_seconds;
     float m_time_seconds = 0.0f; // [0, m_full_cycle_seconds)
+    int m_day_count = 0;         // полных кругов с начала мира (может уйти в минус при /time set назад)
     bool m_frozen = false;
 
     // sin(elevation_angle) направления на солнце — вынесено отдельно, чтобы не пересчитывать

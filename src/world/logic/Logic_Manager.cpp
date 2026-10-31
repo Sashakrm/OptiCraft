@@ -316,6 +316,16 @@ void Logic_Manager::step(const World_Access& world) {
         }
     }
 
+    // 2b. Динамит: клетка рядом с узлом, на которую приходит сигнал, — к взрыву (Game).
+    for (const Redstone_Key& k : m_nodes) {
+        const glm::ivec3 p = pos_of(k);
+        if (!world.loaded(p.x, p.y, p.z)) continue;
+        for (const glm::ivec3& d : kDirs) {
+            const glm::ivec3 c = p + d;
+            if (sim.type(c) == Block_Types::Dynamite && sim.full_power(c) > 0) m_triggered.push_back(c);
+        }
+    }
+
     // 3. Желаемые состояния зажимателей и повторителей — все по одному снимку мира.
     struct Apply {
         glm::ivec3 pos;
@@ -399,6 +409,12 @@ void Logic_Manager::write_block(const World_Access& world, glm::ivec3 pos, Block
 std::vector<glm::ivec3> Logic_Manager::take_changed() {
     std::vector<glm::ivec3> out;
     out.swap(m_changed);
+    return out;
+}
+
+std::vector<glm::ivec3> Logic_Manager::take_triggered() {
+    std::vector<glm::ivec3> out;
+    out.swap(m_triggered);
     return out;
 }
 

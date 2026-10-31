@@ -89,6 +89,12 @@ public:
         return r;
     }
 
+    // Взрыв в центре center радиусом radius: лучи от центра расходуют «энергию» на
+    // blast_resistance блоков (как в Minecraft). Ломает пробитые блоки, кроме unbreakable.
+    // Возвращает координаты сломанных блоков.
+    std::vector<glm::ivec3> explode(const glm::ivec3& center, float radius,
+                                    Chunk_Manager& chunk_manager, Renderer& renderer);
+
     // Блоки, сломанные с прошлого вызова (только Survival) — забирает Game каждый кадр.
     std::vector<Broken_Block_Event> take_broken_blocks() {
         std::vector<Broken_Block_Event> events;
