@@ -315,7 +315,9 @@ void Chunk_Manager::start_workers() {
     // это приводит к одновременной генерации слишком большого числа чанков и
     // исчерпанию памяти ещё до того, как очередь загрузки успеет стабилизироваться.
     const unsigned int available_workers = hardware_threads > 3 ? hardware_threads - 3 : 1u;
-    const unsigned int worker_count = std::max(2u, std::min(8u, available_workers));
+    // Мешинг — короткая задача; больше потоков = меньше пинг-вон на загрузку
+    // нового мира. Генерация остаётся на 4-6 (ограничено снизу).
+    const unsigned int worker_count = std::max(2u, std::min(16u, available_workers));
 
     m_workers.reserve(worker_count);
     m_disk_reader = std::thread(&Chunk_Manager::disk_reader_loop, this);
@@ -323,7 +325,7 @@ void Chunk_Manager::start_workers() {
     // Reserve mesh capacity instead of letting long column/region jobs occupy every
     // worker. General workers still prefer queued meshes, while dedicated workers
     // never leave the mesh queue for generation or regional prewarm work.
-    const unsigned int dedicated_mesh_workers = worker_count >= 4 ? 2u : 1u;
+    const unsigned int dedicated_mesh_workers = worker_count >= 8 ? 4u : (worker_count >= 4 ? 2u : 1u);
     const unsigned int general_workers = worker_count - dedicated_mesh_workers;
     for (unsigned int i = 0; i < general_workers; ++i) {
         m_workers.emplace_back(&Chunk_Manager::worker_loop, this, false);
@@ -1683,8 +1685,10 @@ void Chunk_Manager::collect_finished_chunks() {
             const int base_x = result.position.x * Config::chunk_size;
             const int base_y = result.position.y * Config::chunk_height;
             const int base_z = result.position.z * Config::chunk_size;
-            for (const auto& [index, value] : new_chunk->get_blocks().meta_entries()) {
-                (void)value;
+            const auto& entries = new_chunk->get_blocks().meta_entries();   // плотный: [индекс, значение, ...]
+            for (size_t k = 0; k + 1 < entries.size(); k += 2) {
+                const int index = static_cast<int>(entries[k] & 0x0FFFFFu);
+                (void)entries[k + 1];
                 const int x = index % Config::chunk_size;
                 const int z = (index / Config::chunk_size) % Config::chunk_size;
                 const int y = index / (Config::chunk_size * Config::chunk_size);

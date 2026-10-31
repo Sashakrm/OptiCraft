@@ -497,10 +497,13 @@ bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
     uint32_t format = use_rle ? k_format_rle16 : k_format_raw16;
 
     // Чанк с метаданными блоков: оборачиваем блоки (как выбраны выше) и дописываем метаданные.
-    std::vector<uint8_t> meta_payload;
+    // Плотный формат: [1 байт use_rle][4 байта block_len][block bytes][4 байта meta_count]
+    // затем meta_count записей по 3 байта: [uint16_t index][uint8_t value]. Формат на диске
+    // тот же, что и раньше (старые файлы читаются без изменений).
     if (blocks.has_meta()) {
-        const auto& entries = blocks.meta_entries();
-        const uint32_t meta_count = static_cast<uint32_t>(entries.size());
+        const auto& entries = blocks.meta_entries();   // плотный: [индекс, значение, ...]
+        const uint32_t meta_count = static_cast<uint32_t>(entries.size() / 2);
+        std::vector<uint8_t> meta_payload;
         meta_payload.reserve(1 + 4 + block_len + 4 + static_cast<size_t>(meta_count) * 3);
         meta_payload.push_back(use_rle ? 1 : 0);
         const auto append_u32 = [&meta_payload](uint32_t v) {
@@ -510,7 +513,9 @@ bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
         append_u32(block_len);
         meta_payload.insert(meta_payload.end(), block_bytes, block_bytes + block_len);
         append_u32(meta_count);
-        for (const auto& [index, value] : entries) {
+        for (size_t k = 0; k < meta_count; ++k) {
+            const uint16_t index = static_cast<uint16_t>(entries[2 * k] & 0xFFFFu);
+            const uint8_t value = static_cast<uint8_t>(entries[2 * k + 1]);
             const uint8_t* b = reinterpret_cast<const uint8_t*>(&index);
             meta_payload.insert(meta_payload.end(), b, b + sizeof(index));
             meta_payload.push_back(value);

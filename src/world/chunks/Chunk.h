@@ -219,11 +219,13 @@ private:
     uint32_t m_value_mask = 0;        // (1 << m_bits) - 1
 
     // Метаданные блока (см. Block_Meta в Block_Types.h): ориентация бревна, сторона, куда
-    // смотрит печь, флаг "активен". Хранятся РЕДКО — почти все блоки мира имеют meta = 0, —
-    // поэтому это разреженная карта индекс -> значение, а не второй массив.
-    // Живёт внутри сетки блоков, чтобы автоматически копироваться в снимок для мешинга
-    // (Mesh_Job::own_blocks) и попадать в Region_File вместе с блоками.
-    std::unordered_map<uint16_t, uint8_t> m_meta;
+    // смотрит печь, флаг "активен". Хранятся РЕДКО — почти все блоки мира имеют meta = 0.
+    // Раньше это была разреженная карта (unordered_map): она дублировалась в каждый снимок
+    // мешинга (6-7 раз на чанк за кадр) и в задачи — и стала скрытым тормозом горячего пути.
+    // Теперь плотный массив пар (индекс вокселя, значение), хранящий только ненулевые записи:
+    // копия снимка — memcpy, а у чанка без метаданных — ноль памяти.
+    // meta_entries() отдаёт плотный массив для сохранения (см. Region_File).
+    std::vector<uint32_t> m_meta;
 
     static constexpr size_t index(int x, int y, int z) {
         return (static_cast<size_t>(y) * Config::chunk_size + static_cast<size_t>(z)) *
@@ -268,7 +270,10 @@ public:
     // ориентацию/активность от прежнего.
     void set(int x, int y, int z, Block_Types type) {
         const size_t i = index(x, y, z);
-        if (!m_meta.empty()) m_meta.erase(static_cast<uint16_t>(i));
+        if (!m_meta.empty()) {
+            for (size_t j = 0; j < m_meta.size(); j += 2)
+                if (static_cast<uint32_t>(m_meta[j] & 0x0FFFFFu) == i) { m_meta[j + 1] = 0; break; }
+        }
         const Block_ID id = static_cast<Block_ID>(type);
         const uint16_t old_index = index_at(i);
         if (m_palette[old_index] == id) return;
@@ -293,30 +298,52 @@ public:
     // Строит палитру за один проход — намного быстрее, чем voxel_count вызовов set().
     void assign_flat(const Block_ID* flat);
     void unpack(Block_ID* out) const;
+    // Плоская копия метаданных (voxel_count байт): все 0, кроме записей в m_meta.
+    // Мешинг на GPU берёт весь чанк за одно memcpy вместо распаковки карты.
+    void unpack_meta(uint8_t* out) const;
     // Выкидывает записи палитры, которые больше никто не использует, и ужимает битность.
     // Зовётся после генерации и перед сохранением: set() только добавляет записи.
     void compact();
 
     uint8_t get_meta(int x, int y, int z) const {
         if (m_meta.empty()) return 0;
-        const auto it = m_meta.find(static_cast<uint16_t>(index(x, y, z)));
-        return it == m_meta.end() ? 0 : it->second;
+        const uint32_t i = static_cast<uint32_t>(index(x, y, z));
+        for (size_t j = 0; j < m_meta.size(); j += 2)
+            if (static_cast<uint32_t>(m_meta[j] & 0x0FFFFFu) == i)
+                return static_cast<uint8_t>(m_meta[j + 1]);
+        return 0;
     }
 
+    // Значение хранится не отсортированным: метаданные редки, поиск пар (индекс, значение)
+    // идёт линейным проходом (у обычного чанка ноль или единицы записей; максимум теоретически —
+    // весь чанк жидкости, где даже бинарный поиск не оправдан). Порядок не трогаем —
+    // Region_File пишет записи как есть, и формат на диске от сортировки не зависит.
     void set_meta(int x, int y, int z, uint8_t value) {
-        const uint16_t i = static_cast<uint16_t>(index(x, y, z));
-        if (value == 0) m_meta.erase(i);
-        else m_meta[i] = value;
+        const uint32_t i = static_cast<uint32_t>(index(x, y, z));
+        for (size_t j = 0; j < m_meta.size(); j += 2) {
+            if (static_cast<uint32_t>(m_meta[j] & 0x0FFFFFu) == i) {
+                if (value == 0) {
+                    m_meta[j + 1] = 0;
+                    break;
+                }
+                m_meta[j + 1] = value;
+                return;
+            }
+        }
+        if (value != 0) m_meta.push_back(i), m_meta.push_back(static_cast<uint32_t>(value));
     }
+
+    // Плотные записи для сохранения: [индекс, значение, индекс, значение, ...].
+    const std::vector<uint32_t>& meta_entries() const { return m_meta; }
 
     // Блоки, записанные в палитре (могут включать уже не используемые записи).
     const std::vector<Block_ID>& palette() const { return m_palette; }
     bool has_meta() const { return !m_meta.empty(); }
     void clear_meta() { m_meta.clear(); }
-    const std::unordered_map<uint16_t, uint8_t>& meta_entries() const { return m_meta; }
-    // Для загрузки с диска: index — линейный индекс вокселя (как в index()).
-    void set_meta_by_index(uint16_t linear_index, uint8_t value) {
-        if (linear_index < voxel_count && value != 0) m_meta[linear_index] = value;
+    // Загрузка с диска: запись добавляется (перезаписей при чтении нет — сетка чистая).
+    void set_meta_by_index(uint32_t linear_index, uint8_t value) {
+        if (linear_index < voxel_count && value != 0)
+            m_meta.push_back(linear_index), m_meta.push_back(static_cast<uint32_t>(value));
     }
 
     // Весь чанк состоит из одного блока (после compact()): воздух над землёй, сплошной камень.
@@ -327,7 +354,7 @@ public:
     size_t memory_bytes() const {
         return m_words.size() * sizeof(uint64_t) + m_palette.size() * sizeof(Block_ID) +
                m_counts.size() * sizeof(uint16_t) +
-               m_meta.size() * (sizeof(uint16_t) + sizeof(uint8_t));
+               m_meta.size() * sizeof(uint32_t);
     }
     constexpr size_t size_bytes() const { return voxel_count * sizeof(Block_ID); }  // размер распакованного вида
 };

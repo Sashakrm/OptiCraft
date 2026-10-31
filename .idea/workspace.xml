@@ -29,16 +29,12 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="увеличение производительности генератора мира">
-      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_greedy.comp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/mesh_misc.comp" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/mesh_misc.comp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
+    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="обновление ИИ">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -82,23 +78,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0004122825833737" />
-      <entry key="MS500" value="1.3618890437169042" />
-      <entry key="S2" value="2.841231214693259" />
-      <entry key="S5" value="3.8489472433690675" />
-      <entry key="S10" value="4.356667494814766" />
-      <entry key="S30" value="4.768136112843601" />
-      <entry key="S60" value="5.030386882922813" />
-      <entry key="M2" value="8.96628746860928" />
-      <entry key="M5" value="35.308122261567526" />
-      <entry key="M10" value="73.2384991824718" />
-      <entry key="M15" value="117.43322410841083" />
-      <entry key="M30" value="305.95649427552297" />
-      <entry key="H1" value="797.9912648700492" />
-      <entry key="H2" value="1686.2163683776976" />
-      <entry key="H4" value="2782.951313007931" />
-      <entry key="D1" value="4742.800510147727" />
-      <entry key="W1" value="5272.570462598924" />
+      <entry key="MS100" value="1.000015797826897" />
+      <entry key="MS500" value="1.125222391034994" />
+      <entry key="S2" value="1.9290212557131774" />
+      <entry key="S5" value="2.461470752444666" />
+      <entry key="S10" value="2.7076447483853006" />
+      <entry key="S30" value="2.923187329024043" />
+      <entry key="S60" value="3.3213901075631367" />
+      <entry key="M2" value="5.417499887200448" />
+      <entry key="M5" value="23.98166573842747" />
+      <entry key="M10" value="59.466498295139765" />
+      <entry key="M15" value="101.74237224720682" />
+      <entry key="M30" value="283.55692841079986" />
+      <entry key="H1" value="767.1518422456196" />
+      <entry key="H2" value="1653.0769557940703" />
+      <entry key="H4" value="2755.967478924208" />
+      <entry key="D1" value="4737.245471535176" />
+      <entry key="W1" value="5274.210749577578" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -106,37 +102,37 @@
       <entry key="S2" value="0.0" />
       <entry key="S5" value="0.0" />
       <entry key="S10" value="0.0" />
-      <entry key="S30" value="1.0595168985920893E-196" />
-      <entry key="S60" value="1.0293283725770207E-98" />
-      <entry key="M2" value="1.0145582154696606E-49" />
-      <entry key="M5" value="2.52645047167536E-20" />
-      <entry key="M10" value="1.5894883701040854E-10" />
-      <entry key="M15" value="2.9354040272933057E-7" />
-      <entry key="M30" value="5.594958668636425E-4" />
-      <entry key="H1" value="0.030531424678299838" />
-      <entry key="H2" value="0.2998360117245715" />
-      <entry key="H4" value="1.0549742337881092" />
-      <entry key="D1" value="3.1882995514123" />
-      <entry key="W1" value="3.872063320763385" />
+      <entry key="S30" value="5.847247057461655E-199" />
+      <entry key="S60" value="7.64672940377877E-100" />
+      <entry key="M2" value="2.765272030701226E-50" />
+      <entry key="M5" value="1.5020871968865145E-20" />
+      <entry key="M10" value="1.2256022016441387E-10" />
+      <entry key="M15" value="2.4682889801136683E-7" />
+      <entry key="M30" value="5.130514766288525E-4" />
+      <entry key="H1" value="0.029236750376740124" />
+      <entry key="H2" value="0.2934099296706994" />
+      <entry key="H4" value="1.0436079051840401" />
+      <entry key="D1" value="3.182548538227779" />
+      <entry key="W1" value="3.871064780380211" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.9530340830346055" />
-      <entry key="MS500" value="1.3458053495978473" />
-      <entry key="S2" value="2.830501914303398" />
-      <entry key="S5" value="3.8431325417400224" />
-      <entry key="S10" value="4.353411326879431" />
-      <entry key="S30" value="4.766960768716379" />
-      <entry key="S60" value="5.029759247226509" />
-      <entry key="M2" value="8.965566226138066" />
-      <entry key="M5" value="35.30667997173046" />
-      <entry key="M10" value="73.2370584266028" />
-      <entry key="M15" value="117.4318824157489" />
-      <entry key="M30" value="305.95573118874114" />
-      <entry key="H1" value="798.0202157400196" />
-      <entry key="H2" value="1686.5142309695593" />
-      <entry key="H4" value="2784.0042297985683" />
-      <entry key="D1" value="4745.988045290286" />
-      <entry key="W1" value="5276.442398487221" />
+      <entry key="MS100" value="0.9526529437050462" />
+      <entry key="MS500" value="1.1142056412901462" />
+      <entry key="S2" value="1.9241482111792896" />
+      <entry key="S5" value="2.4589722715370343" />
+      <entry key="S10" value="2.7062692817739467" />
+      <entry key="S30" value="2.922690091511297" />
+      <entry key="S60" value="3.3210937791587605" />
+      <entry key="M2" value="5.417177349780363" />
+      <entry key="M5" value="23.980757582268538" />
+      <entry key="M10" value="59.46536200537132" />
+      <entry key="M15" value="101.74122713647174" />
+      <entry key="M30" value="283.55622020193834" />
+      <entry key="H1" value="767.1795612295084" />
+      <entry key="H2" value="1653.3684324805545" />
+      <entry key="H4" value="2757.0090504943078" />
+      <entry key="D1" value="4740.427256866887" />
+      <entry key="W1" value="5278.081686933141" />
     </decayedShown>
   </component>
   <component name="ProjectApplicationVersion">
@@ -264,7 +260,8 @@
     <MESSAGE value="работа с елями и тайгой" />
     <MESSAGE value="общее обновление" />
     <MESSAGE value="увеличение производительности генератора мира" />
-    <option name="LAST_COMMIT_MESSAGE" value="увеличение производительности генератора мира" />
+    <MESSAGE value="обновление ИИ" />
+    <option name="LAST_COMMIT_MESSAGE" value="обновление ИИ" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

@@ -154,6 +154,14 @@ void Chunk_Block_Grid::unpack(Block_ID* out) const {
     }
 }
 
+void Chunk_Block_Grid::unpack_meta(uint8_t* out) const {
+    std::memset(out, 0, voxel_count);
+    for (size_t j = 0; j < m_meta.size(); j += 2) {
+        if (m_meta[j + 1] != 0)
+            out[static_cast<size_t>(m_meta[j] & 0x0FFFFFu)] = static_cast<uint8_t>(m_meta[j + 1]);
+    }
+}
+
 void Chunk_Block_Grid::compact() {
     size_t live = 0;
     for (const uint16_t c : m_counts) {
@@ -370,6 +378,158 @@ namespace {
         return *scratch;
     }
 
+    // ---------------------------------------------------------------------------
+    //  Упаковка каналов GPU (быстрый путь)
+    // ---------------------------------------------------------------------------
+    // Старый pack_channel шёл по значениям ДВА раза (сбор палитры, затем биты) и
+    // аллоцировал вектор палитры на каждый вызов. На 26 каналах в каждом чанке
+    // это была самая дорогая часть CPU-подготовки. Новый подход:
+    //   * 8-битные значения (meta, light, ring_meta, border_meta, border_light):
+    //     прямая таблица 256 ячеек ("значение -> номер в палитре"), палитра в
+    //     порядке первого появления, биты пишутся на лету из той же таблицы;
+    //   * 16-битные значения (блоки): палитра = уникальные id чанка (обычно мало,
+    //     максимум ~65536). Собирается в prepare_block_palette() ОДИН раз на чанк;
+    //     номер значения = index16[id] - 1 (0-based).
+    // Все рабочие буферы — в Mesh_Work (thread_local, выделены один раз на поток).
+    // Формат на выходе тот же: палитра, смещение слов, битность. Декодеры не меняются.
+
+    struct Mesh_Work {
+        std::array<int, 256> index8{};           // 8-бит: значение -> номер в палитре (-1 = нет)
+        std::array<uint32_t, 256> palette8{};    // 8-бит: палитра (уникальных <= 256 для света)
+        std::vector<uint16_t> palette16;         // 16-бит: отсортированные уникальные id чанка
+        std::vector<uint16_t> index16;           // 16-бит: id -> номер в palette16 + 1 (0 = нет)
+    };
+
+    Mesh_Work& mesh_work() {
+        thread_local std::unique_ptr<Mesh_Work> work = [] {
+            auto w = std::make_unique<Mesh_Work>();
+            std::fill(w->index8.begin(), w->index8.end(), -1);
+            w->palette16.reserve(256);
+            w->index16.assign(k_max_block_types, 0);
+            return w;
+        }();
+        return *work;
+    }
+
+    // Собирает палитру 16-битных значений (блоки): unique id + номер.
+    // Вызывается РАЗ на чанк перед pack_channel_16. Палитра = все уникальные id,
+    // встречающиеся в собственных блоках чанка (канал 0). Блоки на границах и
+    // в LOD — подмножество этой палитры, поэтому она покрывает все 16-битные каналы.
+    void prepare_block_palette(const Block_ID* values, size_t count, Mesh_Work& W) {
+        std::fill(W.index16.begin(), W.index16.end(), 0);
+        W.palette16.clear();
+        for (size_t i = 0; i < count; ++i) {
+            const uint16_t id = values[i];
+            if (W.index16[id] == 0) {
+                W.index16[id] = static_cast<uint16_t>(W.palette16.size() + 1);  // 1-based
+                W.palette16.push_back(id);
+            }
+        }
+        std::sort(W.palette16.begin(), W.palette16.end());
+        std::fill(W.index16.begin(), W.index16.end(), 0);
+        for (size_t i = 0; i < W.palette16.size(); ++i)
+            W.index16[W.palette16[i]] = static_cast<uint16_t>(i + 1);
+    }
+
+    // 8-битный путь: прямая таблица, палитра 256, один проход.
+    void pack_channel_8(const uint8_t* values, size_t count,
+                        Mesh_Work& W,
+                        std::vector<uint32_t>& out,
+                        std::array<uint32_t, 3>& header) {
+        header[0] = static_cast<uint32_t>(out.size());
+        if (count == 0) { header[1] = static_cast<uint32_t>(out.size()); header[2] = 0; return; }
+
+        int* table = W.index8.data();
+        uint32_t* pal = W.palette8.data();
+        uint32_t unique = 0;
+        for (size_t i = 0; i < count; ++i) {
+            int& cell = table[values[i]];
+            if (cell < 0) {
+                cell = static_cast<int>(unique);
+                if (unique < 256) pal[unique] = static_cast<uint32_t>(values[i]);
+                ++unique;
+            }
+        }
+
+        uint32_t bits = 0;
+        if (unique > 1) {
+            bits = 1;
+            while ((static_cast<size_t>(1) << bits) < unique && bits < 16) ++bits;
+        }
+        // Block ids are 16-bit; clamp to 16 bits max.
+
+        if (bits == 0) {
+            out.push_back(static_cast<uint32_t>(values[0]));
+            header[1] = static_cast<uint32_t>(out.size());
+            header[2] = 0;
+            for (size_t i = 0; i < count; ++i) table[values[i]] = -1;
+            return;
+        }
+
+        const size_t base = out.size();
+        const size_t words_start = base + unique;
+        const size_t word_count = (count * bits + 31) / 32;
+        out.resize(words_start + word_count, 0u);
+        for (uint32_t i = 0; i < unique; ++i) out[base + i] = pal[i];
+        header[1] = static_cast<uint32_t>(words_start);
+        header[2] = bits;
+
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t idx = static_cast<uint32_t>(table[values[i]]);
+            const size_t bit = i * bits;
+            const size_t w = words_start + (bit >> 5);
+            const unsigned s = static_cast<unsigned>(bit & 31);
+            out[w] |= idx << s;
+            if (s + bits > 32) out[w + 1] |= idx >> (32 - s);
+        }
+        for (size_t i = 0; i < count; ++i) table[values[i]] = -1;
+    }
+
+    // 16-битный путь: палитра из W (prepare_block_palette дозвана), номер = index16[id] - 1.
+    // Если значение не в палитре (idx_tab[id] == 0), оно не встречается в канале —
+    // это невозможно для 16-битных каналов, так как prepare_block_palette собрана
+    // на основе собственных блоков чанка, а все остальные 16-битные каналы
+    // (border, ring, lod) используют подмножество тех же id.
+    void pack_channel_16(const Block_ID* values, size_t count,
+                         const Mesh_Work& W,
+                         std::vector<uint32_t>& out,
+                         std::array<uint32_t, 3>& header) {
+        header[0] = static_cast<uint32_t>(out.size());
+        if (count == 0) { header[1] = static_cast<uint32_t>(out.size()); header[2] = 0; return; }
+
+        const uint32_t unique = static_cast<uint32_t>(W.palette16.size());
+        uint32_t bits = 0;
+        if (unique > 1) {
+            bits = 1;
+            while ((static_cast<size_t>(1) << bits) < unique && bits < 16) ++bits;
+        }
+
+        if (bits == 0) {
+            out.push_back(static_cast<uint32_t>(count != 0 ? values[0] : 0));
+            header[1] = static_cast<uint32_t>(out.size());
+            header[2] = 0;
+            return;
+        }
+
+        const size_t base = out.size();
+        const size_t words_start = base + unique;
+        const size_t word_count = (count * bits + 31) / 32;
+        out.resize(words_start + word_count, 0u);
+        for (size_t i = 0; i < unique; ++i) out[base + i] = static_cast<uint32_t>(W.palette16[i]);
+        header[1] = static_cast<uint32_t>(words_start);
+        header[2] = bits;
+
+        const uint16_t* idx_tab = W.index16.data();
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t idx = static_cast<uint32_t>(idx_tab[values[i]] - 1);
+            const size_t bit = i * bits;
+            const size_t w = words_start + (bit >> 5);
+            const unsigned s = static_cast<unsigned>(bit & 31);
+            out[w] |= idx << s;
+            if (s + bits > 32) out[w + 1] |= idx >> (32 - s);
+        }
+    }
+
     // Связность граничных клеток секции (см. Section_Connectivity). Клетка проводит обзор, если она не
     // полный непрозрачный куб (Mesh_Tables::occludes): воздух, вода, стекло, листва, флора.
     // Проход 1: компоненты всех прозрачных клеток секции (номер — порядок обнаружения).
@@ -489,53 +649,6 @@ namespace {
     }
 }
 
-namespace {
-    // Упаковка одного канала GPU-нагрузки: палитра (уникальные значения в порядке появления) и
-    // номера фиксированной битности: 0 бит (одно значение) или 1..16 бит. Номер i лежит в битах
-    // [i*bits, (i+1)*bits), младший бит первым, в uint32-словах; значение может пересекать границу
-    // двух слов. Декодеры в mesh_greedy.comp и mesh_misc.comp читают ровно так же. header: палитра, слова, битность.
-    template <typename T>
-    void pack_channel(const T* values, size_t count, std::vector<uint32_t>& out,
-                      std::array<uint32_t, 3>& header) {
-        // Таблица "значение -> номер в палитре канала": значения могут быть любой ширины (id блоков
-        // до 16 бит). Заполняем только использованные записи и сбрасываем их обратно после прохода.
-        thread_local std::vector<int> index;
-        if (index.size() < (size_t(1) << (8 * sizeof(T)))) index.assign(size_t(1) << (8 * sizeof(T)), -1);
-        std::vector<T> palette;
-        for (size_t i = 0; i < count; ++i) {
-            const T v = values[i];
-            if (index[v] < 0) {
-                index[v] = static_cast<int>(palette.size());
-                palette.push_back(v);
-            }
-        }
-
-        uint32_t bits = 0;
-        if (palette.size() > 1) {
-            bits = 1;
-            while ((static_cast<size_t>(1) << bits) < palette.size()) ++bits;
-        }
-
-        header[0] = static_cast<uint32_t>(out.size());
-        for (const T v : palette) out.push_back(static_cast<uint32_t>(v));
-        header[1] = static_cast<uint32_t>(out.size());
-        header[2] = bits;
-        if (bits != 0) {
-            const size_t base = out.size();
-            out.resize(base + (count * bits + 31) / 32, 0u);
-            for (size_t i = 0; i < count; ++i) {
-                const uint32_t idx = static_cast<uint32_t>(index[values[i]]);
-                const size_t bit = i * bits;
-                const size_t w = base + (bit >> 5);
-                const unsigned s = static_cast<unsigned>(bit & 31);
-                out[w] |= idx << s;
-                if (s + bits > 32) out[w + 1] |= idx >> (32 - s);
-            }
-        }
-        for (const T v : palette) index[v] = -1;
-    }
-}
-
 Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
                                   const Chunk_Light_Grid& light,
                                   const Chunk_Block_Faces& neighbor_blocks,
@@ -609,12 +722,7 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     }
 
     light.unpack(S.light.data());
-    std::fill(S.meta.begin(), S.meta.end(), static_cast<uint8_t>(0));
-    if (blocks.has_meta()) {
-        for (const auto& [linear_index, value] : blocks.meta_entries()) {
-            S.meta[linear_index] = value;
-        }
-    }
+    blocks.unpack_meta(S.meta.data());
 
     // Дальние solid-чанки получают coarse-воксельную копию. Внешняя полоса шириной
     // lod_stride остаётся точной: границы соседних чанков поэтому совпадают даже при
@@ -760,29 +868,61 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
         S.ring_meta[idx] = meta_lookup ? meta_lookup(base_x + x, base_y + y, base_z + z) : static_cast<uint8_t>(0);
     }
 
+    // ---------------------------------------------------------------------------
+    //  Быстрая упаковка каналов (один проход на канал, без аллокаций)
+    // ---------------------------------------------------------------------------
+    // Палитра 16-битных значений собирается ОДИН раз на чанк (по собственным блокам).
+    // Все остальные 16-битные каналы (border, ring, lod) используют подмножество тех
+    // же id, поэтому та же палитра и index16 работают для всех без повторного поиска.
+    Mesh_Work& W = mesh_work();
+    prepare_block_palette(S.blocks.data(), kVoxels, W);
+
     meshes.gpu_words.clear();
-    pack_channel(S.blocks.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[0]);
-    pack_channel(S.meta.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[1]);
-    pack_channel(S.light.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[2]);
+
+    // Канал 0: собственные блоки (16-битный).
+    pack_channel_16(S.blocks.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[0]);
+
+    // Канал 1: метаданные (8-битные).
+    pack_channel_8(S.meta.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[1]);
+
+    // Канал 2: свет (8-битные).
+    pack_channel_8(S.light.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[2]);
+
+    // Каналы 3-8: блоки на границах соседей (16-битные).
     for (int face = 0; face < 6; ++face) {
-        pack_channel(S.border_block.data() + static_cast<size_t>(face) * kLayer, kLayer,
-                     meshes.gpu_words, meshes.gpu_channels[3 + face]);
-        pack_channel(S.border_light.data() + static_cast<size_t>(face) * kLayer, kLayer,
-                     meshes.gpu_words, meshes.gpu_channels[9 + face]);
-        pack_channel(S.border_meta.data() + static_cast<size_t>(face) * kLayer, kLayer,
-                     meshes.gpu_words, meshes.gpu_channels[16 + face]);
+        pack_channel_16(S.border_block.data() + static_cast<size_t>(face) * kLayer, kLayer,
+                        W, meshes.gpu_words, meshes.gpu_channels[3 + face]);
     }
-    pack_channel(S.ring_block.data(), Chunk_Ring::kSize, meshes.gpu_words, meshes.gpu_channels[15]);
-    pack_channel(S.ring_meta.data(), Chunk_Ring::kSize, meshes.gpu_words, meshes.gpu_channels[22]);
+
+    // Канал 15: кольцо блоков (16-битные, Chunk_Ring::kSize элементов).
+    pack_channel_16(S.ring_block.data(), Chunk_Ring::kSize, W, meshes.gpu_words, meshes.gpu_channels[15]);
+
+    // Каналы 9-14: свет на границах (8-битные).
+    for (int face = 0; face < 6; ++face) {
+        pack_channel_8(S.border_light.data() + static_cast<size_t>(face) * kLayer, kLayer,
+                       W, meshes.gpu_words, meshes.gpu_channels[9 + face]);
+    }
+
+    // Каналы 16-21: метаданные на границах (8-битные).
+    for (int face = 0; face < 6; ++face) {
+        pack_channel_8(S.border_meta.data() + static_cast<size_t>(face) * kLayer, kLayer,
+                       W, meshes.gpu_words, meshes.gpu_channels[16 + face]);
+    }
+
+    // Канал 22: метаданные кольца (8-битные).
+    pack_channel_8(S.ring_meta.data(), Chunk_Ring::kSize, W, meshes.gpu_words, meshes.gpu_channels[22]);
+
+    // Каналы 23-24: LOD (если lod_stride > 1 и есть solid).
     if (lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u) {
-        pack_channel(S.lod_blocks.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[23]);
-        pack_channel(S.lod_meta.data(), kVoxels, meshes.gpu_words, meshes.gpu_channels[24]);
+        pack_channel_16(S.lod_blocks.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[23]);
+        pack_channel_8(S.lod_meta.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[24]);
     } else {
         const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
+        pack_channel_16(&air, 1, W, meshes.gpu_words, meshes.gpu_channels[23]);
         const uint8_t zero = 0;
-        pack_channel(&air, 1, meshes.gpu_words, meshes.gpu_channels[23]);
-        pack_channel(&zero, 1, meshes.gpu_words, meshes.gpu_channels[24]);
+        pack_channel_8(&zero, 1, W, meshes.gpu_words, meshes.gpu_channels[24]);
     }
+
     meshes.gpu_upload_pending = true;
     return meshes;
 }
