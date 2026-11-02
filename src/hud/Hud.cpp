@@ -14,16 +14,17 @@
 namespace {
     int g_gui_scale_setting = 0;
 
-    void build_cube_wireframe(std::vector<float>& out, float x, float y, float z) {
+    void build_box_wireframe(std::vector<float>& out, const glm::vec3& lo, const glm::vec3& hi) {
+        const float x = lo.x, y = lo.y, z = lo.z;
         const float corners[8][3] = {
-            {x,     y,     z},
-            {x + 1, y,     z},
-            {x + 1, y + 1, z},
-            {x,     y + 1, z},
-            {x,     y,     z + 1},
-            {x + 1, y,     z + 1},
-            {x + 1, y + 1, z + 1},
-            {x,     y + 1, z + 1}
+            {x,    y,    z},
+            {hi.x, y,    z},
+            {hi.x, hi.y, z},
+            {x,    hi.y, z},
+            {x,    y,    hi.z},
+            {hi.x, y,    hi.z},
+            {hi.x, hi.y, hi.z},
+            {x,    hi.y, hi.z}
         };
 
         const int edges[12][2] = {
@@ -586,11 +587,16 @@ void Hud::draw_underwater_overlay(int window_width, int window_height) {
 void Hud::draw_block_highlight(const glm::ivec3& block_pos,
                                const glm::mat4& view,
                                const glm::mat4& projection) {
+    const glm::vec3 lo(static_cast<float>(block_pos.x), static_cast<float>(block_pos.y),
+                       static_cast<float>(block_pos.z));
+    draw_box_highlight(lo, lo + glm::vec3(1.0f), view, projection);
+}
+
+void Hud::draw_box_highlight(const glm::vec3& lo, const glm::vec3& hi,
+                             const glm::mat4& view,
+                             const glm::mat4& projection) {
     std::vector<float> vertices;
-    build_cube_wireframe(vertices,
-                         static_cast<float>(block_pos.x) - 0.002f,
-                         static_cast<float>(block_pos.y) - 0.002f,
-                         static_cast<float>(block_pos.z) - 0.002f);
+    build_box_wireframe(vertices, lo - glm::vec3(0.002f), hi + glm::vec3(0.002f));
 
     glLineWidth(2.0f);
     glDisable(GL_DEPTH_TEST);
@@ -637,12 +643,33 @@ void Hud::draw_debug_overlay(int window_width, int window_height, const Hud_Debu
     lines.emplace_back(buffer);
     lines.emplace_back(stats.is_flying ? "State: ghost (flying)" : "State: walker");
     lines.emplace_back("Biome: " + stats.biome_name);
+    if (!stats.effects_line.empty()) lines.emplace_back(stats.effects_line);
 
     const float hours_float = std::fmod(stats.day_night_normalized_time * 24.0f + 6.0f, 24.0f);
     const int hh = static_cast<int>(hours_float);
     const int mm = static_cast<int>((hours_float - static_cast<float>(hh)) * 60.0f);
     std::snprintf(buffer, sizeof(buffer), "Time: %02d:%02d", hh, mm);
     lines.emplace_back(buffer);
+
+    if (stats.extended) {
+        lines.emplace_back("");
+        std::snprintf(buffer, sizeof(buffer), "Frame (last s): min %.2f / avg %.2f / max %.2f ms",
+                      stats.frame_min_ms, stats.frame_avg_ms, stats.frame_max_ms);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "TPS: %.1f (target 20)", stats.tps);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "Mobs alive: hostile %d / passive %d",
+                      stats.hostile_count, stats.passive_count);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "Chunks updating: mesh %d (requeued %d), loading %d",
+                      static_cast<int>(stats.chunk_mesh_pending), static_cast<int>(stats.chunk_mesh_requeued),
+                      static_cast<int>(stats.chunk_loads_requested));
+        lines.emplace_back(buffer);
+        lines.emplace_back("");
+        for (const auto& target_line : stats.target_lines) {
+            lines.push_back(target_line);
+        }
+    }
 
     const float line_h = 10.0f * s;
     float y = 2.0f * s;

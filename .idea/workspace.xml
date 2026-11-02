@@ -19,6 +19,7 @@
   </component>
   <component name="CMakeRunConfigurationManager">
     <generated>
+      <config projectName="OptiCraft" targetName="json2bin" />
       <config projectName="OptiCraft" targetName="OptiCraft" />
     </generated>
   </component>
@@ -28,23 +29,16 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="исправление жадного алгоритма">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="хот патч">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/mobs/player.glb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/mobs/Knight_Ai.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Knight_Ai.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/mobs/Knight_Ai.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Knight_Ai.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Table.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Table.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/dimensions/Dimension.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/dimensions/Dimension.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Chunk_IO.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Chunk_IO.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Chunk_IO.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Chunk_IO.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -56,6 +50,11 @@
   </component>
   <component name="ExecutionTargetManager" SELECTED_TARGET="CMakeBuildProfile:Debug" />
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="main" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="GitHubPullRequestSearchHistory">{
@@ -83,23 +82,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0002786790152045" />
-      <entry key="MS500" value="1.2492706038296504" />
-      <entry key="S2" value="2.5517128608381556" />
-      <entry key="S5" value="3.8396628518634808" />
-      <entry key="S10" value="4.713862350806286" />
-      <entry key="S30" value="12.719538907535687" />
-      <entry key="S60" value="47.5982178850414" />
-      <entry key="M2" value="137.3649995360096" />
-      <entry key="M5" value="378.1682780541549" />
-      <entry key="M10" value="612.2481898293246" />
-      <entry key="M15" value="764.1411851498326" />
-      <entry key="M30" value="1125.4538463223628" />
-      <entry key="H1" value="1670.8275223879214" />
-      <entry key="H2" value="2342.68068845963" />
-      <entry key="H4" value="3045.0983544281326" />
-      <entry key="D1" value="4179.850289805201" />
-      <entry key="W1" value="4469.0282789615085" />
+      <entry key="MS100" value="1.0259162930132204" />
+      <entry key="MS500" value="1.525086369582628" />
+      <entry key="S2" value="2.5651497439053967" />
+      <entry key="S5" value="3.2618423354591175" />
+      <entry key="S10" value="3.595325167213987" />
+      <entry key="S30" value="3.8562254875445423" />
+      <entry key="S60" value="3.9269352076272734" />
+      <entry key="M2" value="3.9631679210928663" />
+      <entry key="M5" value="3.9853524189599643" />
+      <entry key="M10" value="4.145156915408013" />
+      <entry key="M15" value="5.901845179181667" />
+      <entry key="M30" value="42.816217536346706" />
+      <entry key="H1" value="287.8440241648243" />
+      <entry key="H2" value="1009.5252083187705" />
+      <entry key="H4" value="2153.4339543260216" />
+      <entry key="D1" value="4549.003593109761" />
+      <entry key="W1" value="5247.089156154951" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -107,37 +106,37 @@
       <entry key="S2" value="0.0" />
       <entry key="S5" value="0.0" />
       <entry key="S10" value="0.0" />
-      <entry key="S30" value="3.769550083689806E-116" />
-      <entry key="S60" value="1.941532921093472E-58" />
-      <entry key="M2" value="1.393389005659729E-29" />
-      <entry key="M5" value="2.8683289204776157E-12" />
-      <entry key="M10" value="1.6936218036317788E-6" />
-      <entry key="M15" value="1.4213704208666892E-4" />
-      <entry key="M30" value="0.012311658951048545" />
-      <entry key="H1" value="0.14322107100038303" />
-      <entry key="H2" value="0.6494021407285611" />
-      <entry key="H4" value="1.5525901067867087" />
-      <entry key="D1" value="3.4003864612338894" />
-      <entry key="W1" value="3.9078514383973344" />
+      <entry key="S30" value="8.932837287780993E-251" />
+      <entry key="S60" value="9.451368836195487E-126" />
+      <entry key="M2" value="3.074307862949827E-63" />
+      <entry key="M5" value="9.887783355995571E-26" />
+      <entry key="M10" value="3.144498786128004E-13" />
+      <entry key="M15" value="4.625910971539336E-9" />
+      <entry key="M30" value="7.023629186962017E-5" />
+      <entry key="H1" value="0.010817562579019873" />
+      <entry key="H2" value="0.17847400339955632" />
+      <entry key="H4" value="0.8139307181576151" />
+      <entry key="D1" value="3.053397758792527" />
+      <entry key="W1" value="3.848222751230192" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.9529109384576575" />
-      <entry key="MS500" value="1.2383806078693567" />
-      <entry key="S2" value="2.54631961449083" />
-      <entry key="S5" value="3.835428496742291" />
-      <entry key="S10" value="4.710871290718034" />
-      <entry key="S30" value="12.71689150080394" />
-      <entry key="S60" value="47.593555558665905" />
-      <entry key="M2" value="137.3583343842811" />
-      <entry key="M5" value="378.1608801660732" />
-      <entry key="M10" value="612.2421610971188" />
-      <entry key="M15" value="764.136278163741" />
-      <entry key="M30" value="1125.462312060422" />
-      <entry key="H1" value="1670.9674697105072" />
-      <entry key="H2" value="2343.327067492578" />
-      <entry key="H4" value="3046.6484101501187" />
-      <entry key="D1" value="4183.2499290526775" />
-      <entry key="W1" value="4472.936011206073" />
+      <entry key="MS100" value="0.8691509102273796" />
+      <entry key="MS500" value="1.4768785738008479" />
+      <entry key="S2" value="2.543653396795482" />
+      <entry key="S5" value="3.250572085938523" />
+      <entry key="S10" value="3.589043557461699" />
+      <entry key="S30" value="3.853962310663063" />
+      <entry key="S60" value="3.9257806304823983" />
+      <entry key="M2" value="3.9625847391686846" />
+      <entry key="M5" value="3.9851177066872805" />
+      <entry key="M10" value="4.145036406377177" />
+      <entry key="M15" value="5.9017452688837775" />
+      <entry key="M30" value="42.816081331687606" />
+      <entry key="H1" value="287.85426052316615" />
+      <entry key="H2" value="1009.7024965602476" />
+      <entry key="H4" value="2154.246291956268" />
+      <entry key="D1" value="4552.0562578153795" />
+      <entry key="W1" value="5250.937252116362" />
     </decayedShown>
   </component>
   <component name="ProjectApplicationVersion">
@@ -170,7 +169,7 @@
     &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
     &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
     &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;world__biome&quot;,
     &quot;last_opened_file_path&quot;: &quot;/home/noktemor/CLionProjects/OptiCraft&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
     &quot;node.js.detected.package.jshint&quot;: &quot;true&quot;,
@@ -180,15 +179,24 @@
     &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;python.packages.toolwindow.project.migrated.to.right.top.v2&quot;: &quot;true&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;editor.preferences.folding&quot;
+    &quot;settings.editor.selected.configurable&quot;: &quot;editor.preferences.appearance&quot;
   }
 }</component>
-  <component name="RunManager">
+  <component name="RunManager" selected="CMake Application.OptiCraft">
     <configuration name="OptiCraft" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="OptiCraft" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="OptiCraft">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
+    <configuration name="json2bin" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="json2bin" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="json2bin">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <list>
+      <item itemvalue="CMake Application.OptiCraft" />
+      <item itemvalue="CMake Application.json2bin" />
+    </list>
   </component>
   <component name="SelectedDebugProfileService">{
   &quot;profileIdByStamp&quot;: [
@@ -226,7 +234,19 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State />
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/world_biome" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
           </value>
         </entry>
       </map>
@@ -234,7 +254,14 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="исправление жадного алгоритма" />
-    <option name="LAST_COMMIT_MESSAGE" value="исправление жадного алгоритма" />
+    <MESSAGE value="переработка чанкового менеджера и генерации" />
+    <MESSAGE value="исправление утечки памяти на диске" />
+    <MESSAGE value="работа с елями и тайгой" />
+    <MESSAGE value="общее обновление" />
+    <MESSAGE value="увеличение производительности генератора мира" />
+    <MESSAGE value="обновление ИИ" />
+    <MESSAGE value="хот патч" />
+    <option name="LAST_COMMIT_MESSAGE" value="хот патч" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
@@ -254,7 +281,7 @@
         </line-breakpoint>
         <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
           <url>file://$PROJECT_DIR$/src/commands/Command_System.cpp</url>
-          <line>13</line>
+          <line>14</line>
           <option name="timeStamp" value="6" />
         </line-breakpoint>
       </breakpoints>

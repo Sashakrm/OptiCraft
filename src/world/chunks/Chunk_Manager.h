@@ -6,6 +6,7 @@
 #define OPTICRAFT_CHUNK_MANAGER_H
 
 #include <unordered_set>
+#include <unordered_map>
 #include <chrono>
 #include <memory>
 #include <limits>
@@ -17,6 +18,7 @@
 #include <queue>
 #include <thread>
 #include <optional>
+#include <variant>
 #include <vector>
 #include <glm/glm.hpp>
 #include "world/chunks/Chunk.h"
@@ -61,13 +63,38 @@ private:
     struct Chunk_Job {
         glm::ivec3 position;
         uint64_t generation_id;
-        // Ниже = обрабатывается раньше. Считается один раз при постановке в очередь
-        // (enqueue_chunk_load), от позиции игрока НА ТОТ МОМЕНТ — не пересчитывается заново,
-        // пока задача уже сидит в очереди (см. комментарий у m_pending_jobs про то, почему
-        // это осознанный компромисс, а не недосмотр).
+        // Ниже = обрабатывается раньше. Считается при постановке в очередь.
         int priority;
     };
 
+    // Работа генерации поставляется по вертикальным колонкам: одна задача может содержать
+    // до девяти уровней Y. Это уменьшает очередь/синхронизацию и даёт генератору переиспользовать
+    // 2D-поля для всех уровней колонки. Все chunks в задаче имеют одинаковые X/Z.
+    struct Chunk_Column_Job {
+        int chunk_x = 0;
+        int chunk_z = 0;
+        uint64_t generation_id = 0;
+        int priority = 0;
+        std::vector<Chunk_Job> chunks;
+    };
+
+    // После однократной подготовки X/Z-данных уровни колонки распараллеливаются внутри
+    // того же пула воркеров. Подготовка immutable и живёт, пока последние уровни не готовы.
+    struct Chunk_Build_Job {
+        Chunk_Job job{};
+        Chunk_Ptr chunk{};
+        std::shared_ptr<World_Generator::Prepared_Column> prepared{};
+        size_t prepared_index = 0;
+    };
+    struct Region_Prep_Job {
+        int chunk_x = 0;
+        int chunk_z = 0;
+        uint64_t generation_id = 0;
+        int priority = 0;
+        int64_t region_key = 0;
+        uint8_t parts_mask = 0;
+    };
+    using Generation_Job = std::variant<Chunk_Column_Job, Chunk_Build_Job>;
 
     struct Chunk_Result {
         glm::ivec3 position;
@@ -95,6 +122,7 @@ private:
     struct Mesh_Job {
         glm::ivec3 position;
         int priority = 0;
+        uint8_t lod_stride = 1;
         Chunk_Block_Grid own_blocks;
         Chunk_Light_Grid own_light;
         // Порядок: -X, +X, -Y, +Y, -Z, +Z. nullopt = сосед не загружен (тот же фолбэк на
@@ -112,9 +140,9 @@ private:
         // только к нему: на позиции мог появиться другой чанк, пока задача летала в воркере.
         uint64_t instance_id = 0;
         Capture_Clip clip;
-        // true — непрозрачные квады строит GPU (нагрузка в Chunk_Meshes, см. build_gpu_solid_payload);
-        // false — классический CPU-мешер (тогда в solid лежат готовые вершины).
-        bool solid_on_gpu = false;
+        // Срочная пересборка (правка блока игроком): идёт первой в очереди и возвращается по отдельной очереди результатов.
+        bool urgent = false;
+        uint64_t seq = 0;
     };
 
     struct Mesh_Result {
@@ -123,6 +151,8 @@ private:
         Chunk_Meshes meshes;
         uint64_t dirty_epoch = 0;
         uint64_t instance_id = 0;
+        uint64_t seq = 0;
+        bool urgent = false;
     };
 
     // Хранилище загруженных чанков: open-addressing (Robin Hood) вместо chaining hash map —
@@ -171,8 +201,8 @@ private:
     glm::vec3 m_last_player_pos{0.0f};
     std::chrono::steady_clock::time_point m_last_pos_time{};
     bool m_has_last_pos = false;
-    // Полуширина вертикального окна в чанках: слоёв = 2 * m_vertical_half. Обычно 4 (8 слоёв),
-    // при быстром вертикальном движении или малой дальности прорисовки — 2 (4 слоя).
+    // Полуширина вертикального окна в чанках (оба края включительно): обычно 4 (9 уровней),
+    // при быстром вертикальном движении или малой дальности прорисовки — 2 (5 уровней).
     int m_vertical_half = 4;
     // Остались ли в окне незапрошенные чанки (load_around упёрся в лимит очереди). Тогда
     // update_player_position доливает их по мере освобождения очереди.
@@ -191,14 +221,30 @@ private:
     // не меняется во времени, так что обычный инвариант std::priority_queue не нарушается
     // (в отличие от гипотетического компаратора, читающего живую позицию игрока "на лету").
     // Задачи генерации: корзины по приоритету, без замков (см. Priority_Bucket_Queue).
-    Priority_Bucket_Queue<Chunk_Job> m_pending_jobs;
+    // Regional cache preparation must not be starved behind a continuous mesh queue.
+    // It is a small, mutex-protected priority deque and is popped before mesh jobs.
+    std::deque<Region_Prep_Job> m_pending_region_prep_jobs;
+    Priority_Bucket_Queue<Generation_Job> m_pending_jobs;
     std::atomic<size_t> m_pending_job_count{0};
     std::atomic<int> m_sleepers{0};
     void wake_workers();
     // Поколение вида: растёт при каждой смене чанка игрока. Кольца загруженных чанков пересчитываются
     // под него; меш ставится с приоритетом по кольцу, а кольца 0–1 без меша уходят сразу.
     uint32_t m_view_generation = 0;
+    // Чанки, чьи секции реально попали в текущий frustum/visibility traversal.
+    // Обновляется get_renderable_chunks на главном потоке и используется как приоритет мешинга.
+    mutable Chunk_Coord_Set m_visible_chunks;
+    // Плоский список загруженных чанков для обхода кадра: пересобирается только при смене набора
+    // (m_chunk_set_epoch), а не каждый кадр обходом хеш-таблицы.
+    mutable std::vector<std::pair<glm::ivec3, Chunk*>> m_loaded_cache;
+    mutable uint64_t m_loaded_cache_epoch = ~0ull;
+    // Скан грязных чанков (rebuild_dirty_chunks) пропускается, пока с прошлого скана, не нашедшего
+    // ни одного грязного чанка, никто не стал грязным и набор чанков не менялся.
+    bool m_dirty_scan_clean = false;
+    uint64_t m_dirty_scan_events = 0;
+    uint64_t m_dirty_scan_set_epoch = 0;
     uint8_t view_ring_of(const glm::ivec3& position) const;
+    int desired_lod_stride(int cx, int cz, int current_stride = 1) const;
     void refresh_view_rings();
     Mpmc_Queue<Chunk_Result> m_completed_jobs;
     // Задачи загрузки, которые есть на диске: их читает m_disk_reader пачками (см. Chunk_IO).
@@ -211,25 +257,54 @@ private:
     Priority_Bucket_Queue<std::unique_ptr<Mesh_Job>, 16, 2176, 64> m_pending_mesh_jobs;
     std::atomic<size_t> m_pending_mesh_count{0};
     Mpmc_Queue<Mesh_Result> m_completed_mesh_jobs;
+    // Результаты срочных пересборок (правка блока): применяются раньше обычных и без лимита на кадр.
+    Mpmc_Queue<Mesh_Result> m_completed_urgent_mesh_jobs;
+    // Чанки, которые игрок правил в этом кадре: пересборка ставится один раз за кадр после всех правок.
+    Chunk_Coord_Set m_urgent_mesh_set;
+    std::vector<glm::ivec3> m_urgent_mesh_list;
+    void request_urgent_mesh_rebuild(int cx, int cy, int cz);
+    void flush_urgent_mesh_rebuilds();
+    // Наименьшее кольцо, где ещё есть нужный, но незагруженный чанк. Меши строятся строго от центра к краю.
+    int first_incomplete_ring();
+    uint64_t m_ring_cache_epoch = ~0ull;
+    uint32_t m_ring_cache_view = ~0u;
+    int m_ring_cache_half = -1;
+    size_t m_ring_cache_inflight = ~size_t(0);
+    int m_ring_cache_value = 0;
+    // Осталась ли выгрузка, не уложившаяся в лимит кадра.
+    bool m_unload_backlog = false;
     // Чанки, для которых задача пересборки меша прямо сейчас в очереди/выполняется воркером —
     // не даём поставить вторую задачу поверх (бессмысленно дублирует работу).
     Chunk_Coord_Set m_pending_mesh_rebuilds;
     // Если чанк опять поменялся, пока его пересборка уже была в полёте — не теряем правку:
     // помечаем "досчитать ещё раз" и переставляем задачу заново, когда текущая завершится.
     Chunk_Coord_Set m_mesh_rebuild_requeue;
-    // Чанки, у которых GPU-мешер переполнил секцию: их меш дальше строится только на CPU.
-    Chunk_Coord_Set m_cpu_only_positions;
-    // Процесс-глобально: включает GPU-путь для всех менеджеров (см. set_gpu_solid_meshing).
-    static inline bool s_gpu_solid_meshing = false;
     std::mutex m_job_mutex;
     std::condition_variable m_job_available;
     bool m_stop_workers = false;
+
+    // Cold regional cave/hydrology calculations are scheduled as distinct jobs in the same
+    // worker pool. Columns waiting for a missing region sit here; only warm columns enter
+    // the ordinary generation queue. This prevents all workers from blocking on one future.
+    std::unordered_map<int64_t, std::vector<Chunk_Column_Job>> m_region_waiting_columns;
+    std::unordered_map<int64_t, uint64_t> m_regions_preparing;
+    // Bits scheduled for this region/generation: caves=1, rivers=2. They can build in parallel.
+    std::unordered_map<int64_t, uint8_t> m_region_prep_queued_mask;
 
     // Позиции блоков-источников света (Sun Stone и любой будущий блок с light_emission > 0),
     // сейчас размещённых игроком. Уровень не хранится тут отдельно — при пересчёте читается
     // заново через get_block_world(pos), так что если блок под источником вдруг изменился
     // (не должно происходить штатно, но на всякий случай) — пересчёт сам всё поправит.
-    std::vector<glm::ivec3> m_light_sources;
+    // Хранятся ПО ЧАНКАМ (ключ — координаты чанка, значение — мировые позиции его источников):
+    // локальному пересчёту света нужны только источники в окрестности правки, а не весь список мира,
+    // и при загрузке чанка список его источников просто заменяется — без поиска дубликатов.
+    // Запись удаляется при выгрузке чанка и восстанавливается сканом при следующей загрузке.
+    std::unordered_map<glm::ivec3, std::vector<glm::ivec3>, Chunk_Key_Hash> m_light_sources;
+    // Чанки, пришедшие с пустой сеткой блочного света: свет соседей и их собственных источников
+    // дотягивается до них одним инкрементальным проходом (relight_block_light_new_chunks).
+    std::vector<glm::ivec3> m_chunks_pending_block_light;
+    void add_light_source(const glm::ivec3& world_pos);
+    void remove_light_source(const glm::ivec3& world_pos);
 
     // Содержимое блоков-контейнеров (сундук/верстак/печь), см. Block_Entity.h — плоская
     // карта по мировым координатам, а не часть Chunk, потому что таких блоков на весь мир
@@ -270,6 +345,7 @@ private:
 
     void unload_chunk(int cx, int cy, int cz);
     void enqueue_chunk_load(int cx, int cy, int cz);
+    void enqueue_chunk_column_load(int cx, int cz, const std::vector<Chunk_Job>& chunks);
     // Приоритет задачи генерации: квадрат расстояния до игрока, вертикаль весит в 4 раза сильнее.
     int chunk_job_priority(int cx, int cy, int cz) const;
     // Лимит одновременно запрошенных чанков: растёт со скоростью игрока.
@@ -282,22 +358,36 @@ private:
     // То же для задач мешинга: приоритет пересчитывается по текущему кольцу и расстоянию (задачи не снимаются).
     void reprioritize_pending_meshes();
     bool save_chunk_to_disk(const Chunk& chunk) const;
-    void enqueue_mesh_rebuild(int cx, int cy, int cz);
+    void enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent = false, int lod_stride = 0);
     bool is_chunk_wanted(const glm::ivec3& position) const;
     void start_workers();
     void disk_reader_loop();
     void requeue_generation(const Chunk_Job& job);
+    void enqueue_generation_column(Chunk_Column_Job column);
+    void schedule_region_preparation_locked(int chunk_x, int chunk_z, uint64_t generation_id,
+                                            int priority, int64_t region_key, uint8_t missing_parts);
+    // Starts cave/hydrology region work before the player reaches a region boundary.
+    // These are background jobs; no chunk worker waits on a cold region future.
+    void prewarm_generation_regions_near_player();
     void stop_workers();
     void worker_loop(bool mesh_dedicated = false);
 
     bool set_light_world(int wx, int wy, int wz, uint8_t level);
-    // Полный пересчёт освещения от блоков (не инкрементальный — см. подробный комментарий
-    // у реализации в .cpp про то, почему это осознанный выбор, а не недоделка).
-    // extra_clear_position: позиция, которую нужно гарантированно включить в область очистки,
-    // даже если её уже нет в m_light_sources — нужно для корректного снятия света: когда
-    // источник только что убрали, он к этому моменту уже вычеркнут из списка, и без этого
-    // параметра его старый свет-"призрак" никогда бы не очистился (см. подробности в .cpp).
-    void recompute_lighting(std::optional<glm::ivec3> extra_clear_position = std::nullopt);
+    // Локальный пересчёт блочного света после правки блока в world_pos: очищается куб радиуса
+    // Config::max_light_level вокруг правки (дальше правка свет изменить не может) и заполняется
+    // заново от источников внутри куба и от неизменённых клеток сразу за его границей. Меши
+    // пересобираются только у чанков, где свет РЕАЛЬНО поменялся.
+    void relight_block_light_near(const glm::ivec3& world_pos);
+    // То же для произвольной коробки мировых координат (включительно). Пакетная запись
+    // (set_blocks_world_batch) пересчитывает свет один раз на всю коробку дерева.
+    void relight_block_light_box(int x0, int y0, int z0, int x1, int y1, int z1);
+    // Инкрементальный пересчёт для только что загруженных чанков (m_chunks_pending_block_light):
+    // свет только прибавляется, очистка не нужна.
+    void relight_block_light_new_chunks();
+    // Локальный пересчёт света неба после правки: вертикальная тень пересчитывается только для
+    // колонки правки, горизонтальное растекание — в кубе вокруг неё (см. реализацию).
+    void relight_sky_light_near(const glm::ivec3& world_pos);
+    void relight_sky_light_box(int x0, int y0, int z0, int x1, int y1, int z1);
     // Грани соседа читают свет через границу: после смены света в чанках из changed_chunks
     // шесть соседей помечаются грязными, иначе их граница держала бы старый свет.
     void mark_light_neighbors_dirty(const std::unordered_set<glm::ivec3, Chunk_Key_Hash>& changed_chunks);
@@ -305,7 +395,6 @@ private:
     // loaded world - see the comment at the implementation and at m_columns_pending_sky_recompute.
     void recompute_sky_lighting(const std::unordered_set<uint64_t>& changed_chunk_columns,
                                 bool propagate_horizontal = true);
-    void rebuild_cross_chunk_greedy_meshes(const std::vector<glm::ivec3>& changed_chunks);
 
 public:
     // Загружен ли чанк (нужен менеджеру посевов: вне загруженной зоны ничего не растёт).
@@ -317,6 +406,8 @@ public:
     void set_world_generator(const World_Generator& generator) {
         m_world_generator = &generator;
     }
+    // Генератор мира (для запросов биома, например спавном мобов); nullptr, если не задан.
+    const World_Generator* world_generator() const { return m_world_generator; }
     // Загружает world_file/generation_folder И связанный с ним Block_Entity_Store
     // (содержимое сундуков/печей/верстаков этого пресета генерации) — раньше это
     // был тривиальный inline-сеттер двух полей, теперь ещё и файловый I/O, поэтому
@@ -351,6 +442,11 @@ public:
     Block_Types get_block_world(int wx, int wy, int wz) const;
     // meta — метаданные нового блока (ориентация/активность, см. Block_Meta); 0 по умолчанию.
     bool set_block_world(int wx, int wy, int wz, Block_Types type, uint8_t meta = 0);
+    // Пакетная запись многих блоков (дерево растёт — тысячи клеток). Поведение то же, что у
+    // set_block_world по каждой клетке по порядку, но свет пересчитывается один раз на общую
+    // коробку, а меши помечаются по одному разу. Записанные клетки добавляются в out_changed.
+    void set_blocks_world_batch(const std::vector<std::pair<glm::ivec3, Block_Types>>& writes,
+                                std::vector<glm::ivec3>& out_changed);
     uint8_t get_block_meta_world(int wx, int wy, int wz) const;
     // Меняет только метаданные уже стоящего блока (печь загорелась, сменила текстуру).
     // Возвращает false, если чанк не загружен или значение не изменилось.
@@ -366,16 +462,8 @@ public:
         const glm::vec3* camera_position = nullptr,
         int flora_render_distance_chunks = -1,
         bool spectator = false
-    ) const;
+    );
     std::vector<glm::ivec3> take_unloaded_chunk_positions();
-
-    // GPU-путь непрозрачной геометрии (см. Renderer::draw_solid_gpu). Включается рендерером, когда он
-    // подтвердил GL 4.3 и скомпилировал шейдеры; действует на все последующие пересборки.
-    static void set_gpu_solid_meshing(bool enabled) { s_gpu_solid_meshing = enabled; }
-    static bool gpu_solid_meshing() { return s_gpu_solid_meshing; }
-    // Чанки, которые GPU-мешер не уместил в секции: пересобрать их на CPU. Уже загруженные
-    // позиции; незагруженные молча пропускаются.
-    void request_cpu_remesh(const std::vector<glm::ivec3>& positions);
 
     // Block_Entity блока-контейнера в этой позиции, если он там есть (nullptr иначе).
     // Неконстантная версия — для открытого контейнера (кладём/берём предметы), константная —
@@ -416,6 +504,16 @@ public:
     void end_capture_region();
 
     size_t get_loaded_count() const { return m_chunks.size(); }
+
+    // Для отладочного оверлея (F3+F4): сколько чанков сейчас в работе.
+    struct Chunk_Work_Stats {
+        size_t mesh_pending = 0;     // чанки, ждущие пересборки меша
+        size_t mesh_requeued = 0;    // пересборки, отложенные до готовности соседей
+        size_t loads_requested = 0;  // чанки, запрошенные у генератора/диска, но ещё не пришедшие
+    };
+    Chunk_Work_Stats get_work_stats() const {
+        return {m_pending_mesh_rebuilds.size(), m_mesh_rebuild_requeue.size(), m_requested_chunks.size()};
+    }
 };
 
 #endif //OPTICRAFT_CHUNK_MANAGER_H

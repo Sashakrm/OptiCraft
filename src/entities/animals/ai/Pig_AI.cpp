@@ -30,7 +30,7 @@ void Pig_AI::set_state(Pig_State new_state) {
         case Pig_State::Walking:  message += "гуляет по двору"; break;
         case Pig_State::Happy:    message += "радостно хрюкает и виляет хвостиком!"; break;
     }
-    LOG_INFO(message);
+    //LOG_INFO(message); временно закоменчено
 }
 
 std::string Pig_AI::get_state_name() const {

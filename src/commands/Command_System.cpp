@@ -3,11 +3,17 @@
 #include "core/game/Game.h"
 #include "world/blocks/Block_Types.h"
 #include "utils/Config.h"
+#include "world/dimensions/Dimension.h"
+
+#include <cstdint>
+#include <cstdlib>
+#include <random>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <sstream>
+#include <iomanip>
 
 namespace {
 
@@ -119,6 +125,7 @@ const Command_Info k_commands[] = {
     {"tpbiome",     "/tpbiome <biome>",                             "Teleport to nearest biome"},
     {"locatebiome", "/locatebiome <biome>",                         "Print coords of nearest biome"},
     {"time",        "/time set <day|noon|night|midnight|ticks>",    "Set time of day (also: add, query)"},
+    {"tick",        "/tick speed <multiplier>",                    "Change simulation speed"},
     {"killall",     "/killall",                                     "Kill all mobs"},
     {"kill",        "/kill",                                        "Kill yourself (respawn)"},
     {"spawn",       "/spawn",                                       "Teleport to world spawn"},
@@ -129,6 +136,10 @@ const Command_Info k_commands[] = {
     {"summon",      "/summon <pig|horse|cow|sheep|zombie|skeleton|spider> [count]", "Spawn mobs near you"},
     {"breed",       "/breed <pig|cow|sheep|horse>",                 "Make all adult animals of a kind ready to breed"},
     {"clear",       "/clear",                                       "Remove dropped items"},
+    {"enchant",     "/enchant durability <1-3>",                    "Enchant held tool/armor (durability)"},
+    {"boss",        "/boss <knight|stone_colossus|shadow_stalker>", "Summon a boss"},
+    {"dungeon",     "/dungeon [seed]",                              "Build a dungeon room at your feet (seed)"},
+    {"portal",      "/portal <dimension>",                          "Travel to another dimension (seed)"},
 };
 
 const Command_Info* find_info(const std::string& name) {
@@ -262,6 +273,30 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
         return false;
     }
 
+    // --- /tick -------------------------------------------------------------
+    if (cmd == "tick") {
+        if (args.size() == 2 && to_lower(args[1]) == "speed") {
+            std::ostringstream value;
+            value << std::setprecision(4) << game.get_tick_speed();
+            reply = "Tick speed: " + value.str() + "x";
+            return true;
+        }
+        if (args.size() != 3 || to_lower(args[1]) != "speed") {
+            reply = "Usage: /tick speed <multiplier>";
+            return false;
+        }
+        float speed = 0.0f;
+        if (!parse_coord(args[2], 0.0f, speed) || speed <= 0.0f || speed > 100.0f) {
+            reply = "Speed must be a number greater than 0 and at most 100";
+            return false;
+        }
+        game.set_tick_speed(speed);
+        std::ostringstream value;
+        value << std::setprecision(4) << speed;
+        reply = "Tick speed set to " + value.str() + "x";
+        return true;
+    }
+
     // --- Мобы / игрок ----------------------------------------------------------
     if (cmd == "killall") {
         const int killed = game.kill_all_mobs();
@@ -317,6 +352,65 @@ bool execute_command(Game& game, const std::string& input, std::string& reply) {
         if (added <= 0) { reply = "Inventory is full"; return false; }
         reply = "Gave " + std::to_string(added) + " x " + get_block_props(type).name;
         if (added < count) reply += " (inventory full)";
+        return true;
+    }
+
+    // --- /boss <вид> --------------------------------------------------------------
+    if (cmd == "boss") {
+        if (args.size() != 2) { reply = "Usage: /boss <knight|stone_colossus|shadow_stalker>"; return false; }
+        const std::string kind = to_lower(args[1]);
+        Boss_Kind boss_kind;
+        if (kind == "knight" || kind == "knight_ai") boss_kind = Boss_Kind::Knight;
+        else if (kind == "stone_colossus" || kind == "colossus") boss_kind = Boss_Kind::Stone_Colossus;
+        else if (kind == "shadow_stalker" || kind == "stalker") boss_kind = Boss_Kind::Shadow_Stalker;
+        else { reply = "Unknown boss: " + args[1]; return false; }
+        if (!game.summon_boss(boss_kind)) { reply = "Boss model failed to load or is missing required resources (see log)"; return false; }
+        reply = "Boss summoned: " + std::string(boss_stats(boss_kind).label);
+        return true;
+    }
+
+    // --- /dungeon [seed] ---------------------------------------------------------
+    if (cmd == "dungeon") {
+        if (args.size() > 2) { reply = "Usage: /dungeon [seed]"; return false; }
+        std::uint32_t seed = std::random_device{}();
+        if (args.size() == 2) {
+            char* end = nullptr;
+            const unsigned long parsed = std::strtoul(args[1].c_str(), &end, 10);
+            if (end == args[1].c_str() || *end != '\0') { reply = "Seed must be a number"; return false; }
+            seed = static_cast<std::uint32_t>(parsed);
+        }
+        const glm::vec3 p = game.get_player_position();
+        const glm::ivec3 origin(static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)),
+                                static_cast<int>(std::floor(p.z)));
+        if (!game.build_dungeon(origin, seed)) { reply = "Dungeon partly built (out of world bounds?)"; return false; }
+        reply = "Dungeon built, seed " + std::to_string(seed);
+        return true;
+    }
+
+    // --- /portal <dimension> -------------------------------------------------------
+    if (cmd == "portal") {
+        std::string names;
+        for (size_t i = 0; i < static_cast<size_t>(Dimension_Id::Count); ++i) {
+            if (!names.empty()) names += ", ";
+            names += get_dimension_info(static_cast<Dimension_Id>(i)).name;
+        }
+        if (args.size() != 2) { reply = "Usage: /portal <dimension>  (" + names + ")"; return false; }
+        const std::string target = to_lower(args[1]);
+        if (!game.switch_dimension(target)) { reply = "Unknown dimension: " + args[1] + "  (" + names + ")"; return false; }
+        reply = "Portal: now in " + std::string(get_dimension_info(dimension_from_name(target)).display_name);
+        return true;
+    }
+
+    // --- /enchant durability <1-3> -------------------------------------------------
+    if (cmd == "enchant") {
+        int level = 0;
+        if (args.size() != 3 || to_lower(args[1]) != "durability" || !parse_int(args[2], level)) {
+            reply = "Usage: /enchant durability <1-3>";
+            return false;
+        }
+        if (level < 1 || level > 3) { reply = "Level must be 1..3"; return false; }
+        if (!game.enchant_held_item(level)) { reply = "Hold a tool or armor piece with durability"; return false; }
+        reply = "Durability enchanted to level " + std::to_string(level);
         return true;
     }
 
@@ -434,6 +528,8 @@ std::vector<std::string> get_command_completions(const std::string& raw_input) {
             candidates = {"creative", "survival"};
         } else if (cmd == "time" && word_index == 1) {
             candidates = {"set", "add", "query"};
+        } else if (cmd == "tick" && word_index == 1) {
+            candidates = {"speed"};
         } else if (cmd == "time" && word_index == 2 && to_lower(tokens[1]) == "set") {
             candidates = {"day", "noon", "sunset", "night", "midnight", "sunrise"};
         } else if (cmd == "summon" && word_index == 1) {

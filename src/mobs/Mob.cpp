@@ -120,7 +120,20 @@ void Mob::compute_bone_matrices(std::vector<glm::mat4>& out_skin_matrices, const
     out_skin_matrices.assign(bones.size(), glm::mat4(1.0f));
     if (bones.empty()) return;
 
-    std::vector<glm::mat4> global_matrices(bones.size(), glm::mat4(1.0f));
+    // Рабочие массивы переиспользуются между вызовами (на каждого моба каждый кадр раньше — 2 аллокации).
+    thread_local std::vector<glm::mat4> global_matrices;
+    global_matrices.assign(bones.size(), glm::mat4(1.0f));
+
+    // Канал клипа на кость за один проход по каналам (берётся ПЕРВЫЙ найденный, как и раньше):
+    // вместо поиска по всем каналам для каждой кости — O(кости × каналы) -> O(каналы).
+    thread_local std::vector<const Bone_Animation_Channel*> channel_of_bone;
+    channel_of_bone.assign(bones.size(), nullptr);
+    if (clip) {
+        for (const Bone_Animation_Channel& channel : clip->channels) {
+            if (channel.bone_index < 0 || static_cast<size_t>(channel.bone_index) >= bones.size()) continue;
+            if (!channel_of_bone[channel.bone_index]) channel_of_bone[channel.bone_index] = &channel;
+        }
+    }
 
     // Скрытые кости (см. set_hidden_bones_matching): совпадение по имени и все потомки.
     // Порядок eval_order гарантирует, что родитель уже помечен, когда доходим до потомка.
@@ -141,14 +154,11 @@ void Mob::compute_bone_matrices(std::vector<glm::mat4>& out_skin_matrices, const
         glm::quat rotation = bone.bind_rotation;
         glm::vec3 scale = bone.bind_scale;
 
-        if (clip) {
-            for (const Bone_Animation_Channel& channel : clip->channels) {
-                if (channel.bone_index != bone_index) continue;
-                if (!channel.translation_keys.empty()) translation = sample_vec3(channel.translation_keys, time, translation);
-                if (!channel.rotation_keys.empty()) rotation = sample_quat(channel.rotation_keys, time, rotation);
-                if (!channel.scale_keys.empty()) scale = sample_vec3(channel.scale_keys, time, scale);
-                break;
-            }
+        if (const Bone_Animation_Channel* channel_ptr = channel_of_bone[bone_index]) {
+            const Bone_Animation_Channel& channel = *channel_ptr;
+            if (!channel.translation_keys.empty()) translation = sample_vec3(channel.translation_keys, time, translation);
+            if (!channel.rotation_keys.empty()) rotation = sample_quat(channel.rotation_keys, time, rotation);
+            if (!channel.scale_keys.empty()) scale = sample_vec3(channel.scale_keys, time, scale);
         }
 
         const glm::mat4 local_matrix = glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);

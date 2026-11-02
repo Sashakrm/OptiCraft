@@ -15,6 +15,7 @@
 #ifndef OPTICRAFT_DROPPED_ITEM_H
 #define OPTICRAFT_DROPPED_ITEM_H
 
+#include <functional>
 #include <glm/glm.hpp>
 #include <random>
 #include <vector>
@@ -33,6 +34,10 @@ struct Dropped_Item {
     float phase = 0.0f;        // сдвиг фазы вращения/покачивания, чтобы предметы не крутились в унисон
     bool on_ground = false;
 
+    // Брошенный зелье-шарик: летит, не подбирается и не сливается, разбивается о блок или моба.
+    bool thrown = false;
+    bool shattered = false;    // разбился — будет удалён на этом же шаге
+
     // Предмет уже отдан инвентарю и «долетает» до игрока (чисто визуально), затем исчезает.
     bool collecting = false;
     float collect_time = 0.0f;
@@ -43,9 +48,21 @@ struct Dropped_Item {
 // blocks.json). Пустой стак — ничего не выпало.
 Item_Stack roll_block_drop(Block_Types block, std::mt19937& rng);
 
+// Место, где брошенный шарик разбился, и его тип (по нему выбирается эффект).
+struct Thrown_Hit {
+    glm::vec3 position;
+    Block_Types type;
+};
+
 class Dropped_Item_Manager {
 public:
     Dropped_Item_Manager();
+
+    // Брошенный шарик: летит по баллистике с гравитацией. Разбивается, когда задел блок,
+    // когда mob_hit(позиция) вернул true (моб рядом) или по истечении potion_thrown_lifetime.
+    void spawn_thrown(const Item_Stack& stack, const glm::vec3& position, const glm::vec3& velocity);
+    // Забирает места разбитых шариков (и очищает список).
+    std::vector<Thrown_Hit> take_thrown_hits();
 
     // Кладёт предмет в мир. Если предметов уже слишком много (Config::dropped_item_max_count),
     // самые старые удаляются.
@@ -66,7 +83,8 @@ public:
                 const Chunk_Manager& chunk_manager,
                 const glm::vec3& player_position,
                 float player_height,
-                Inventory* pickup_inventory);
+                Inventory* pickup_inventory,
+                const std::function<bool(const glm::vec3&)>& mob_hit = {});
 
     // Добавляет в out вершины всех предметов (кубики/спрайты) в мировых координатах.
     void build_mesh(std::vector<Chunk_Vertex>& out, const Chunk_Manager& chunk_manager) const;
@@ -77,6 +95,7 @@ public:
 
 private:
     std::vector<Dropped_Item> m_items;
+    std::vector<Thrown_Hit> m_thrown_hits;
     std::mt19937 m_rng;
     float m_time = 0.0f;
     float m_merge_timer = 0.0f;
@@ -88,6 +107,8 @@ private:
     void try_pickup(Dropped_Item& item, const glm::vec3& player_position, float player_height,
                     Inventory& inventory);
     void merge_nearby();
+    void simulate_thrown(Dropped_Item& item, float delta_time, const Chunk_Manager& chunk_manager,
+                         const std::function<bool(const glm::vec3&)>& mob_hit);
     void enforce_limit();
 };
 

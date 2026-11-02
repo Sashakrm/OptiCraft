@@ -6,6 +6,7 @@
 #define OPTICRAFT_CHUNK_H
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -30,15 +31,6 @@ struct Chunk_Vertex {
 // в атласе передаётся отдельно (rect = u_min, v_min, u_max, v_max). Фрагментный шейдер делает
 // uv = mix(rect.xy, rect.zw, fract(local)) — текстура блока повторяется внутри слитого квада.
 // Нормаль сведена к ny: шейдер смотрит только на её Y (верх / низ / бок).
-struct Terrain_Vertex {
-    float x, y, z;
-    float local_u, local_v;
-    float ny;
-    float light;
-    float rect_u_min, rect_v_min, rect_u_max, rect_v_max;
-    // Вершинный AO: 0 — угол закрыт со всех сторон, 3 — открыт. Интерполируется по квадру.
-    float ao;
-};
 
 // Граничные позиции секции: клетки на шести её гранях. Порядок: +X и -X — (z, y) по 32x8; +Y и -Y —
 // (z, x) по 32x32; +Z и -Z — (x, y) по 32x8. Всего 3072. Переход между секциями идёт только через
@@ -86,10 +78,11 @@ struct Section_Connectivity {
     std::vector<uint64_t> masks;
 };
 
+// Что нужно знать CPU о секции чанка (8 слоёв по Y). Сама геометрия живёт на видеокарте и
+// строится компьют-шейдерами; здесь — только маска видов для отрисовки, границы для отсечения и связность.
 struct Chunk_Section_Range {
-    size_t solid_start = 0, solid_count = 0;
-    size_t flora_start = 0, flora_count = 0;
-    size_t liquid_start = 0, liquid_count = 0;
+    // Какие виды геометрии возможны в секции: 1 — непрозрачные кубы, 2 — блоки формы, 4 — флора, 8 — жидкость.
+    uint8_t kinds = 0;
     float min_y = 0.0f;
     float max_y = 0.0f;
     bool has_geometry = false;
@@ -104,10 +97,14 @@ uint64_t current_connectivity_epoch();
 
 // Каналов полезной нагрузки GPU-мешера: 0 блоки, 1 метаданные, 2 свет своего чанка;
 // 3..8 блоки граней соседей (-X,+X,-Y,+Y,-Z,+Z); 9..14 свет граней соседей; 15 — кольцо блоков
-// рёбер и углов (нужно AO у границ чанка). См. mesh_greedy.comp.
-inline constexpr int kGpuMeshChannelCount = 16;
-// Заголовок чанка в батче GPU: слот + по одному uvec4 на канал.
-inline constexpr int kGpuHeaderStride = 1 + kGpuMeshChannelCount;
+// рёбер и углов (AO у границ чанка, высоты жидкости); 16..21 метаданные граней соседей (уровень
+// жидкости); 22 — метаданные кольца. См. mesh_greedy.comp и mesh_misc.comp.
+// Канал 23 — coarse-сетка блоков для solid LOD; канал 24 — соответствующие метаданные,
+// чтобы сохранять ориентацию и активное состояние блоков. Канал 0 остаётся полноразмерным
+// для блоков сложной формы, флоры и жидкостей.
+inline constexpr int kGpuMeshChannelCount = 25;
+// Заголовок чанка в батче GPU: слот, (флаги, маска видов) + по одному uvec4 на канал.
+inline constexpr int kGpuHeaderStride = 2 + kGpuMeshChannelCount;
 
 // Кольцо для AO: клетки за границей чанка, у которых две или три координаты вне 0..size-1.
 // Грани за одной границей берутся из шести снимков граней, а рёбра и углы (соседние по диагонали
@@ -167,21 +164,15 @@ inline void chunk_ring_coords(int index, int& x, int& y, int& z) {
     }
 }
 
+// Всё, что CPU хранит о меше чанка. Вершин и квадов здесь нет: их строит видеокарта (см. Renderer).
 struct Chunk_Meshes {
-    std::vector<Terrain_Vertex> solid;
-    std::vector<Chunk_Vertex> flora;
-    std::vector<Chunk_Vertex> liquid;
     std::array<Chunk_Section_Range, Config::chunk_section_count> sections;
-
-    // --- GPU-путь непрозрачной геометрии (см. Renderer::draw_solid_gpu) ---
-    // solid_on_gpu: квады строит видеокарта из упакованных блоков, поэтому `solid` пуст.
-    // gpu_candidates: в чанке есть жадно-мешаемый блок, то есть квады возможны.
-    bool solid_on_gpu = false;
-    bool gpu_candidates = false;
-    // CPU-квады этого меша могут немного выходить через положительную границу чанка,
-    // когда они объединены с квадами соседнего чанка.
-    int extends_pos_x_blocks = 0;
-    int extends_pos_z_blocks = 0;
+    // Объединение видов геометрии всех секций (0 — рисовать нечего).
+    uint8_t gpu_kinds = 0;
+    // 1 = full detail, 2 = medium LOD, 4 = distant LOD.
+    uint8_t lod_stride = 1;
+    // Снимок области захвата (изометрия): отрицательные грани не строятся — рисуются только +X/+Y/+Z.
+    bool positive_faces_only = false;
     // Полезная нагрузка для видеокарты (палитры и битово упакованные значения каналов).
     // mutable: Renderer забирает её при загрузке в GPU и очищает, поэтому после отправки
     // она не держится в RAM.
@@ -228,11 +219,13 @@ private:
     uint32_t m_value_mask = 0;        // (1 << m_bits) - 1
 
     // Метаданные блока (см. Block_Meta в Block_Types.h): ориентация бревна, сторона, куда
-    // смотрит печь, флаг "активен". Хранятся РЕДКО — почти все блоки мира имеют meta = 0, —
-    // поэтому это разреженная карта индекс -> значение, а не второй массив.
-    // Живёт внутри сетки блоков, чтобы автоматически копироваться в снимок для мешинга
-    // (Mesh_Job::own_blocks) и попадать в Region_File вместе с блоками.
-    std::unordered_map<uint16_t, uint8_t> m_meta;
+    // смотрит печь, флаг "активен". Хранятся РЕДКО — почти все блоки мира имеют meta = 0.
+    // Раньше это была разреженная карта (unordered_map): она дублировалась в каждый снимок
+    // мешинга (6-7 раз на чанк за кадр) и в задачи — и стала скрытым тормозом горячего пути.
+    // Теперь плотный массив пар (индекс вокселя, значение), хранящий только ненулевые записи:
+    // копия снимка — memcpy, а у чанка без метаданных — ноль памяти.
+    // meta_entries() отдаёт плотный массив для сохранения (см. Region_File).
+    std::vector<uint32_t> m_meta;
 
     static constexpr size_t index(int x, int y, int z) {
         return (static_cast<size_t>(y) * Config::chunk_size + static_cast<size_t>(z)) *
@@ -277,7 +270,10 @@ public:
     // ориентацию/активность от прежнего.
     void set(int x, int y, int z, Block_Types type) {
         const size_t i = index(x, y, z);
-        if (!m_meta.empty()) m_meta.erase(static_cast<uint16_t>(i));
+        if (!m_meta.empty()) {
+            for (size_t j = 0; j < m_meta.size(); j += 2)
+                if (static_cast<uint32_t>(m_meta[j] & 0x0FFFFFu) == i) { m_meta[j + 1] = 0; break; }
+        }
         const Block_ID id = static_cast<Block_ID>(type);
         const uint16_t old_index = index_at(i);
         if (m_palette[old_index] == id) return;
@@ -291,8 +287,9 @@ public:
     void fill(Block_Types type) {
         m_palette.assign(1, static_cast<Block_ID>(type));
         m_counts.assign(1, static_cast<uint16_t>(voxel_count));
+        // Оставляем буфер упакованных слов у чанка: при повторном использовании
+        // слота/чанка это исключает лишнюю пару free/alloc.
         m_words.clear();
-        m_words.shrink_to_fit();
         apply_bits(0);
         m_meta.clear();
     }
@@ -301,28 +298,52 @@ public:
     // Строит палитру за один проход — намного быстрее, чем voxel_count вызовов set().
     void assign_flat(const Block_ID* flat);
     void unpack(Block_ID* out) const;
+    // Плоская копия метаданных (voxel_count байт): все 0, кроме записей в m_meta.
+    // Мешинг на GPU берёт весь чанк за одно memcpy вместо распаковки карты.
+    void unpack_meta(uint8_t* out) const;
     // Выкидывает записи палитры, которые больше никто не использует, и ужимает битность.
     // Зовётся после генерации и перед сохранением: set() только добавляет записи.
     void compact();
 
     uint8_t get_meta(int x, int y, int z) const {
         if (m_meta.empty()) return 0;
-        const auto it = m_meta.find(static_cast<uint16_t>(index(x, y, z)));
-        return it == m_meta.end() ? 0 : it->second;
+        const uint32_t i = static_cast<uint32_t>(index(x, y, z));
+        for (size_t j = 0; j < m_meta.size(); j += 2)
+            if (static_cast<uint32_t>(m_meta[j] & 0x0FFFFFu) == i)
+                return static_cast<uint8_t>(m_meta[j + 1]);
+        return 0;
     }
 
+    // Значение хранится не отсортированным: метаданные редки, поиск пар (индекс, значение)
+    // идёт линейным проходом (у обычного чанка ноль или единицы записей; максимум теоретически —
+    // весь чанк жидкости, где даже бинарный поиск не оправдан). Порядок не трогаем —
+    // Region_File пишет записи как есть, и формат на диске от сортировки не зависит.
     void set_meta(int x, int y, int z, uint8_t value) {
-        const uint16_t i = static_cast<uint16_t>(index(x, y, z));
-        if (value == 0) m_meta.erase(i);
-        else m_meta[i] = value;
+        const uint32_t i = static_cast<uint32_t>(index(x, y, z));
+        for (size_t j = 0; j < m_meta.size(); j += 2) {
+            if (static_cast<uint32_t>(m_meta[j] & 0x0FFFFFu) == i) {
+                if (value == 0) {
+                    m_meta[j + 1] = 0;
+                    break;
+                }
+                m_meta[j + 1] = value;
+                return;
+            }
+        }
+        if (value != 0) m_meta.push_back(i), m_meta.push_back(static_cast<uint32_t>(value));
     }
 
+    // Плотные записи для сохранения: [индекс, значение, индекс, значение, ...].
+    const std::vector<uint32_t>& meta_entries() const { return m_meta; }
+
+    // Блоки, записанные в палитре (могут включать уже не используемые записи).
+    const std::vector<Block_ID>& palette() const { return m_palette; }
     bool has_meta() const { return !m_meta.empty(); }
     void clear_meta() { m_meta.clear(); }
-    const std::unordered_map<uint16_t, uint8_t>& meta_entries() const { return m_meta; }
-    // Для загрузки с диска: index — линейный индекс вокселя (как в index()).
-    void set_meta_by_index(uint16_t linear_index, uint8_t value) {
-        if (linear_index < voxel_count && value != 0) m_meta[linear_index] = value;
+    // Загрузка с диска: запись добавляется (перезаписей при чтении нет — сетка чистая).
+    void set_meta_by_index(uint32_t linear_index, uint8_t value) {
+        if (linear_index < voxel_count && value != 0)
+            m_meta.push_back(linear_index), m_meta.push_back(static_cast<uint32_t>(value));
     }
 
     // Весь чанк состоит из одного блока (после compact()): воздух над землёй, сплошной камень.
@@ -333,7 +354,7 @@ public:
     size_t memory_bytes() const {
         return m_words.size() * sizeof(uint64_t) + m_palette.size() * sizeof(Block_ID) +
                m_counts.size() * sizeof(uint16_t) +
-               m_meta.size() * (sizeof(uint16_t) + sizeof(uint8_t));
+               m_meta.size() * sizeof(uint32_t);
     }
     constexpr size_t size_bytes() const { return voxel_count * sizeof(Block_ID); }  // размер распакованного вида
 };
@@ -465,37 +486,32 @@ using Chunk_Light_Lookup = std::function<uint8_t(int world_x, int world_y, int w
 // Метаданные блока за границей чанка (уровень жидкости соседа). nullptr/пусто = 0.
 using Chunk_Meta_Lookup = std::function<uint8_t(int world_x, int world_y, int world_z)>;
 
-// solid_on_gpu: непрозрачные квады не строятся здесь (их даст GPU-мешер по нагрузке из
-// build_gpu_solid_payload); флора и жидкость строятся как обычно, границы секций — с учётом GPU.
-Chunk_Meshes build_chunk_mesh(const Chunk_Block_Grid& blocks,
-                              const Chunk_Light_Grid& light,
-                              int chunk_x, int chunk_y, int chunk_z,
-                              const Chunk_Neighbor_Lookup& neighbor_lookup,
-                              const Chunk_Light_Lookup& light_lookup,
-                              const Texture_Atlas& atlas,
-                              bool only_positive_faces = false,
-                              const Chunk_Meta_Lookup& meta_lookup = Chunk_Meta_Lookup{},
-                              bool solid_on_gpu = false);
+// Готовит данные чанка для GPU-мешеров: связность секций, маски видов геометрии и упакованную
+// нагрузку (блоки, метаданные, свет, грани соседей и кольцо). Грани соседей, которых нет в снимке,
+// достраиваются лукапами, и только там, где на собственной границе есть блок, которому нужны соседи.
+Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
+                                  const Chunk_Light_Grid& light,
+                                  const Chunk_Block_Faces& neighbor_blocks,
+                                  const Chunk_Light_Faces& neighbor_light,
+                                  int chunk_x, int chunk_y, int chunk_z,
+                                  const Chunk_Neighbor_Lookup& neighbor_lookup,
+                                  const Chunk_Light_Lookup& light_lookup,
+                                  const Chunk_Meta_Lookup& meta_lookup,
+                                  bool only_positive_faces,
+                                  int lod_stride = 1);
 
-// Заполняет в meshes полезную нагрузку GPU-мешера (gpu_words/gpu_channels/gpu_candidates) по
-// снимку блоков, света и граней соседей. Грани соседей, которых нет в снимке, достраиваются
-// лукапами (как в CPU-мешере), и только там, где на собственной границе есть жадно-мешаемые блоки.
-void build_gpu_solid_payload(Chunk_Meshes& meshes,
-                             const Chunk_Block_Grid& blocks,
-                             const Chunk_Light_Grid& light,
-                             const Chunk_Block_Faces& neighbor_blocks,
-                             const Chunk_Light_Faces& neighbor_light,
-                             int chunk_x, int chunk_y, int chunk_z,
-                             const Chunk_Neighbor_Lookup& neighbor_lookup,
-                             const Chunk_Light_Lookup& light_lookup);
-
-// Таблицы правил жадного мешера для GPU: те же самые, что использует CPU-мешер.
+// Таблицы правил мешеров для GPU.
 struct Gpu_Mesh_Tables {
-    // Бит 0: жадно-мешаемый блок; бит 1: прозрачный; бит 2: uses_meta; бит 3: cull_same;
-    // бит 4: непрозрачный кубический блок (закрывает AO соседних углов).
+    // Бит 0: жадно-мешаемый блок; 1: прозрачный; 2: uses_meta; 3: cull_same; 4: непрозрачный куб
+    // (закрывает AO соседних углов); 5: флора; 6: жидкость; 7: блок формы; 8: закрывает грань блока
+    // формы; 9: состояние «жидкость»; биты 10..12: форма (Block_Shape).
     std::vector<uint32_t> flags;   // по id до Block_Registry::id_capacity()
-    // Упакованный свет (sky<<4 | block) -> огрублённый, для cull_same-блоков.
+    // Упакованный свет (sky<<4 | block) -> огрублённый (сейчас тождественный).
     std::array<uint32_t, 256> light_coarse{};
+    // Боксы блоков формы в 1/64 клетки: shape_index[(форма * 256 + метаданные) * 2] — число боксов,
+    // следующий элемент — смещение (в парах) в shape_boxes; бокс = пара слов (см. mesh_misc.comp).
+    std::vector<uint32_t> shape_index;
+    std::vector<uint32_t> shape_boxes;
 };
 Gpu_Mesh_Tables gpu_mesh_tables();
 
@@ -519,14 +535,12 @@ private:
     const Texture_Atlas* m_texture_atlas = nullptr;
 
     Chunk_Meshes m_meshes;
-    // Исходная CPU-геометрия до межчанкового объединения. Нужна, чтобы пересобирать
-    // швы после изменения/загрузки соседа и не объединять один квад повторно.
-    std::vector<Terrain_Vertex> m_unmerged_solid;
-    std::array<size_t, Config::chunk_section_count> m_unmerged_solid_counts{};
     bool m_is_mesh_dirty = true;
+    static inline std::atomic<uint64_t> s_dirty_events{0};
     // Растёт при каждой пометке грязности (см. mark_mesh_dirty): задача пересборки запоминает его
     // на моменте снимка, и если к её применению он вырос, правка легла уже после снимка.
     uint64_t m_dirty_epoch = 0;
+    uint64_t m_mesh_seq_issued = 0;
     // Уникальный номер ОБЪЕКТА (выдаётся в конструкторе из глобального счётчика, с 1). Позиция
     // для этого не годится: выгрузили и загрузили заново — позиция та же, объект уже другой.
     uint64_t m_instance_id = 0;
@@ -534,6 +548,8 @@ private:
     // Нетронутый чанк полностью восстанавливается генератором по сиду, поэтому
     // писать его на диск бессмысленно: раньше выгрузка сохраняла ВСЕ чанки
     // подряд, то есть тысячи записей по 32 КБ при обычной ходьбе по миру.
+    // Истина, если блоки или их метаданные менялись после последней загрузки/генерации.
+    // Chunk_Manager использует флаг, чтобы сохранять изменённые чанки и не писать нетронутые.
     bool m_is_modified = false;
     uint64_t m_mesh_version = 0;
     // Кольцо относительно игрока (max по |dx|,|dz|,|dy|, 255 = неизвестно) и поколение вида, в котором оно
@@ -551,11 +567,16 @@ public:
     void set_texture_atlas(const Texture_Atlas* atlas) { m_texture_atlas = atlas; }
 
     void generate_blocks();
+    // Завершает пакетную генерацию: размещает декорации, уплотняет палитру и обновляет metadata.
+    // already_known_air=true разрешён только после точной для генератора проверки chunk_is_definitely_air.
+    void finish_generation(bool already_known_air = false,
+                           bool layer_metadata_precomputed = false);
+    // Used by World_Generator when per-layer occupied counts were computed during filling.
+    void set_layer_block_counts(const std::array<int, Config::chunk_height>& counts) {
+        m_layer_block_count = counts;
+    }
     void recalculate_metadata();
-    void build_mesh();
     void apply_mesh(Chunk_Meshes meshes);
-    bool restore_unmerged_solid();
-    void cache_unmerged_solid(const std::array<size_t, Config::chunk_section_count>& section_counts);
     void touch_mesh_version();
 
     Block_Types get_block(int x, int y, int z) const;
@@ -592,13 +613,23 @@ public:
     }
     bool is_mesh_dirty() const { return m_is_mesh_dirty; }
     bool is_modified() const { return m_is_modified; }
+    // Вызывать для изменений, выполненных пакетно или в обход Chunk::set_block/set_meta.
     void mark_modified() { m_is_modified = true; }
+    // Сбрасывает признак пользовательской правки при создании или загрузке исходного состояния.
     void clear_modified() { m_is_modified = false; }
     void mark_mesh_dirty() {
         m_is_mesh_dirty = true;
         ++m_dirty_epoch;
+        s_dirty_events.fetch_add(1, std::memory_order_relaxed);
     }
+    // Сколько раз ЛЮБОЙ чанк помечали грязным: менеджер по нему узнаёт, что скан грязных чанков
+    // можно пропустить (с прошлого скана никто не стал грязным).
+    static uint64_t dirty_event_count() { return s_dirty_events.load(std::memory_order_relaxed); }
     uint64_t get_dirty_epoch() const { return m_dirty_epoch; }
+    // Номер последней поставленной задачи пересборки меша этого чанка. Результат более старой задачи
+    // (например, поставленной до срочной пересборки после правки блока) отбрасывается.
+    uint64_t next_mesh_seq() { return ++m_mesh_seq_issued; }
+    uint64_t get_mesh_seq_issued() const { return m_mesh_seq_issued; }
     uint64_t get_instance_id() const { return m_instance_id; }
     bool is_empty() const;
     bool has_blocks() const {
@@ -610,9 +641,5 @@ public:
 
     glm::vec3 get_world_position(int local_x, int local_y, int local_z) const;
 };
-
-// Сливает совместимые CPU-квады двух чанков по общей вертикальной плоскости.
-// axis: 0 — чанки соседствуют по X, 2 — по Z. Геометрия хранится у lower.
-bool merge_chunk_boundary_solids(Chunk& lower, Chunk& upper, int axis);
 
 #endif // OPTICRAFT_CHUNK_H

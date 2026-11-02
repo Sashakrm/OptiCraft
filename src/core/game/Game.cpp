@@ -3,6 +3,7 @@
 //
 
 #include "core/game/Game.h"
+#include "world/structures/Dungeon_Layout.h"
 #include "core/app/Application.h"
 #include "hud/layouts/Panel_Layouts.h"
 #include "utils/text/Localization.h"
@@ -16,6 +17,7 @@
 
 #include "utils/logging/Logger.h"
 #include "world/crafting/Smelting.h"
+#include "world/logic/Logic_Manager.h"
 #include "utils/Config.h"
 #include "rendering/atlas/Atlas_Registry.h"
 #include "rendering/Frustum.h"
@@ -28,6 +30,26 @@
 #include <fstream>
 #include <iterator>
 #include "world/storage/Region_File.h"
+#include "entities/effects/Status_Effects.h"
+#include <optional>
+
+static Block_Types Game_Leaf_Sapling(Block_Types leaves);
+
+// Строка для F3: "Effects: Regeneration 1 (7s), Speed 2 (21s)". Пусто, если эффектов нет.
+static std::string describe_effects(const Status_Effects& effects) {
+    if (effects.empty()) return {};
+    static constexpr const char* k_names[] = {"Regeneration", "Speed", "Jump Boost"};
+    std::string out = "Effects:";
+    bool first = true;
+    for (const Effect_Slot& slot : effects.slots()) {
+        out += first ? " " : ", ";
+        first = false;
+        out += k_names[static_cast<int>(slot.effect)];
+        out += " " + std::to_string(slot.amplifier + 1);
+        out += " (" + std::to_string(static_cast<int>(std::ceil(slot.remaining))) + "s)";
+    }
+    return out;
+}
 
 Game::Game(int width, int height, const std::string& title)
     : m_is_running(false)
@@ -93,16 +115,10 @@ bool Game::initialize() {
     // конструируется при первом обращении) — важно сделать это ПОСЛЕ атласов выше.
     Block_Registry::get_instance();
 
-    if (!m_renderer_ptr->initialize(
-            "assets/shaders/terrain_vertex.glsl",
-            "assets/shaders/terrain_fragment.glsl",
-            "blocks_main")) {
+    if (!m_renderer_ptr->initialize("blocks_main")) {
         LOG_ERROR("Failed to initialize renderer");
         return false;
     }
-
-    // GPU-мешинг непрозрачной геометрии включается только если рендерер поднял GL 4.3 (см. Renderer).
-    Chunk_Manager::set_gpu_solid_meshing(m_renderer_ptr->gpu_solid_meshing());
 
     m_hud_ptr = std::make_unique<Hud>();
     if (!m_hud_ptr->initialize()) {
@@ -127,15 +143,38 @@ void Game::run() {
 
     while (m_is_running && !m_window_ptr->should_close()) {
         const float current_time = static_cast<float>(glfwGetTime());
+        const float raw_frame_ms = (current_time - m_last_frame_time) * 1000.0f;
         m_delta_time = current_time - m_last_frame_time;
         m_last_frame_time = current_time;
         m_delta_time = std::clamp(m_delta_time, 0.001f, 0.1f);
+
+        // Настоящее время кадра (без обрезки clamp выше), чтобы редкие просадки были видны в F3+F4.
+        if (m_frame_window_count == 0) {
+            m_frame_window_min_ms = raw_frame_ms;
+            m_frame_window_max_ms = raw_frame_ms;
+        } else {
+            m_frame_window_min_ms = std::min(m_frame_window_min_ms, raw_frame_ms);
+            m_frame_window_max_ms = std::max(m_frame_window_max_ms, raw_frame_ms);
+        }
+        m_frame_window_sum_ms += raw_frame_ms;
+        m_frame_window_count++;
 
         m_fps_frame_count++;
         m_fps_update_timer += m_delta_time;
         if (m_fps_update_timer >= 1.0f) {
             m_current_fps = static_cast<float>(m_fps_frame_count) / m_fps_update_timer;
             std::cout << "\r[FPSCOUNTER] FPS: " << m_fps_frame_count << "      " << std::flush;
+
+            m_last_frame_min_ms = m_frame_window_min_ms;
+            m_last_frame_max_ms = m_frame_window_max_ms;
+            m_last_frame_avg_ms = m_frame_window_sum_ms / static_cast<float>(m_frame_window_count);
+            m_frame_window_sum_ms = 0.0f;
+            m_frame_window_count = 0;
+
+            const std::uint64_t ticks_now = m_tick.total_ticks();
+            m_current_tps = static_cast<float>(ticks_now - m_tps_tick_mark) / m_fps_update_timer;
+            m_tps_tick_mark = ticks_now;
+
             m_fps_update_timer = 0.0f;
             m_fps_frame_count = 0;
         }
@@ -201,6 +240,11 @@ void Game::handle_gameplay_input() {
 
     if (m_input_ptr->is_key_pressed(GLFW_KEY_F3)) {
         m_show_debug_hud = !m_show_debug_hud;
+    }
+
+    // F4 — расширенный отладочный блок, работает только при открытом F3.
+    if (m_show_debug_hud && m_input_ptr->is_key_pressed(GLFW_KEY_F4)) {
+        m_show_debug_extended = !m_show_debug_extended;
     }
 
     // F10 — только в debug-режиме (F3), по требованию: не хотим, чтобы обычный игрок
@@ -293,8 +337,9 @@ Hud_Inventory_Slot make_hud_slot(const Item_Stack& stack, bool infinite_stack = 
     // UV уже предрасчитан Block_Registry при загрузке blocks.json — атлас тут
     // спрашивать по индексу больше не нужно, просто читаем готовый прямоугольник.
     float durability = -1.0f;
-    if (props.max_durability > 0 && stack.damage > 0) {
-        durability = 1.0f - static_cast<float>(stack.damage) / static_cast<float>(props.max_durability);
+    const int max_durability = effective_max_durability(stack);
+    if (max_durability > 0 && stack.damage > 0) {
+        durability = 1.0f - static_cast<float>(stack.damage) / static_cast<float>(max_durability);
     }
     Hud_Inventory_Slot slot{props.uv_icon, props.name, stack.count, false, durability};
     // Обычные блоки показываем кубом с тремя гранями; предметы и «крестики» — плоско.
@@ -489,6 +534,7 @@ void Game::teardown_world() {
     m_chat_input.clear();
     m_mobs.clear();
     m_crops_ptr.reset();
+    m_saplings_ptr.reset();
     m_iso_capture_ptr.reset(); // до Chunk_Manager: снимок держит на него ссылку
     if (m_chunk_manager_ptr) {
         m_chunk_manager_ptr->clear(); // сохраняет изменённые чанки
@@ -517,6 +563,7 @@ void Game::save_world() {
     // Замороженное (Fixed) время не пишем: оно не принадлежит миру и не должно затирать сохранённое.
     if (!m_day_night_cycle.is_frozen()) {
         m_world_settings.day_time = m_day_night_cycle.get_normalized_time();
+        m_world_settings.day_count = m_day_night_cycle.get_day_count();
     }
     m_world_file.save(m_world_settings);
     m_chunk_manager_ptr->save_all();
@@ -528,6 +575,10 @@ void Game::save_world() {
     if (m_crops_ptr) {
         std::ofstream crops(m_world_file.get_path().parent_path() / "crops.txt", std::ios::trunc);
         if (crops) crops << m_crops_ptr->serialize();
+    }
+    if (m_saplings_ptr) {
+        std::ofstream saplings(m_world_file.get_path().parent_path() / "saplings.txt", std::ios::trunc);
+        if (saplings) saplings << m_saplings_ptr->serialize();
     }
 }
 
@@ -576,6 +627,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_world_generator = std::make_unique<World_Generator>(m_generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
     m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
+    m_mobs.set_biome_lookup([this](int x, int y, int z) { return m_world_generator->get_biome_name(x, y, z); });
     m_block_interaction_ptr = std::make_unique<Block_Interaction>();
     m_crops_ptr = std::make_unique<Crop_Manager>();
     m_block_interaction_ptr->set_crop_manager(m_crops_ptr.get());
@@ -584,6 +636,15 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
         if (crops) {
             const std::string text{std::istreambuf_iterator<char>(crops), std::istreambuf_iterator<char>()};
             m_crops_ptr->deserialize(text);
+        }
+    }
+    m_saplings_ptr = std::make_unique<Sapling_Manager>();
+    m_block_interaction_ptr->set_sapling_manager(m_saplings_ptr.get());
+    {
+        std::ifstream saplings(m_world_file.get_path().parent_path() / "saplings.txt");
+        if (saplings) {
+            const std::string text{std::istreambuf_iterator<char>(saplings), std::istreambuf_iterator<char>()};
+            m_saplings_ptr->deserialize(text);
         }
     }
 
@@ -600,8 +661,11 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     }
     m_player_ptr->set_fall_damage_enabled(m_game_mode == Game_Mode::Survival);
     m_player_ptr->set_hunger_enabled(m_game_mode == Game_Mode::Survival);
-    m_player_ptr->set_flying(m_game_mode != Game_Mode::Survival);
+    m_player_ptr->set_flying(m_spectator);
+    m_player_ptr->set_double_jump_flight(m_game_mode == Game_Mode::Creative && !m_spectator);
     m_player_ptr->set_noclip(m_spectator);
+    m_logic = Logic_Manager{};
+    m_logic_scan_timer = 0.0f;
     m_dropped_items_ptr = std::make_unique<Dropped_Item_Manager>();
     m_container_session = Container_Session{};
     m_open_container_paired = nullptr;
@@ -615,6 +679,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
         const bool fixed = dim.time_mode == Time_Mode::Fixed;
         m_day_night_cycle.set_frozen(fixed);
         m_day_night_cycle.set_normalized_time(fixed ? dim.fixed_time : m_world_settings.day_time);
+        if (!fixed) m_day_night_cycle.set_day_count(m_world_settings.day_count);
     }
 
     // Точка появления: в обычных измерениях — колонка (8, 8); в мире без земли — ближайший остров.
@@ -626,6 +691,12 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
         static_cast<float>(spawn_surface + 2),
         static_cast<float>(spawn_z));
     const glm::vec3 start = saved_position ? *saved_position : m_spawn_position;
+    // Prepare the landing region before the chunk stream starts. The first visible column
+    // must not be the one that pays for a cold cave + hydrology cache; subsequent regions
+    // are prepared by Chunk_Manager's movement lookahead on background workers.
+    m_world_generator->prewarm_generation_region_for_chunk(
+        static_cast<int>(std::floor(start.x / static_cast<float>(Config::chunk_size))),
+        static_cast<int>(std::floor(start.z / static_cast<float>(Config::chunk_size))));
     m_player_ptr->set_position(start);
 
     m_camera_ptr = std::make_unique<Camera>(
@@ -969,6 +1040,7 @@ void Game::reload_world(const std::string& generation_folder) {
     m_world_generator = std::make_unique<World_Generator>(generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
     m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
+    m_mobs.set_biome_lookup([this](int x, int y, int z) { return m_world_generator->get_biome_name(x, y, z); });
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>();
     // Пересоздание менеджера не должно сбрасывать дальность прорисовки к значению
     // по умолчанию — иначе выбранная в настройках дальность терялась при смене
@@ -988,6 +1060,11 @@ void Game::reload_world(const std::string& generation_folder) {
 
     const int player_cx = static_cast<int>(std::floor(spawn_x / static_cast<float>(Config::chunk_size)));
     const int player_cz = static_cast<int>(std::floor(spawn_z / static_cast<float>(Config::chunk_size)));
+
+    // A generation-preset reload is another cold-cache entry point. Warm this region before
+    // asking the manager for its first chunk column; otherwise its first column waits on the
+    // entire regional hydrology solve despite the column worker itself being asynchronous.
+    m_world_generator->prewarm_generation_region_for_chunk(player_cx, player_cz);
 
     m_chunk_manager_ptr->update_player_position(
         static_cast<float>(spawn_x),
@@ -1009,6 +1086,7 @@ void Game::register_tick_systems() {
     using Phase = Tick_Phase;
     m_tick.add("day_night", Phase::Pre, 0, [this](float dt) {
         m_day_night_cycle.update(dt);
+        m_weather.update(dt);
     });
     m_tick.add("hunger", Phase::Pre, 10, [this](float dt) {
         m_player_ptr->update_hunger(dt);
@@ -1030,6 +1108,33 @@ void Game::register_tick_systems() {
             invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
         }
         });
+    m_tick.add("saplings", Phase::Simulate, 35, [this](float dt) {
+        if (!m_saplings_ptr) return;
+        std::vector<glm::ivec3> changed_blocks;
+        m_saplings_ptr->update(dt, *m_chunk_manager_ptr, changed_blocks);
+        for (const glm::ivec3& pos : changed_blocks) {
+            invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
+        }
+    });
+    // Красная логика: редстоун-тики, поиск узлов вокруг игрока (раз в секунду), обновление мешей.
+    m_tick.add("redstone", Phase::Simulate, 37, [this](float dt) {
+        auto logic_world = make_chunk_world(*m_chunk_manager_ptr);
+        m_logic.update(logic_world, dt);
+        m_logic_scan_timer -= dt;
+        if (m_logic_scan_timer <= 0.0f) {
+            m_logic_scan_timer = 1.0f;
+            m_logic.discover(logic_world, glm::ivec3(glm::floor(m_player_ptr->get_position())), 12);
+        }
+        for (const glm::ivec3& pos : m_logic.take_changed()) {
+            invalidate_block_mesh(pos.x, pos.y, pos.z, *m_chunk_manager_ptr, *m_renderer_ptr);
+        }
+        // Динамит, на который пришёл сигнал красной логики, взрывается.
+        for (const glm::ivec3& pos : m_logic.take_triggered()) {
+            if (m_chunk_manager_ptr->get_block_world(pos.x, pos.y, pos.z) == Block_Types::Dynamite) {
+                detonate(pos, 4.0f);
+            }
+        }
+    });
     m_tick.add("dropped_items", Phase::Simulate, 40, [this](float dt) {
         // Подбирать предметы можно только в Survival и пока жив.
         const glm::vec3 player_pos = m_player_ptr->get_position();
@@ -1038,7 +1143,19 @@ void Game::register_tick_systems() {
             *m_chunk_manager_ptr,
             player_pos,
             m_player_ptr->get_height(),
-            (m_game_mode == Game_Mode::Survival && m_player_ptr->is_alive()) ? m_inventory_ptr.get() : nullptr);
+            (m_game_mode == Game_Mode::Survival && m_player_ptr->is_alive()) ? m_inventory_ptr.get() : nullptr,
+            [this](const glm::vec3& p) { return m_mobs.mob_near(p, Config::potion_mob_hit_radius); });
+
+        // Разбившиеся шарики: эффект получают мобы и игрок в радиусе разлёта.
+        for (const Thrown_Hit& hit : m_dropped_items_ptr->take_thrown_hits()) {
+            const std::optional<Potion_Info> potion = potion_of(hit.type);
+            if (!potion) continue;
+            m_mobs.splash_potion(hit.position, Config::potion_splash_radius, *potion);
+            const glm::vec3 player_body = m_player_ptr->get_position() + glm::vec3(0.0f, m_player_ptr->get_height() * 0.5f, 0.0f);
+            if (m_player_ptr->is_alive() && glm::distance(player_body, hit.position) <= Config::potion_splash_radius) {
+                m_player_ptr->effects().apply(potion->effect, potion->duration, potion->amplifier);
+            }
+        }
     });
 }
 
@@ -1048,8 +1165,12 @@ Mob_Player_View Game::mob_view() const {
     view.eye_height = m_player_ptr->get_eye_height();
     view.alive = m_player_ptr->is_alive();
     view.sneaking = m_player_ptr->is_crouching();
+    view.forward = m_camera_ptr->get_front();
+    view.velocity = m_player_ptr->get_velocity();
     view.horizontal_speed = m_player_ptr->get_horizontal_speed();
     view.night = m_day_night_cycle.get_normalized_time() >= Config::night_start_normalized;
+    view.sky_brightness = m_day_night_cycle.get_sky_brightness();
+    view.night_light_floor = m_day_night_cycle.get_night_light_floor();
     return view;
 }
 
@@ -1061,21 +1182,24 @@ Mob_Blocked_Fn Game::mob_blocked_fn() const {
 
 // Применяет результат Mobs_Update к игроку, камере, блок-взаимодействию и инвентарю.
 void Game::apply_mob_result(const Mob_Result& result) {
+    // Перемещение игрока — только одна из возможных частей результата мобов.
+    // Урон/истощение/износ предметов не должны зависеть от set_player_position:
+    // обычная атака врага возвращает только player_damage.
     if (result.set_player_position) {
         m_player_ptr->set_position(result.player_position);
         m_camera_ptr->set_position(result.player_position + glm::vec3(0.0f, m_player_ptr->get_eye_height(), 0.0f));
-        if (result.set_riding) m_player_ptr->set_riding(result.riding);
-        if (result.cancel_block_actions) m_block_interaction_ptr->cancel_actions();
-        if (result.consume_held_item) m_inventory_ptr->consume_selected(1);
-        if (result.damage_held_tool) m_inventory_ptr->damage_selected_tool(1);
-        if (result.exhaustion > 0.0f) m_player_ptr->add_exhaustion(result.exhaustion);
-        if (result.player_damage > 0) {
-            const int points = std::min(m_inventory_ptr->armor_points(), Config::armor_points_cap);
-            const float reduction = static_cast<float>(points) / Config::armor_points_divisor;
-            const int damage = static_cast<int>(std::ceil(static_cast<float>(result.player_damage) * (1.0f - reduction)));
-            m_player_ptr->take_damage(std::max(damage, 1));
-            m_inventory_ptr->damage_armor(1);
-        }
+    }
+    if (result.set_riding) m_player_ptr->set_riding(result.riding);
+    if (result.cancel_block_actions) m_block_interaction_ptr->cancel_actions();
+    if (result.consume_held_item) m_inventory_ptr->consume_selected(1);
+    if (result.damage_held_tool) m_inventory_ptr->damage_selected_tool(1);
+    if (result.exhaustion > 0.0f) m_player_ptr->add_exhaustion(result.exhaustion);
+    if (result.player_damage > 0 && m_player_ptr->is_alive()) {
+        const int points = std::min(m_inventory_ptr->armor_points(), Config::armor_points_cap);
+        const float reduction = static_cast<float>(points) / Config::armor_points_divisor;
+        const int damage = static_cast<int>(std::ceil(static_cast<float>(result.player_damage) * (1.0f - reduction)));
+        m_player_ptr->take_damage(std::max(damage, 1));
+        m_inventory_ptr->damage_armor(1);
     }
 }
 
@@ -1156,12 +1280,25 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
     handle_tool_impulse(delta_time);
 
     // Взаимодействие с животными: кормление, посадка, удар. Логика — в Mobs_Update::interact. /
+    // Зелье-шарик в руке: ПКМ бросает его вперёд (не ставит блок и не кормит моба). В Survival
+    // шарик расходуется, в Creative — нет.
+    const Item_Stack held_potion = m_inventory_ptr->get_selected_stack();
+    const bool holding_potion = is_potion(held_potion.type);
+    if (holding_potion && m_input_ptr->is_mouse_button_pressed(1) && m_player_ptr->is_alive()) {
+        const bool has_ball = m_game_mode != Game_Mode::Survival || m_inventory_ptr->consume_selected(1);
+        if (has_ball) {
+            const glm::vec3 front = m_camera_ptr->get_front();
+            m_dropped_items_ptr->spawn_thrown(Item_Stack{held_potion.type, 1}, eye + front * 0.6f,
+                                              front * Config::potion_throw_speed + glm::vec3(0.0f, 2.0f, 0.0f));
+        }
+    }
+
     Mob_Interact_Input mob_input;
     mob_input.delta_time = delta_time;
     mob_input.eye = eye;
     mob_input.look_dir = m_camera_ptr->get_front();
     mob_input.block_targets_entity = m_block_interaction_ptr->is_entity_targeted();
-    mob_input.right_click = m_input_ptr->is_mouse_button_pressed(1);
+    mob_input.right_click = m_input_ptr->is_mouse_button_pressed(1) && !holding_potion;
     mob_input.left_click = m_input_ptr->is_mouse_button_pressed(0);
     mob_input.survival = m_game_mode == Game_Mode::Survival;
     mob_input.held_block = m_inventory_ptr->get_selected_block();
@@ -1177,10 +1314,33 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
             handle_crop_harvest(event.position, event.type);
             continue;
         }
+        if (Sapling_Manager::is_sapling(event.type) && m_saplings_ptr) {
+            m_saplings_ptr->remove(event.position);
+        }
+        if (Game_Leaf_Sapling(event.type) != Block_Types::Air) {
+            handle_leaf_drops(event.position, event.type);
+        }
         // Руду без подходящей кирки разрушили впустую: падает только содержимое контейнера (если было).
         m_dropped_items_ptr->spawn_block_drops(event.position,
                                                event.harvested ? event.type : Block_Types::Air,
                                                event.container_contents);
+        // Красная логика: узлы без опоры (сломали блок под ними) отрываются и падают предметом.
+        auto logic_world = make_chunk_world(*m_chunk_manager_ptr);
+        for (const glm::ivec3& node : Logic_Manager::nodes_without_support(logic_world, event.position)) {
+            const Block_Types type = logic_world.type(node.x, node.y, node.z);
+            set_block_at(node.x, node.y, node.z, Block_Types::Air);
+            invalidate_block_mesh(node.x, node.y, node.z, *m_chunk_manager_ptr, *m_renderer_ptr);
+            m_dropped_items_ptr->spawn_block_drops(node, Logic_Manager::item_of(type), {});
+        }
+    }
+
+    // Красная логика: ПКМ по рычагу/кнопке/повторителю и только что поставленный узел.
+    if (auto touched = m_block_interaction_ptr->take_redstone_interact()) {
+        auto logic_world = make_chunk_world(*m_chunk_manager_ptr);
+        m_logic.interact(logic_world, *touched);
+    }
+    if (auto placed = m_block_interaction_ptr->take_redstone_placed()) {
+        m_logic.track(*placed);
     }
 
     if (m_block_interaction_ptr->has_container_open_request()) {
@@ -1220,7 +1380,7 @@ void Game::render_gameplay(bool show_gameplay_hud) {
         return;
     }
 
-    const glm::vec3 sky_color = m_day_night_cycle.get_sky_color();
+    const glm::vec3 sky_color = m_weather.apply_to_sky(m_day_night_cycle.get_sky_color());
     m_renderer_ptr->clear_screen(sky_color.r, sky_color.g, sky_color.b);
 
     const float aspect_ratio = static_cast<float>(m_window_ptr->get_width()) /
@@ -1230,10 +1390,6 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     const auto projection = m_camera_ptr->get_projection_matrix(aspect_ratio);
     const Frustum frustum(projection * view);
     const glm::vec3 camera_position = m_camera_ptr->get_position();
-    // Чанки, у которых квады не влезли в пул GPU-мешера, перестраиваются на CPU.
-    const std::vector<glm::ivec3> cpu_fallback = m_renderer_ptr->take_cpu_fallback_requests();
-    if (!cpu_fallback.empty()) m_chunk_manager_ptr->request_cpu_remesh(cpu_fallback);
-
     const auto renderable = m_chunk_manager_ptr->get_renderable_chunks(
         &frustum, &camera_position, m_renderer_ptr->get_flora_render_distance(), m_spectator);
 
@@ -1244,19 +1400,25 @@ void Game::render_gameplay(bool show_gameplay_hud) {
         view,
         projection,
         m_day_night_cycle.get_sun_direction(),
-        m_day_night_cycle.get_moon_direction()
+        m_day_night_cycle.get_moon_direction(),
+        m_day_night_cycle.get_moon_illumination(),
+        m_day_night_cycle.get_sun_darkness(),
+        m_day_night_cycle.get_moon_darkness()
     );
 
-    m_renderer_ptr->render_chunks(renderable, view, projection,
-                                  m_day_night_cycle.get_ambient_intensity(), m_spectator);
-
-    if (Shader* mob_shader = m_renderer_ptr->get_mob_shader()) {
-        m_mobs.render(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
-        // Тело игрока: видно при взгляде вниз (голова скрыта, см. Player_Model).
-        if (m_player_ptr->is_alive()) {
-            m_player_model.render_world(*mob_shader, view, projection, m_day_night_cycle.get_ambient_intensity());
+    // Мобы рисуются между непрозрачным миром и водой (см. before_liquid в Renderer::render_chunks),
+    // чтобы вода закрывала их, когда они под поверхностью.
+    const auto draw_mobs = [this, &view, &projection]() {
+        if (Shader* mob_shader = m_renderer_ptr->get_mob_shader()) {
+            m_mobs.render(*mob_shader, view, projection, scene_ambient());
+            // Тело игрока: видно при взгляде вниз (голова скрыта, см. Player_Model).
+            if (m_player_ptr->is_alive()) {
+                m_player_model.render_world(*mob_shader, view, projection, scene_ambient());
+            }
         }
-    }
+    };
+    m_renderer_ptr->render_chunks(renderable, view, projection,
+                                  scene_ambient(), m_spectator, draw_mobs);
 
     // Выпавшие предметы: одна динамическая геометрия на все, тем же атласом, что и блоки.
     m_dropped_items_mesh.clear();
@@ -1274,11 +1436,15 @@ void Game::render_gameplay(bool show_gameplay_hud) {
 
     if (show_gameplay_hud && m_block_interaction_ptr->has_target()) {
         const auto& hit = m_block_interaction_ptr->get_current_hit();
-        m_hud_ptr->draw_block_highlight(
-            glm::ivec3(hit.block_x, hit.block_y, hit.block_z),
-            view,
-            projection
-        );
+        if (hit.has_box) {
+            m_hud_ptr->draw_box_highlight(hit.box_lo, hit.box_hi, view, projection);
+        } else {
+            m_hud_ptr->draw_block_highlight(
+                glm::ivec3(hit.block_x, hit.block_y, hit.block_z),
+                view,
+                projection
+            );
+        }
     }
 
     // Хотбар всегда на экране во время игры (как в Minecraft — виден и на паузе/инвентаре),
@@ -1356,6 +1522,23 @@ void Game::render_gameplay(bool show_gameplay_hud) {
             static_cast<int>(std::floor(stats.player_position.y)),
             static_cast<int>(std::floor(stats.player_position.z))
         );
+        stats.effects_line = describe_effects(m_player_ptr->effects());
+
+        if (m_show_debug_extended) {
+            stats.extended = true;
+            stats.frame_min_ms = m_last_frame_min_ms;
+            stats.frame_avg_ms = m_last_frame_avg_ms;
+            stats.frame_max_ms = m_last_frame_max_ms;
+            stats.tps = m_current_tps;
+            const Mobs_Update::Mob_Debug_Counts counts = m_mobs.debug_counts();
+            stats.hostile_count = counts.hostile;
+            stats.passive_count = counts.passive;
+            const Chunk_Manager::Chunk_Work_Stats work = m_chunk_manager_ptr->get_work_stats();
+            stats.chunk_mesh_pending = work.mesh_pending;
+            stats.chunk_mesh_requeued = work.mesh_requeued;
+            stats.chunk_loads_requested = work.loads_requested;
+            stats.target_lines = m_mobs.debug_target_lines();
+        }
 
         m_hud_ptr->draw_debug_overlay(m_window_ptr->get_width(), m_window_ptr->get_height(), stats);
     }
@@ -1519,8 +1702,9 @@ void Game::apply_game_mode(Game_Mode mode, bool spectator) {
     m_mobs.set_hostiles_enabled(survival);
     m_player_ptr->set_fall_damage_enabled(survival);
     m_player_ptr->set_hunger_enabled(survival);
-    // Полёт привязан к Creative: в Survival его нет, в Creative — с коллизиями, в наблюдателе — сквозь блоки.
-    m_player_ptr->set_flying(!survival);
+    // Творческий режим: ходим по земле, полёт — двойным прыжком (или /fly). Наблюдатель летает всегда, сквозь блоки.
+    m_player_ptr->set_flying(m_spectator);
+    m_player_ptr->set_double_jump_flight(!survival && !m_spectator);
     m_player_ptr->set_noclip(m_spectator);
     m_block_interaction_ptr->cancel_actions();
     if (survival) {
@@ -1794,15 +1978,84 @@ int Game::give_item(Block_Types type, int count) {
     return m_inventory_ptr->try_add(type, count);
 }
 
+bool Game::enchant_held_item(int level) {
+    return m_inventory_ptr->enchant_selected_durability(level);
+}
+
+bool Game::build_dungeon(const glm::ivec3& origin, std::uint32_t seed) {
+    const Dungeon_Layout layout = make_dungeon_layout(seed);
+    bool all_placed = true;
+    for (const Dungeon_Block& block : layout.blocks) {
+        all_placed &= set_block_at(origin.x + block.x, origin.y + block.y, origin.z + block.z, block.type);
+    }
+    return all_placed;
+}
+
+void Game::detonate(const glm::ivec3& center, float radius) {
+    m_block_interaction_ptr->explode(center, radius, *m_chunk_manager_ptr, *m_renderer_ptr);
+    const glm::vec3 c = glm::vec3(center) + glm::vec3(0.5f);
+    const float reach = radius * 2.0f;
+    constexpr float k_max_damage = 14.0f;
+    m_mobs.damage_in_radius(c, reach, k_max_damage);
+    const float d = glm::distance(m_player_ptr->get_position(), c);
+    if (d < reach) {
+        m_player_ptr->take_damage(static_cast<int>(std::ceil(k_max_damage * (1.0f - d / reach))));
+    }
+}
+
+bool Game::switch_dimension(const std::string& name) {
+    const Dimension_Info& info = get_dimension_info(dimension_from_name(name));
+    if (name != info.name) return false;
+    if (m_world_settings.dimension == info.name) return true;
+    // Сохраняем текущее измерение, меняем настройку и перестраиваем мир с сохранённой позицией x/z.
+    save_world();
+    m_world_settings.dimension = info.name;
+    reload_world(m_generation_folder);
+    save_world();
+    return true;
+}
+
 bool Game::set_block_at(int x, int y, int z, Block_Types type) {
     const bool ok = m_chunk_manager_ptr->set_block_world(x, y, z, type);
     // Росток, поставленный командой, тоже должен расти (как посаженный игроком).
     if (ok && m_crops_ptr && Crop_Manager::is_crop_block(type) && Crop_Manager::stage_of(type) == 0) {
         m_crops_ptr->plant(glm::ivec3(x, y, z), Crop_Manager::kind_of(type));
     }
+    if (ok && m_saplings_ptr && Sapling_Manager::is_sapling(type)) {
+        m_saplings_ptr->plant(glm::ivec3(x, y, z), type);
+    }
     return ok;
 }
 
+
+// Саженец того же вида, что и листва; Air — если блок не листва.
+static Block_Types Game_Leaf_Sapling(Block_Types leaves) {
+    switch (leaves) {
+        case Block_Types::Oak_Leaf:       return Block_Types::Oak_Sapling;
+        case Block_Types::Birch_Leaves:   return Block_Types::Birch_Sapling;
+        case Block_Types::Spruce_Leaves:  return Block_Types::Spruce_Sapling;
+        case Block_Types::Jungle_Leaves:  return Block_Types::Jungle_Sapling;
+        case Block_Types::Acacia_Leaves:  return Block_Types::Acacia_Sapling;
+        case Block_Types::Slimewood_Leaves: return Block_Types::Slimewood_Sapling;
+        default:                          return Block_Types::Air;
+    }
+}
+
+// Листва дерева: 5% дают саженец своего вида, 2% — палку; листва дуба ещё 1% даёт яблоко.
+// Сама листва ничего не даёт.
+void Game::handle_leaf_drops(const glm::ivec3& pos, Block_Types leaves) {
+    static std::mt19937 s_rng(std::random_device{}());
+    std::uniform_real_distribution<float> chance(0.0f, 1.0f);
+    std::uniform_real_distribution<float> jitter(-1.2f, 1.2f);
+    const glm::vec3 center(pos.x + 0.5f, pos.y + 0.3f, pos.z + 0.5f);
+    auto drop = [&](Block_Types type) {
+        m_dropped_items_ptr->spawn(Item_Stack{type, 1}, center,
+                                   glm::vec3(jitter(s_rng), 3.0f, jitter(s_rng)));
+    };
+    if (chance(s_rng) < 0.05f) drop(Game_Leaf_Sapling(leaves));
+    if (chance(s_rng) < 0.02f) drop(Block_Types::Stick);
+    if (leaves == Block_Types::Oak_Leaf && chance(s_rng) < 0.01f) drop(Block_Types::Apple);
+}
 
 void Game::handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block) {
     static std::mt19937 s_rng(std::random_device{}());

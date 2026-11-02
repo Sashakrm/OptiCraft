@@ -13,6 +13,7 @@
 #define OPTICRAFT_PIG_H
 
 #include <glm/glm.hpp>
+#include "entities/effects/Status_Effects.h"
 #include <random>
 #include "entities/animals/ai/Pig_AI.h"
 #include "mobs/Mob.h"
@@ -50,6 +51,8 @@ public:
     // Урон среды (утопление): без отбрасывания. Возвращает true, если умер.
     bool take_drowning_damage(float amount);
     float get_health() const { return m_health; }
+    Status_Effects& effects() { return m_effects; }
+    const Status_Effects& effects() const { return m_effects; }
     bool is_dying() const { return m_dying; }
     // Мгновенная смерть без дропа и без учёта неуязвимости (команда /killall).
     // Возвращает true, если свинья была жива.
@@ -79,6 +82,7 @@ private:
 
     // Здоровье и реакция на удары.
     float m_health = Config::pig_max_health;
+    Status_Effects m_effects;
     float m_invulnerable_timer = 0.0f;
     float m_hurt_flash_timer = 0.0f;   // красная вспышка после удара
     float m_panic_timer = 0.0f;        // > 0 — убегает по m_walk_direction с повышенной скоростью

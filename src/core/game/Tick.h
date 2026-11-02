@@ -79,7 +79,7 @@ private:
 class Tick_Clock {
 public:
     // Возвращает, сколько тиков выполнить в этом кадре (0..MAX_PER_FRAME).
-    int advance(float frame_dt);
+    int advance(float frame_dt, float speed = 1.0f);
     // Доля незавершённого тика [0, 1) — для будущей интерполяции визуала между тиками.
     float alpha() const;
     void reset();
@@ -105,6 +105,8 @@ public:
     // Вызывается каждый кадр, когда мир симулируется. Выполняет накопленные тики.
     // Возвращает число выполненных тиков.
     int run_frame(float frame_dt);
+    void set_speed(float speed) { m_speed = speed; }
+    float speed() const { return m_speed; }
 
     // Сброс аккумулятора и очереди событий (например, при смене мира).
     void reset();
@@ -126,6 +128,7 @@ private:
     void run_one_tick();
 
     Tick_Clock m_clock;
+    float m_speed = 1.0f;
     std::vector<Entry> m_systems;
     bool m_dirty = false;
     Tick_Event_Bus m_events;

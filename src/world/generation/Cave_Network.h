@@ -50,8 +50,16 @@ public:
     // Тип вокселя в мировых координатах. Для Air/Water поверхность не нужна: вход уже вырезан.
     Cave_Kind kind_at(int world_x, int world_y, int world_z) const;
 
+    // Батч-запрос для вертикального столбца: регион ищется один раз, а не на каждый воксель.
+    // Результат i записывается в out[i * y_stride]; это позволяет сразу писать в layout y,z,x.
+    void fill_column_kinds(int world_x, int world_z, int first_y, int count,
+                           Cave_Kind* out, size_t y_stride = 1) const;
+
     // Для тестов и инструментов: сбросить кэш регионов (результат не меняется).
     void clear_cache() const;
+    // Async chunk scheduling API: probe without waiting, then warm on a preparation worker.
+    bool region_ready_at(int world_x, int world_z) const;
+    void prewarm_region_at(int world_x, int world_z) const;
 
     struct Region;
 

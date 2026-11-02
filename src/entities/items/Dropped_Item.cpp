@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
     constexpr float k_half = Config::dropped_item_size * 0.5f;
@@ -49,7 +50,12 @@ Item_Stack roll_block_drop(Block_Types block, std::mt19937& rng) {
 
     const Block_Types dropped = props.drop_id < 0 ? block : static_cast<Block_Types>(props.drop_id);
     if (dropped == Block_Types::Air) return {};
-    return Item_Stack{dropped, props.drop_count};
+    int count = props.drop_count;
+    if (props.drop_count_max > props.drop_count) {
+        std::uniform_int_distribution<int> amount(props.drop_count, props.drop_count_max);
+        count = amount(rng);
+    }
+    return Item_Stack{dropped, count};
 }
 
 Dropped_Item_Manager::Dropped_Item_Manager()
@@ -229,11 +235,11 @@ void Dropped_Item_Manager::merge_nearby() {
 
     for (size_t i = 0; i < m_items.size(); ++i) {
         Dropped_Item& a = m_items[i];
-        if (a.collecting || a.stack.is_empty() || a.stack.count >= max_stack_for(a.stack.type)) continue;
+        if (a.collecting || a.thrown || a.stack.is_empty() || a.stack.count >= max_stack_for(a.stack.type)) continue;
 
         for (size_t j = i + 1; j < m_items.size(); ++j) {
             Dropped_Item& b = m_items[j];
-            if (b.collecting || b.stack.is_empty() || b.stack.type != a.stack.type) continue;
+            if (b.collecting || b.thrown || b.stack.is_empty() || b.stack.type != a.stack.type) continue;
             if (a.stack.damage != b.stack.damage) continue;
             if (a.stack.count + b.stack.count > max_stack_for(a.stack.type)) continue;
 
@@ -262,11 +268,53 @@ void Dropped_Item_Manager::enforce_limit() {
     }
 }
 
+void Dropped_Item_Manager::spawn_thrown(const Item_Stack& stack, const glm::vec3& position,
+                                        const glm::vec3& velocity) {
+    if (stack.is_empty()) return;
+    Dropped_Item item;
+    item.stack = stack;
+    item.position = position;
+    item.velocity = velocity;
+    item.thrown = true;
+    item.pickup_delay = std::numeric_limits<float>::max();
+    m_items.push_back(item);
+    enforce_limit();
+}
+
+std::vector<Thrown_Hit> Dropped_Item_Manager::take_thrown_hits() {
+    std::vector<Thrown_Hit> out;
+    out.swap(m_thrown_hits);
+    return out;
+}
+
+void Dropped_Item_Manager::simulate_thrown(Dropped_Item& item, float delta_time, const Chunk_Manager& chunk_manager,
+                                           const std::function<bool(const glm::vec3&)>& mob_hit) {
+    if (item.age >= Config::potion_thrown_lifetime) {
+        m_thrown_hits.push_back({item.position, item.stack.type});
+        item.shattered = true;
+        return;
+    }
+    item.velocity.y += Config::mob_gravity * delta_time;
+    const glm::vec3 next = item.position + item.velocity * delta_time;
+    // Задел блок — разбился в последней свободной точке.
+    if (collides_at(next, chunk_manager)) {
+        m_thrown_hits.push_back({item.position, item.stack.type});
+        item.shattered = true;
+        return;
+    }
+    item.position = next;
+    if (mob_hit && mob_hit(item.position)) {
+        m_thrown_hits.push_back({item.position, item.stack.type});
+        item.shattered = true;
+    }
+}
+
 void Dropped_Item_Manager::update(float delta_time,
                                   const Chunk_Manager& chunk_manager,
                                   const glm::vec3& player_position,
                                   float player_height,
-                                  Inventory* pickup_inventory) {
+                                  Inventory* pickup_inventory,
+                                  const std::function<bool(const glm::vec3&)>& mob_hit) {
     m_time += delta_time;
     m_collect_target = player_position + glm::vec3(0.0f, player_height * 0.6f, 0.0f);
 
@@ -281,6 +329,10 @@ void Dropped_Item_Manager::update(float delta_time,
         if (!is_chunk_loaded_at(item.position, chunk_manager)) continue;
 
         item.age += delta_time;
+        if (item.thrown) {
+            simulate_thrown(item, delta_time, chunk_manager, mob_hit);
+            continue;
+        }
         item.pickup_delay = std::max(0.0f, item.pickup_delay - delta_time);
 
         simulate(item, delta_time, chunk_manager);
@@ -293,6 +345,7 @@ void Dropped_Item_Manager::update(float delta_time,
     m_items.erase(std::remove_if(m_items.begin(), m_items.end(),
         [](const Dropped_Item& item) {
             if (item.collecting) return item.collect_time >= k_collect_duration;
+            if (item.shattered) return true;
             if (item.age >= Config::dropped_item_lifetime) return true;
             return item.position.y < static_cast<float>(Config::world_min_y) - 8.0f; // упал в пустоту
         }), m_items.end());

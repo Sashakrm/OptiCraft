@@ -8,6 +8,7 @@
 #include "mobs/Mobs_Update.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <random>
 
@@ -15,8 +16,88 @@
 #include "utils/logging/Logger.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "rendering/Shader.h"
+#include "world/generation/World_Generator.h"
+
+#include <optional>
 
 namespace {
+    // Группы мобов с разными правилами появления.
+    enum class Spawn_Group { Animal, Horse, Hostile };
+
+    // Биомы, где появляются мобы. Вода, небо, солнечные острова и подземелья исключены: мобы
+    // появляются только на земле. Список правится здесь.
+    bool biome_allows(Spawn_Group group, Biome_Id biome) {
+        switch (group) {
+            case Spawn_Group::Animal:
+                switch (biome) {
+                    case Biome_Id::Plains:
+                    case Biome_Id::Forest:
+                    case Biome_Id::Birch_Forest:
+                    case Biome_Id::Taiga:
+                    case Biome_Id::Jungle:
+                    case Biome_Id::Savanna:
+                    case Biome_Id::Steppe:
+                        return true;
+                    default:
+                        return false;
+                }
+            case Spawn_Group::Horse:
+                return biome == Biome_Id::Plains || biome == Biome_Id::Steppe || biome == Biome_Id::Savanna;
+            case Spawn_Group::Hostile:
+                switch (biome) {
+                    case Biome_Id::Ocean:
+                    case Biome_Id::Shallow_Water:
+                    case Biome_Id::Sky:
+                    case Biome_Id::Solar:
+                    case Biome_Id::Underground:
+                    case Biome_Id::Deep_Underground:
+                    case Biome_Id::Flooded_Underground:
+                        return false;
+                    default:
+                        return true;
+                }
+        }
+        return false;
+    }
+
+    Biome_Id biome_at(const Chunk_Manager& chunks, int x, int y, int z) {
+        const World_Generator* generator = chunks.world_generator();
+        return generator ? generator->biome_id(x, y, z) : Biome_Id::Plains;
+    }
+
+    // Точка на поверхности земли в кольце [rmin, rmax] вокруг center. Нужны: твёрдый блок
+    // (для животных и лошадей — трава), два свободных блока над ним не в воде и подходящий биом.
+    // Незагруженный чанк, вода, неподходящий биом — пустой результат, попробуем в другой раз.
+    std::optional<glm::vec3> find_ground_spawn(const glm::vec3& center, float rmin, float rmax,
+                                               Spawn_Group group, bool grass_only, float height_above_ground,
+                                               Chunk_Manager& chunks, std::mt19937& rng) {
+        std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+        std::uniform_real_distribution<float> radius_dist(rmin, rmax);
+        const float angle = angle_dist(rng);
+        const float radius = radius_dist(rng);
+        const float x = center.x + std::cos(angle) * radius;
+        const float z = center.z + std::sin(angle) * radius;
+
+        const int bx = static_cast<int>(std::floor(x));
+        const int bz = static_cast<int>(std::floor(z));
+        const int top = static_cast<int>(std::floor(center.y)) + 12;
+        const int bottom = static_cast<int>(std::floor(center.y)) - 24;
+        for (int y = top; y >= bottom; --y) {
+            const Block_Types ground = chunks.get_block_world(bx, y, bz);
+            if (grass_only ? ground != Block_Types::Grass : !get_block_props(ground).is_solid) continue;
+            const Block_Properties& above1 = get_block_props(chunks.get_block_world(bx, y + 1, bz));
+            const Block_Properties& above2 = get_block_props(chunks.get_block_world(bx, y + 2, bz));
+            if (above1.is_solid || above2.is_solid ||
+                above1.state == Block_State::Liquid || above2.state == Block_State::Liquid) continue;
+            if (!biome_allows(group, biome_at(chunks, bx, y, bz))) return std::nullopt;
+            return glm::vec3(x, static_cast<float>(y) + height_above_ground, z);
+        }
+        return std::nullopt;
+    }
+
+    // Сколько раз за один вызов пробуем найти место (каждая проба — поиск по столбу и биому).
+    constexpr int k_spawn_attempts = 4;
+
     // Пересечение луча с AABB (slab-метод). Возвращает расстояние до входа в коробку или -1.
     float ray_aabb_distance(const glm::vec3& origin, const glm::vec3& dir,
                             const glm::vec3& box_min, const glm::vec3& box_max, float max_distance) {
@@ -86,6 +167,10 @@ namespace {
 // --- Жизненный цикл ---------------------------------------------------------------------------
 
 void Mobs_Update::clear() {
+    m_bosses.clear();
+    m_knights.clear();
+    m_target_boss = nullptr;
+    m_target_knight = nullptr;
     m_pigs.clear();
     m_cows.clear();
     m_sheep.clear();
@@ -98,7 +183,9 @@ void Mobs_Update::clear() {
     m_target_pig = nullptr;
     m_target_passive = nullptr;
     m_target_horse = nullptr;
-    m_target_passive = nullptr;
+    m_target_hostile = nullptr;
+    m_target_boss = nullptr;
+    m_target_knight = nullptr;
 }
 
 void Mobs_Update::shutdown() {
@@ -133,8 +220,48 @@ std::vector<std::unique_ptr<Passive_Animal>>& Mobs_Update::passive_list(Passive_
 
 Mob_Result Mobs_Update::update_tick(float dt, const Mob_Player_View& player, Chunk_Manager& chunks) {
     Mob_Result result;
+    if (!m_knights.empty()) {
+        Knight_Player_View knight_view;
+        knight_view.position = player.position;
+        knight_view.velocity = player.velocity;
+        knight_view.forward = player.forward;
+        knight_view.eye_height = player.eye_height;
+        knight_view.alive = player.alive;
+        for (auto& knight : m_knights) {
+            result.player_damage += knight->update(dt, knight_view, chunks).player_damage;
+        }
+        m_knights.erase(std::remove_if(m_knights.begin(), m_knights.end(),
+                           [this](const std::unique_ptr<Knight_Ai>& knight) {
+                               if (!knight->is_removable()) return false;
+                               if (m_target_knight == knight.get()) {
+                                   m_target_knight = nullptr;
+                                   if (m_target_kind == Target_Kind::Knight) m_target_kind = Target_Kind::None;
+                               }
+                               return true;
+                           }),
+                        m_knights.end());
+    }
+    if (!m_bosses.empty()) {
+        Boss_Player_View boss_view;
+        boss_view.position = player.position;
+        boss_view.forward = player.forward;
+        boss_view.alive = player.alive;
+        for (auto& boss : m_bosses) {
+            result.player_damage += boss->update(dt, boss_view).player_damage;
+        }
+        m_bosses.erase(std::remove_if(m_bosses.begin(), m_bosses.end(),
+                       [this](const std::unique_ptr<Boss>& boss) {
+                           if (!boss->is_removable()) return false;
+                           if (m_target_boss == boss.get()) {
+                               m_target_boss = nullptr;
+                               if (m_target_kind == Target_Kind::Boss) m_target_kind = Target_Kind::None;
+                           }
+                           return true;
+                       }),
+                       m_bosses.end());
+    }
     m_pig_respawn_cooldown = std::max(0.0f, m_pig_respawn_cooldown - dt);
-    spawn_missing_pigs(player.position);
+    spawn_missing_pigs(player.position, chunks);
     for (auto& pig : m_pigs) {
         pig->update(dt, chunks);
     }
@@ -142,7 +269,7 @@ Mob_Result Mobs_Update::update_tick(float dt, const Mob_Player_View& player, Chu
     for (Passive_Kind kind : {Passive_Kind::Cow, Passive_Kind::Sheep}) {
         const int i = index_of(kind);
         m_passive_respawn_cooldown[i] = std::max(0.0f, m_passive_respawn_cooldown[i] - dt);
-        spawn_missing_passive(kind, player.position);
+        spawn_missing_passive(kind, player.position, chunks);
         for (auto& animal : passive_list(kind)) {
             animal->update(dt, chunks);
         }
@@ -170,7 +297,8 @@ void Mobs_Update::update_hostiles(float dt, const Mob_Player_View& player, Chunk
     for (Hostile_Kind kind : {Hostile_Kind::Zombie, Hostile_Kind::Skeleton, Hostile_Kind::Spider}) {
         const int i = index_of(kind);
         m_hostile_respawn_cooldown[i] = std::max(0.0f, m_hostile_respawn_cooldown[i] - dt);
-        if (m_hostiles_enabled) spawn_missing_hostiles(kind, player.position, chunks);
+        if (m_hostiles_enabled) spawn_missing_hostiles(kind, player.position, chunks, player.sky_brightness,
+                                                       player.night_light_floor);
     }
     if (m_hostiles.empty()) return;
 
@@ -385,7 +513,187 @@ Mob_Result Mobs_Update::mount(Horse& horse, const Mob_Player_View& player) {
     return result;
 }
 
+// --- Отладка (F3+F4) -------------------------------------------------------------------------
+
+Mobs_Update::Mob_Debug_Counts Mobs_Update::debug_counts() const {
+    const auto alive = [](const auto& list) {
+        int n = 0;
+        for (const auto& mob : list) {
+            if (!mob->is_dying()) ++n;
+        }
+        return n;
+    };
+    Mob_Debug_Counts counts;
+    counts.hostile = alive(m_hostiles) + alive(m_bosses) + alive(m_knights);
+    counts.passive = alive(m_pigs) + alive(m_cows) + alive(m_sheep) + alive(m_horses);
+    return counts;
+}
+
+namespace {
+
+std::string format_float(const char* fmt, float value) {
+    char buffer[96];
+    std::snprintf(buffer, sizeof(buffer), fmt, value);
+    return buffer;
+}
+
+std::string describe_breeding(const Breeding_State& breeding) {
+    if (breeding.is_baby()) return "baby, grows up in " + format_float("%.0f", breeding.grow_left) + " s";
+    std::string text = "adult";
+    if (breeding.in_love()) text += ", in love (" + format_float("%.0f", breeding.love_left) + " s)";
+    if (breeding.cooldown_left > 0.0f) text += ", breeding cooldown " + format_float("%.0f", breeding.cooldown_left) + " s";
+    return text;
+}
+
+std::string describe_hunger(int hunger) {
+    if (hunger >= 50) return "hungry";
+    if (hunger <= 10) return "full";
+    return "satisfied";
+}
+
+const char* passive_kind_name(Passive_Kind kind) {
+    return kind == Passive_Kind::Cow ? "Cow" : "Sheep";
+}
+
+const char* hostile_kind_name(Hostile_Kind kind) {
+    switch (kind) {
+        case Hostile_Kind::Zombie: return "Zombie";
+        case Hostile_Kind::Skeleton: return "Skeleton";
+        case Hostile_Kind::Spider: return "Spider";
+    }
+    return "Hostile";
+}
+
+const char* knight_state_name(Knight_State state) {
+    switch (state) {
+        case Knight_State::Dormant: return "Dormant";
+        case Knight_State::Chase: return "Chase";
+        case Knight_State::Windup: return "Windup";
+        case Knight_State::Attacking: return "Attacking";
+        case Knight_State::Jumping: return "Jumping";
+        case Knight_State::Recovery: return "Recovery";
+        case Knight_State::Returning: return "Returning";
+        case Knight_State::Dead: return "Dead";
+    }
+    return "Unknown";
+}
+
+const char* knight_attack_name(Knight_Attack attack) {
+    switch (attack) {
+        case Knight_Attack::None: return "None";
+        case Knight_Attack::Swipe: return "Swipe";
+        case Knight_Attack::Double_Swipe: return "Double Swipe";
+        case Knight_Attack::Ground_Slam: return "Ground Slam";
+        case Knight_Attack::Charge: return "Charge";
+        case Knight_Attack::Leap_Strike: return "Leap Strike";
+        case Knight_Attack::Shockwave: return "Shockwave";
+        case Knight_Attack::Spin_Attack: return "Spin Attack";
+        case Knight_Attack::Rage_Strike: return "Rage Strike";
+        case Knight_Attack::Count: break;
+    }
+    return "Unknown";
+}
+
+const char* knight_pattern_name(Knight_Player_Pattern pattern) {
+    switch (pattern) {
+        case Knight_Player_Pattern::None: return "Learning";
+        case Knight_Player_Pattern::Rear_Flank: return "Rear flank";
+        case Knight_Player_Pattern::Orbit_Left: return "Orbit left";
+        case Knight_Player_Pattern::Orbit_Right: return "Orbit right";
+        case Knight_Player_Pattern::Kiting: return "Kiting";
+        case Knight_Player_Pattern::Repeated_Jump: return "Jump spam";
+        case Knight_Player_Pattern::Melee_Spam: return "Melee spam";
+        case Knight_Player_Pattern::Straight_Rush: return "Straight rush";
+        case Knight_Player_Pattern::Count: break;
+    }
+    return "Unknown";
+}
+
+}  // namespace
+
+std::vector<std::string> Mobs_Update::debug_target_lines() const {
+    std::vector<std::string> lines;
+    if (m_target_kind == Target_Kind::None) {
+        lines.emplace_back("Target: none (look at an animal or monster)");
+        return lines;
+    }
+
+    switch (m_target_kind) {
+        case Target_Kind::Pig: {
+            const Pig& pig = *m_target_pig;
+            const Pig_AI& ai = pig.get_ai();
+            lines.push_back("Target: Pig \"" + ai.get_name() + "\"");
+            lines.push_back("HP: " + format_float("%.1f", pig.get_health()) + " / " + format_float("%.1f", Config::pig_max_health));
+            lines.push_back("State: " + ai.get_state_name());
+            lines.push_back("Hunger: " + std::to_string(ai.get_hunger()) + " (" + describe_hunger(ai.get_hunger()) + ")"
+                            + "  Energy: " + std::to_string(ai.get_energy())
+                            + "  Happiness: " + std::to_string(ai.get_happiness()));
+            lines.push_back("Age: " + describe_breeding(m_target_pig->breeding()));
+            if (pig.is_dying()) lines.emplace_back("Dying");
+            break;
+        }
+        case Target_Kind::Passive: {
+            const Passive_Animal& animal = *m_target_passive;
+            lines.push_back(std::string("Target: ") + passive_kind_name(animal.kind()));
+            lines.push_back("HP: " + format_float("%.1f", animal.get_health()) + " / " + format_float("%.1f", animal.stats().max_health));
+            lines.push_back(std::string("Panicking: ") + (animal.is_panicking() ? "yes" : "no"));
+            lines.push_back("Age: " + describe_breeding(m_target_passive->breeding()));
+            if (animal.is_dying()) lines.emplace_back("Dying");
+            break;
+        }
+        case Target_Kind::Horse: {
+            const Horse& horse = *m_target_horse;
+            const Horse_AI& ai = horse.get_ai();
+            lines.emplace_back("Target: Horse \"" + ai.get_name() + "\"");
+            lines.push_back("HP: " + format_float("%.1f", horse.get_health()) + " / " + format_float("%.1f", Config::horse_max_health));
+            lines.push_back("State: " + ai.get_state_name());
+            lines.push_back("Hunger: " + format_float("%.0f", static_cast<float>(ai.get_hunger())) + " (" + describe_hunger(static_cast<int>(ai.get_hunger())) + ")"
+                            + "  Energy: " + format_float("%.0f", ai.get_energy())
+                            + "  Fear: " + format_float("%.0f", ai.get_fear()));
+            lines.push_back(std::string("Tamed: ") + (horse.is_tamed() ? "yes" : "no")
+                            + (horse.is_tamed() ? "" : " (progress " + format_float("%.0f", horse.get_taming_progress() * 100.0f) + "%)")
+                            + "  Rider: " + (horse.has_rider() ? "yes" : "no"));
+            lines.push_back("Age: " + describe_breeding(m_target_horse->breeding()));
+            if (horse.is_dying()) lines.emplace_back("Dying");
+            break;
+        }
+        case Target_Kind::Hostile: {
+            const Hostile_Mob& hostile = *m_target_hostile;
+            lines.push_back(std::string("Target: ") + hostile_kind_name(hostile.kind()));
+            lines.push_back("HP: " + format_float("%.1f", hostile.get_health()) + " / " + format_float("%.1f", hostile.stats().max_health));
+            lines.push_back(std::string("Aggro: ") + (hostile.is_aggro() ? "yes" : "no")
+                            + "  Attack cooldown: " + format_float("%.1f", hostile.get_attack_cooldown()) + " s");
+            if (hostile.is_dying()) lines.emplace_back("Dying");
+            break;
+        }
+        case Target_Kind::Knight: {
+            if (!m_target_knight) break;
+            lines.emplace_back("Target: Knight "" + m_target_knight->name() + """);
+            lines.push_back("HP: " + format_float("%.1f", m_target_knight->get_health()) + " / " + format_float("%.1f", Knight_Ai::MAX_HEALTH));
+            lines.push_back("Phase: " + std::to_string(m_target_knight->get_phase()));
+            lines.push_back(std::string("AI state: ") + knight_state_name(m_target_knight->get_state())
+                            + "  Attack: " + knight_attack_name(m_target_knight->get_current_attack()));
+            lines.push_back(std::string("Learned tactic: ") + knight_pattern_name(m_target_knight->get_learned_pattern())
+                            + "  Confidence: " + format_float("%.0f", m_target_knight->get_learning_confidence() * 100.0f)
+                            + "%  Evidence: " + format_float("%.1f", m_target_knight->get_pattern_evidence()));
+            if (m_target_knight->is_dying()) lines.emplace_back("Dying");
+            break;
+        }
+        case Target_Kind::Boss: {
+            if (!m_target_boss) break;
+            lines.push_back(std::string("Target: ") + boss_stats(m_target_boss->kind()).label);
+            lines.push_back("HP: " + format_float("%.1f", m_target_boss->get_health()) + " / " + format_float("%.1f", boss_stats(m_target_boss->kind()).max_health));
+            if (m_target_boss->is_dying()) lines.emplace_back("Dying");
+            break;
+        }
+        case Target_Kind::None:
+            break;
+    }
+    return lines;
+}
+
 // --- Взаимодействие игрока (по кадрам) -------------------------------------------------------
+
 
 float Mobs_Update::aim(const glm::vec3& eye, const glm::vec3& look_dir) {
     m_target_kind = Target_Kind::None;
@@ -393,6 +701,8 @@ float Mobs_Update::aim(const glm::vec3& eye, const glm::vec3& look_dir) {
     m_target_passive = nullptr;
     m_target_horse = nullptr;
     m_target_hostile = nullptr;
+    m_target_boss = nullptr;
+    m_target_knight = nullptr;
     float best = -1.0f;
     const auto consider = [&](float d, Target_Kind kind, Pig* pig, Passive_Animal* passive,
                               Horse* horse, Hostile_Mob* hostile) {
@@ -432,6 +742,37 @@ float Mobs_Update::aim(const glm::vec3& eye, const glm::vec3& look_dir) {
         const float d = ray_aabb_distance(eye, look_dir, hostile->get_hitbox_min(), hostile->get_hitbox_max(),
         Config::player_attack_reach);
         consider(d, Target_Kind::Hostile, nullptr, nullptr, nullptr, hostile.get());
+    }
+    for (auto& boss : m_bosses) {
+        if (boss->is_dying()) continue;
+        glm::vec3 lo, hi;
+        boss->compute_hitbox(lo, hi);
+        const float d = ray_aabb_distance(eye, look_dir, lo, hi, Config::player_attack_reach);
+        if (d >= 0.0f && (best < 0.0f || d < best)) {
+            best = d;
+            m_target_kind = Target_Kind::Boss;
+            m_target_pig = nullptr;
+            m_target_passive = nullptr;
+            m_target_horse = nullptr;
+            m_target_hostile = nullptr;
+            m_target_boss = boss.get();
+        }
+    }
+    for (auto& knight : m_knights) {
+        if (knight->is_dying()) continue;
+        glm::vec3 lo, hi;
+        knight->compute_hitbox(lo, hi);
+        const float d = ray_aabb_distance(eye, look_dir, lo, hi, Config::player_attack_reach);
+        if (d >= 0.0f && (best < 0.0f || d < best)) {
+            best = d;
+            m_target_kind = Target_Kind::Knight;
+            m_target_pig = nullptr;
+            m_target_passive = nullptr;
+            m_target_horse = nullptr;
+            m_target_hostile = nullptr;
+            m_target_boss = nullptr;
+            m_target_knight = knight.get();
+        }
     }
     return best;
 }
@@ -510,6 +851,10 @@ Mob_Result Mobs_Update::interact(const Mob_Interact_Input& input, Dropped_Item_M
                     drops.spawn_from_mob(m_target_passive->get_position(),
                         Item_Stack{st.drop_item, roll(st.drop_min, st.drop_max)});
                 }
+                if (survival && m_target_passive->kind() == Passive_Kind::Cow) {
+                    drops.spawn_from_mob(m_target_passive->get_position(),
+                        Item_Stack{Block_Types::Leather, roll(Config::cow_leather_min, Config::cow_leather_max)});
+                }
             }
         } else if (m_target_horse) {
             const float d = survival ? damage : Config::horse_max_health * 100.0f;
@@ -519,6 +864,8 @@ Mob_Result Mobs_Update::interact(const Mob_Interact_Input& input, Dropped_Item_M
                 if (survival) {
                     drops.spawn_from_mob(m_target_horse->get_position(),
                         Item_Stack{Block_Types::Raw_Horse_Meat, roll(Config::horse_drop_min, Config::horse_drop_max)});
+                    drops.spawn_from_mob(m_target_horse->get_position(),
+                        Item_Stack{Block_Types::Leather, roll(Config::horse_leather_min, Config::horse_leather_max)});
                 }
             }
         } else if (m_target_hostile) {
@@ -528,6 +875,16 @@ Mob_Result Mobs_Update::interact(const Mob_Interact_Input& input, Dropped_Item_M
             if (m_target_hostile->take_damage(d, input.player.position)) {
                 m_hostile_respawn_cooldown[index_of(m_target_hostile->kind())] = Config::hostile_respawn_delay;
             }
+        } else if (m_target_boss) {
+            // В креативе босс умирает от одного удара: иначе его нельзя проверить без выживания.
+            const float d = survival ? damage : boss_stats(m_target_boss->kind()).max_health * 100.0f;
+            hit = true;
+            m_target_boss->take_damage(d, input.player.position);
+        } else if (m_target_knight) {
+            const float d = survival ? damage : Knight_Ai::MAX_HEALTH * 100.0f;
+            hit = true;
+            m_target_knight->take_damage(d, input.player.position);
+            m_target_knight->observe_player_hit(input.player.position);
         }
         if (hit && survival) result.damage_held_tool = true;
     }
@@ -536,8 +893,110 @@ Mob_Result Mobs_Update::interact(const Mob_Interact_Input& input, Dropped_Item_M
 
 // --- Команды ---------------------------------------------------------------------------------
 
+bool Mobs_Update::summon_boss(Boss_Kind kind, const glm::vec3& around, Chunk_Manager& chunks) {
+    static int s_boss_counter = 0;
+    const std::string name = std::string(boss_stats(kind).label) + " #" + std::to_string(++s_boss_counter);
+    glm::vec3 spawn = around + glm::vec3(6.0f, 0.0f, 0.0f);
+    if (kind == Boss_Kind::Knight) {
+        // У игрока позиция ног обычно находится выше поверхности на высоту его
+        // собственного спавна/коллизии. Нельзя использовать её как floor_y арены:
+        // иначе рыцарь мог зависнуть на этой высоте или появиться внутри склона.
+        // Ищем реальную площадку рядом с игроком и оставляем рыцарю 4 блока высоты.
+        static std::mt19937 knight_spawn_rng(std::random_device{}());
+        bool found_spawn = false;
+        std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+        std::uniform_real_distribution<float> radius_dist(5.0f, 8.0f);
+        for (int attempt = 0; attempt < 36 && !found_spawn; ++attempt) {
+            const float angle = angle_dist(knight_spawn_rng);
+            const float radius = radius_dist(knight_spawn_rng);
+            const float x = around.x + std::cos(angle) * radius;
+            const float z = around.z + std::sin(angle) * radius;
+            const int bx = static_cast<int>(std::floor(x));
+            const int bz = static_cast<int>(std::floor(z));
+            const int top = static_cast<int>(std::floor(around.y)) + 12;
+            const int bottom = std::max(Config::world_min_y, static_cast<int>(std::floor(around.y)) - 24);
+
+            for (int y = top; y >= bottom; --y) {
+                const Block_Types ground = chunks.get_block_world(bx, y, bz);
+                if (!get_block_props(ground).is_solid) continue;
+
+                bool clear_column = true;
+                // Включаем небольшой запас над головой: BODY_HEIGHT рыцаря > 3 блока.
+                for (int dy = 1; dy <= 4; ++dy) {
+                    const Block_Properties& above = get_block_props(chunks.get_block_world(bx, y + dy, bz));
+                    if (above.is_solid || above.state == Block_State::Liquid) {
+                        clear_column = false;
+                        break;
+                    }
+                }
+                if (!clear_column) continue;
+
+                // Проверяем четыре угла широкой коллизии, чтобы не заспавнить его
+                // наполовину в стене/скале.
+                const int offsets[4][2] = {
+                    {-1, -1}, {-1, 1}, {1, -1}, {1, 1}
+                };
+                for (const auto& offset : offsets) {
+                    for (int dy = 1; dy <= 4; ++dy) {
+                        const Block_Properties& edge = get_block_props(chunks.get_block_world(
+                            bx + offset[0], y + dy, bz + offset[1]));
+                        if (edge.is_solid || edge.state == Block_State::Liquid) {
+                            clear_column = false;
+                            break;
+                        }
+                    }
+                    if (!clear_column) break;
+                }
+                if (!clear_column) continue;
+
+                const glm::vec3 candidate(x, static_cast<float>(y + 1), z);
+                // /boss призывает рыцаря для немедленного боя: выбираем не только
+                // свободную площадку, но и точку с чистой линией обзора к игроку.
+                // Сам ИИ всё равно перепроверяет видимость каждый тик и каждый удар.
+                const glm::vec3 knight_eye = candidate + glm::vec3(0.0f, 2.25f, 0.0f);
+                const glm::vec3 player_eye = around + glm::vec3(0.0f, 1.35f, 0.0f);
+                if (!has_line_of_sight(chunks, knight_eye, player_eye)) continue;
+
+                spawn = candidate;
+                found_spawn = true;
+                break;
+            }
+        }
+
+        if (!found_spawn) {
+            LOG_ERROR("summon_boss: could not find a clear, grounded spawn position for Knight_Ai near the player");
+            return false;
+        }
+
+        auto knight = std::make_unique<Knight_Ai>(name, spawn);
+        knight->face_towards(around);
+        if (!knight->load_model()) {
+            LOG_ERROR(std::string("summon_boss: required Knight model failed to load: ") + Knight_Ai::MODEL_PATH);
+            return false;
+        }
+        m_knights.push_back(std::move(knight));
+        LOG_INFO("Summoned Knight_Ai at (" + std::to_string(spawn.x) + ", " +
+                 std::to_string(spawn.y) + ", " + std::to_string(spawn.z) + ")");
+        return true;
+    }
+
+    auto boss = std::make_unique<Boss>(kind, name, spawn);
+    if (!boss->load_model()) {
+        LOG_ERROR(std::string("summon_boss: failed to load ") + boss_stats(kind).model_path);
+        return false;
+    }
+    m_bosses.push_back(std::move(boss));
+    return true;
+}
+
 int Mobs_Update::kill_all() {
     int killed = 0;
+    for (auto& boss : m_bosses) {
+        if (boss->kill()) ++killed;
+    }
+    for (auto& knight : m_knights) {
+        if (knight->kill()) ++killed;
+    }
     for (auto& pig : m_pigs) {
         if (pig->kill()) ++killed;
     }
@@ -662,6 +1121,54 @@ int Mobs_Update::summon_horses(int count, const glm::vec3& around) {
     return spawned;
 }
 
+namespace {
+    // Центр тела моба: от ступней на половину высоты ~ 0.5 блока.
+    glm::vec3 body_center(const glm::vec3& feet) { return feet + glm::vec3(0.0f, 0.5f, 0.0f); }
+}
+
+int Mobs_Update::splash_potion(const glm::vec3& center, float radius, const Potion_Info& potion) {
+    int affected = 0;
+    const auto splash = [&](auto& mobs) {
+        for (auto& mob : mobs) {
+            if (mob->is_dying()) continue;
+            if (glm::distance(body_center(mob->get_position()), center) > radius) continue;
+            mob->effects().apply(potion.effect, potion.duration, potion.amplifier);
+            ++affected;
+        }
+    };
+    splash(m_pigs);
+    splash(m_cows);
+    splash(m_sheep);
+    splash(m_horses);
+    splash(m_hostiles);
+    for (auto& knight : m_knights) {
+        if (knight->is_dying()) continue;
+        const glm::vec3 center_of_body = knight->get_position() + glm::vec3(0.0f, 1.55f, 0.0f);
+        if (glm::distance(center_of_body, center) > radius) continue;
+        knight->apply_effect(potion.effect, potion.duration, potion.amplifier);
+        ++affected;
+    }
+    return affected;
+}
+
+bool Mobs_Update::mob_near(const glm::vec3& point, float radius) const {
+    const auto near = [&](const auto& mobs) {
+        for (const auto& mob : mobs) {
+            if (mob->is_dying()) continue;
+            if (glm::distance(body_center(mob->get_position()), point) <= radius) return true;
+        }
+        return false;
+    };
+    if (near(m_pigs) || near(m_cows) || near(m_sheep) || near(m_horses) || near(m_hostiles)) return true;
+    for (const auto& boss : m_bosses) {
+        if (!boss->is_dying() && glm::distance(boss->get_position() + glm::vec3(0.0f, 1.5f, 0.0f), point) <= radius) return true;
+    }
+    for (const auto& knight : m_knights) {
+        if (!knight->is_dying() && glm::distance(knight->get_position() + glm::vec3(0.0f, 1.55f, 0.0f), point) <= radius) return true;
+    }
+    return false;
+}
+
 int Mobs_Update::breed_all(const std::string& species) {
     int affected = 0;
     const auto love = [&](auto& animals) {
@@ -681,23 +1188,25 @@ int Mobs_Update::breed_all(const std::string& species) {
 
 // --- Спавн и размножение (внутренние) --------------------------------------------------------
 
-void Mobs_Update::spawn_missing_pigs(const glm::vec3& player_position) {
+void Mobs_Update::spawn_missing_pigs(const glm::vec3& player_position, Chunk_Manager& chunks) {
     static int s_pig_counter = 0; // для уникальных имён в логах ("Хрюша #3")
     static std::mt19937 s_rng(std::random_device{}());
 
     if (static_cast<int>(m_pigs.size()) >= Config::min_pig_count) return;
     if (m_pig_respawn_cooldown > 0.0f) return; // недавно кого-то убили — даём миру опустеть
 
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(Config::pig_spawn_radius_min, Config::pig_spawn_radius_max);
-
     const int missing = Config::min_pig_count - static_cast<int>(m_pigs.size());
     for (int i = 0; i < missing; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 spawn_position = player_position + glm::vec3(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius);
+        std::optional<glm::vec3> spawn_position;
+        for (int attempt = 0; attempt < k_spawn_attempts && !spawn_position; ++attempt) {
+            spawn_position = find_ground_spawn(player_position, Config::pig_spawn_radius_min,
+                                               Config::pig_spawn_radius_max, Spawn_Group::Animal, true,
+                                               1.0f, chunks, s_rng);
+        }
+        if (!spawn_position) break; // подходящего места пока нет — следующий кадр
 
-        auto pig = std::make_unique<Pig>("Хрюша #" + std::to_string(++s_pig_counter), spawn_position);
+        if (!natural_spawn_allowed("Pig", *spawn_position)) break;
+        auto pig = std::make_unique<Pig>("Хрюша #" + std::to_string(++s_pig_counter), *spawn_position);
         if (!pig->load_model("assets/mobs/pig.glb")) {
             LOG_ERROR("spawn_missing_pigs: failed to load assets/mobs/pig.glb");
             break; // модель битая/отсутствует — нет смысла пытаться ещё раз в этом же вызове
@@ -705,7 +1214,7 @@ void Mobs_Update::spawn_missing_pigs(const glm::vec3& player_position) {
         m_pigs.push_back(std::move(pig));
     }
 }
-void Mobs_Update::spawn_missing_passive(Passive_Kind kind, const glm::vec3& player_position) {
+void Mobs_Update::spawn_missing_passive(Passive_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks) {
     static std::mt19937 s_rng(std::random_device{}());
     const Passive_Stats& st = passive_stats(kind);
     auto& list = passive_list(kind);
@@ -714,16 +1223,19 @@ void Mobs_Update::spawn_missing_passive(Passive_Kind kind, const glm::vec3& play
     if (static_cast<int>(list.size()) >= st.min_count) return;
     if (m_passive_respawn_cooldown[index] > 0.0f) return;
 
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(st.spawn_radius_min, st.spawn_radius_max);
     const int missing = st.min_count - static_cast<int>(list.size());
     for (int i = 0; i < missing; ++i) {
-        const float angle = angle_dist(s_rng);
-        const float radius = radius_dist(s_rng);
-        const glm::vec3 spawn_position = player_position + glm::vec3(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius);
+        std::optional<glm::vec3> spawn_position;
+        for (int attempt = 0; attempt < k_spawn_attempts && !spawn_position; ++attempt) {
+            spawn_position = find_ground_spawn(player_position, st.spawn_radius_min, st.spawn_radius_max,
+                                               Spawn_Group::Animal, true, 1.0f, chunks, s_rng);
+        }
+        if (!spawn_position) break;
+        if (!natural_spawn_allowed(st.label, *spawn_position)) break;
+
         static int s_counter[2] = {0, 0};
         auto animal = std::make_unique<Passive_Animal>(kind,
-        std::string(st.label) + " #" + std::to_string(++s_counter[index]), spawn_position);
+        std::string(st.label) + " #" + std::to_string(++s_counter[index]), *spawn_position);
         if (!animal->load_model()) {
             LOG_ERROR(std::string("spawn_missing_passive: failed to load ") + st.model_path);
             m_passive_respawn_cooldown[index] = 30.0f; // не долбим диск битой моделью каждый кадр
@@ -733,7 +1245,33 @@ void Mobs_Update::spawn_missing_passive(Passive_Kind kind, const glm::vec3& play
     }
 }
 
-void Mobs_Update::spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks) {
+namespace {
+    // Где вид НЕ появляется сам (natural spawn, /summon не трогает). Ключ — имя вида как в логах
+    // ("Pig", "Cow", "Sheep", "Horse", "Zombie", "Skeleton", "Spider"). Имена биомов — как в
+    // World_Generator::biome_name. Пример: {"Horse", {"Stone Desert"}} — лошади там не спавнятся.
+    struct Spawn_Ban {
+        const char* species;
+        std::vector<std::string> biomes;
+    };
+    const std::vector<Spawn_Ban> kSpawnBans = {
+        // Пусто: правила задаются здесь.
+    };
+}
+
+bool Mobs_Update::natural_spawn_allowed(const char* species, const glm::vec3& position) const {
+    if (!m_biome_at) return true;
+    const std::string biome = m_biome_at(static_cast<int>(std::floor(position.x)),
+                                         static_cast<int>(std::floor(position.y)),
+                                         static_cast<int>(std::floor(position.z)));
+    for (const Spawn_Ban& ban : kSpawnBans) {
+        if (std::string(ban.species) != species) continue;
+        if (std::find(ban.biomes.begin(), ban.biomes.end(), biome) != ban.biomes.end()) return false;
+    }
+    return true;
+}
+
+void Mobs_Update::spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& player_position, Chunk_Manager& chunks,
+                                         float sky_brightness, int night_light_floor) {
     static std::mt19937 s_rng(std::random_device{}());
     const Hostile_Stats& st = hostile_stats(kind);
     const int index = index_of(kind);
@@ -745,40 +1283,32 @@ void Mobs_Update::spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& pla
     if (count >= st.min_count) return;
     if (m_hostile_respawn_cooldown[index] > 0.0f) return;
 
-    // Одна попытка за тик: точка в кольце вокруг игрока, потом поиск поверхности под ней
-    // (твёрдый блок и два свободных над ним) — как у лошади, чтобы враг не появился внутри холма.
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(st.spawn_radius_min, st.spawn_radius_max);
-    const float angle = angle_dist(s_rng);
-    const float radius = radius_dist(s_rng);
-    const float spawn_x = player_position.x + std::cos(angle) * radius;
-    const float spawn_z = player_position.z + std::sin(angle) * radius;
+    // Одна попытка за тик: точка в кольце вокруг игрока, поверхность под ней и биом.
+    const std::optional<glm::vec3> spawn_position = find_ground_spawn(
+        player_position, st.spawn_radius_min, st.spawn_radius_max, Spawn_Group::Hostile, false, 1.0f, chunks, s_rng);
+    if (!spawn_position) return; // незагруженный чанк или неподходящий биом — в другой раз
+    if (!natural_spawn_allowed(st.label, *spawn_position)) return;
 
-    const int bx = static_cast<int>(std::floor(spawn_x));
-    const int bz = static_cast<int>(std::floor(spawn_z));
-    const int top = static_cast<int>(std::floor(player_position.y)) + 12;
-    const int bottom = static_cast<int>(std::floor(player_position.y)) - 24;
-    int ground_y = -1000000;
-    for (int y = top; y >= bottom; --y) {
-        const Block_Properties& ground = get_block_props(chunks.get_block_world(bx, y, bz));
-        if (!ground.is_solid) continue;
-        const Block_Properties& above1 = get_block_props(chunks.get_block_world(bx, y + 1, bz));
-        const Block_Properties& above2 = get_block_props(chunks.get_block_world(bx, y + 2, bz));
-        if (above1.is_solid || above2.is_solid || above1.state == Block_State::Liquid || above2.state == Block_State::Liquid) continue;
-        ground_y = y;
-        break;
-    }
-    if (ground_y == -1000000) return; // незагруженный чанк или нет подходящей поверхности — в другой раз
+    // Враги появляются только там, где освещение меньше порога: свет в клетке над землёй —
+    // максимум из блочного света и солнечного (солнечный гаснет к ночи вместе с sky_brightness).
+    const int bx = static_cast<int>(std::floor(spawn_position->x));
+    const int bz = static_cast<int>(std::floor(spawn_position->z));
+    const int feet_y = static_cast<int>(std::floor(spawn_position->y));
+    const uint8_t packed_light = chunks.get_packed_light_world(bx, feet_y, bz);
+    const int block_light = packed_light & 0x0F;
+    const int sky_light = packed_light >> 4;
+    const int sky_part = static_cast<int>(std::lround(static_cast<float>(sky_light) * sky_brightness));
+    const int light = std::max({block_light, sky_part, night_light_floor});
+    if (light > Config::hostile_spawn_max_light) return;
 
     static int s_counter[3] = {0, 0, 0};
     auto hostile = std::make_unique<Hostile_Mob>(kind,
-        std::string(st.label) + " #" + std::to_string(++s_counter[index]),
-        glm::vec3(spawn_x, static_cast<float>(ground_y) + 1.0f, spawn_z));
+        std::string(st.label) + " #" + std::to_string(++s_counter[index]), *spawn_position);
     if (!hostile->load_model()) {
         LOG_ERROR(std::string("spawn_missing_hostiles: failed to load ") + st.model_path);
         m_hostile_respawn_cooldown[index] = 30.0f;
         return;
-     }
+    }
     m_hostiles.push_back(std::move(hostile));
 }
 
@@ -789,34 +1319,14 @@ void Mobs_Update::spawn_missing_horses(const glm::vec3& player_position, Chunk_M
     if (static_cast<int>(m_horses.size()) >= Config::min_horse_count) return;
     if (m_horse_respawn_cooldown > 0.0f) return; // недавно кого-то убили — даём миру опустеть
 
-    // Одна попытка за кадр: точка в кольце вокруг игрока, как у свиней.
-    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
-    std::uniform_real_distribution<float> radius_dist(Config::horse_spawn_radius_min, Config::horse_spawn_radius_max);
-    const float angle = angle_dist(s_rng);
-    const float radius = radius_dist(s_rng);
-    const float spawn_x = player_position.x + std::cos(angle) * radius;
-    const float spawn_z = player_position.z + std::sin(angle) * radius;
+    // Одна попытка за кадр: лошадь встаёт на траву (два свободных блока над ней) в подходящем биоме.
+    const std::optional<glm::vec3> spawn_position = find_ground_spawn(
+        player_position, Config::horse_spawn_radius_min, Config::horse_spawn_radius_max,
+        Spawn_Group::Horse, true, 1.02f, chunks, s_rng);
+    if (!spawn_position) return;
 
-    // В отличие от свиньи, которая просто падает с высоты игрока, лошадь на радиусе 30 блоков
-    // легко оказалась бы внутри холма — поэтому ищем поверхность: трава с двумя свободными
-    // блоками над ней (незагруженный чанк отдаёт воздух — тогда просто попробуем в другом кадре).
-    const int bx = static_cast<int>(std::floor(spawn_x));
-    const int bz = static_cast<int>(std::floor(spawn_z));
-    const int top = static_cast<int>(std::floor(player_position.y)) + 20;
-    const int bottom = static_cast<int>(std::floor(player_position.y)) - 20;
-    int ground_y = -1000000;
-    for (int y = top; y >= bottom; --y) {
-        if (chunks.get_block_world(bx, y, bz) != Block_Types::Grass) continue;
-        const Block_Properties& above1 = get_block_props(chunks.get_block_world(bx, y + 1, bz));
-        const Block_Properties& above2 = get_block_props(chunks.get_block_world(bx, y + 2, bz));
-        if (above1.is_solid || above2.is_solid || above1.state == Block_State::Liquid) continue;
-        ground_y = y;
-        break;
-    }
-    if (ground_y == -1000000) return;
-
-    auto horse = std::make_unique<Horse>("Horse #" + std::to_string(++s_horse_counter),
-                                         glm::vec3(spawn_x, static_cast<float>(ground_y) + 1.02f, spawn_z));
+    if (!natural_spawn_allowed("Horse", *spawn_position)) return;
+    auto horse = std::make_unique<Horse>("Horse #" + std::to_string(++s_horse_counter), *spawn_position);
     if (!horse->load_model("assets/mobs/horse.glb")) {
         LOG_ERROR("spawn_missing_horses: failed to load assets/mobs/horse.glb");
         m_horse_respawn_cooldown = 30.0f; // не долбим диск загрузкой битой модели каждый кадр
@@ -888,6 +1398,12 @@ void Mobs_Update::update_breeding() {
 // --- Отрисовка -------------------------------------------------------------------------------
 
 void Mobs_Update::render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient) const {
+    for (const auto& boss : m_bosses) {
+        boss->render(shader, view, projection, ambient);
+    }
+    for (const auto& knight : m_knights) {
+        knight->render(shader, view, projection, ambient);
+    }
     for (const auto& pig : m_pigs) {
         pig->render(shader, view, projection, ambient);
     }
@@ -903,4 +1419,18 @@ void Mobs_Update::render(const Shader& shader, const glm::mat4& view, const glm:
     for (const auto& hostile : m_hostiles) {
         hostile->render(shader, view, projection, ambient);
     }
+}
+
+void Mobs_Update::damage_in_radius(const glm::vec3& center, float radius, float damage) {
+    auto hit = [&](const glm::vec3& pos, auto& mob) {
+        const float d = glm::distance(pos, center);
+        if (d < radius) mob->take_damage(damage * (1.0f - d / radius), center);
+    };
+    for (auto& m : m_pigs) hit(m->get_position(), m);
+    for (auto& m : m_cows) hit(m->get_position(), m);
+    for (auto& m : m_sheep) hit(m->get_position(), m);
+    for (auto& m : m_horses) hit(m->get_position(), m);
+    for (auto& m : m_hostiles) hit(m->get_position(), m);
+    for (auto& m : m_bosses) hit(m->get_position(), m);
+    for (auto& m : m_knights) hit(m->get_position(), m);
 }

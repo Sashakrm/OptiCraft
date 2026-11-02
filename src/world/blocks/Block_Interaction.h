@@ -13,6 +13,7 @@ class Input_Manager;
 class Renderer;
 class Player;
 class Crop_Manager;
+class Sapling_Manager;
 
 // Сбросить кэш мешей чанка с блоком и соседних чанков на границе (после ручной правки блока).
 void invalidate_block_mesh(int wx, int wy, int wz, Chunk_Manager& chunk_manager, Renderer& renderer);
@@ -58,6 +59,7 @@ public:
 
     // Менеджер посевов (посадка по ПКМ семенами/морковью на грядку). nullptr — посадка выключена.
     void set_crop_manager(Crop_Manager* crops) { m_crop_manager = crops; }
+    void set_sapling_manager(Sapling_Manager* saplings) { m_sapling_manager = saplings; }
 
     // Прогресс добычи текущего блока 0..1 (0 — не копаем) — для полоски под прицелом.
     float get_break_progress() const { return m_break_progress; }
@@ -74,6 +76,24 @@ public:
         m_container_open_request.reset();
         return pos;
     }
+
+    // Красная логика: ПКМ по рычагу/кнопке/повторителю и только что поставленный узел.
+    std::optional<glm::ivec3> take_redstone_interact() {
+        auto r = m_redstone_interact;
+        m_redstone_interact.reset();
+        return r;
+    }
+    std::optional<glm::ivec3> take_redstone_placed() {
+        auto r = m_redstone_placed;
+        m_redstone_placed.reset();
+        return r;
+    }
+
+    // Взрыв в центре center радиусом radius: лучи от центра расходуют «энергию» на
+    // blast_resistance блоков (как в Minecraft). Ломает пробитые блоки, кроме unbreakable.
+    // Возвращает координаты сломанных блоков.
+    std::vector<glm::ivec3> explode(const glm::ivec3& center, float radius,
+                                    Chunk_Manager& chunk_manager, Renderer& renderer);
 
     // Блоки, сломанные с прошлого вызова (только Survival) — забирает Game каждый кадр.
     std::vector<Broken_Block_Event> take_broken_blocks() {
@@ -96,7 +116,10 @@ private:
 
     Block_Types m_place_block = Block_Types::Stone;
     Crop_Manager* m_crop_manager = nullptr;
+    Sapling_Manager* m_sapling_manager = nullptr;
     std::optional<glm::ivec3> m_container_open_request;
+    std::optional<glm::ivec3> m_redstone_interact;
+    std::optional<glm::ivec3> m_redstone_placed;
 
     // Добыча в Survival
     bool m_is_mining = false;

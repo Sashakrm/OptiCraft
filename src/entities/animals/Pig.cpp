@@ -166,6 +166,8 @@ void Pig::seek_towards(const glm::vec3& target) {
 }
 
 void Pig::update(float delta_time, const Chunk_Manager& chunk_manager) {
+    const int regen_ticks = m_effects.update(delta_time);
+    if (!m_dying && regen_ticks > 0) m_health = std::min(Config::pig_max_health, m_health + static_cast<float>(regen_ticks));
     m_breeding.update(delta_time);
     m_mob.set_scale(m_breeding.size_factor());
     const bool was_seeking = m_seek_timer > 0.0f;
@@ -244,7 +246,7 @@ void Pig::update(float delta_time, const Chunk_Manager& chunk_manager) {
     m_knockback *= std::exp(-6.0f * delta_time);
     if (glm::length(m_knockback) < 0.05f) m_knockback = glm::vec3(0.0f);
     // В воде замедляется и сносится течением.
-    horizontal_velocity = horizontal_velocity * Liquid_Physics::horizontal_drag(wet) + wet.flow;
+    horizontal_velocity = horizontal_velocity * Liquid_Physics::horizontal_drag(wet) * m_effects.speed_factor() + wet.flow;
 
     bool blocked = false;
     glm::vec3 target = position;

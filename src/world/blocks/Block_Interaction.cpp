@@ -1,4 +1,8 @@
+#include <array>
+#include <random>
+#include <set>
 #include "world/blocks/Block_Interaction.h"
+#include "world/blocks/Block_Shapes.h"
 #include <glad/gl.h>
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Entity.h"
@@ -11,6 +15,8 @@
 #include "utils/Config.h"
 #include "math/Math_Helpers.h"
 #include "world/crafting/Crop_Manager.h"
+#include "world/crafting/Sapling_Manager.h"
+#include "world/logic/Logic_Manager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -73,6 +79,50 @@ void invalidate_block_mesh(int wx, int wy, int wz, Chunk_Manager& chunk_manager,
 }
 
 Block_Interaction::Block_Interaction() = default;
+
+std::vector<glm::ivec3> Block_Interaction::explode(const glm::ivec3& center, float radius,
+                                                   Chunk_Manager& chunk_manager, Renderer& renderer) {
+    static std::mt19937 s_rng(std::random_device{}());
+    std::uniform_real_distribution<float> jitter(0.7f, 1.3f);
+    constexpr int k_rays = 16;          // лучи идут к граням куба 16x16x16 (поверхность сферы)
+    constexpr float k_step = 0.3f;
+    const glm::vec3 origin = glm::vec3(center) + glm::vec3(0.5f);
+    std::set<std::array<int, 3>> marked;
+
+    for (int i = 0; i <= k_rays; ++i) {
+        for (int j = 0; j <= k_rays; ++j) {
+            for (int k = 0; k <= k_rays; ++k) {
+                const bool on_surface = i == 0 || i == k_rays || j == 0 || j == k_rays || k == 0 || k == k_rays;
+                if (!on_surface) continue;
+                const glm::vec3 dir = glm::normalize(glm::vec3(i, j, k) / static_cast<float>(k_rays) * 2.0f - 1.0f);
+                float energy = radius * jitter(s_rng);
+                glm::vec3 pos = origin;
+                while (energy > 0.0f) {
+                    pos += dir * k_step;
+                    const glm::ivec3 b = glm::floor(pos);
+                    if (b.y < Config::world_min_y || b.y > Config::world_max_y) break;
+                    const Block_Types type = chunk_manager.get_block_world(b.x, b.y, b.z);
+                    if (type != Block_Types::Air) {
+                        const Block_Properties& props = get_block_props(type);
+                        if (!props.unbreakable()) marked.insert({b.x, b.y, b.z});
+                        energy -= (std::max(0.0f, props.blast_resistance) + 0.3f) * k_step;
+                    }
+                    energy -= 0.225f;
+                }
+            }
+        }
+    }
+
+    std::vector<glm::ivec3> destroyed;
+    for (const auto& m : marked) {
+        const glm::ivec3 b(m[0], m[1], m[2]);
+        if (chunk_manager.set_block_world(b.x, b.y, b.z, Block_Types::Air)) {
+            invalidate_chunk_and_neighbors(b.x, b.y, b.z, chunk_manager, renderer);
+            destroyed.push_back(b);
+        }
+    }
+    return destroyed;
+}
 
 bool Block_Interaction::can_harvest(Block_Types block, const Item_Stack& held) {
     const Block_Properties& props = get_block_props(block);
@@ -186,7 +236,8 @@ void Block_Interaction::update(float delta_time,
             m_break_progress = 0.0f;
         }
 
-        if (left_held && m_current_hit.hit && m_action_cooldown <= 0.0f) {
+        if (left_held && m_current_hit.hit && m_action_cooldown <= 0.0f &&
+            !get_block_props(m_current_hit.block_type).unbreakable()) {
             if (!m_is_mining) {
                 m_is_mining = true;
                 m_mining_pos = glm::ivec3(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z);
@@ -242,7 +293,8 @@ void Block_Interaction::update(float delta_time,
     }
 
     // Creative: мгновенная поломка по клику, как и раньше.
-    if (!survival && input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)) {
+    if (!survival && input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) &&
+        !get_block_props(m_current_hit.block_type).unbreakable()) {
         if (!chunk_manager.set_block_world(
             m_current_hit.block_x,
             m_current_hit.block_y,
@@ -265,6 +317,16 @@ void Block_Interaction::update(float delta_time,
         if (block_entity_type_for(m_current_hit.block_type) != Block_Entity_Type::None) {
             m_container_open_request = glm::ivec3(
                 m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z);
+            m_action_cooldown = k_action_delay;
+            m_current_hit.hit = false;
+            return;
+        }
+
+        // Рычаг, кнопка, зажиматель, повторитель: ПКМ переключает/меняет, блок не ставится.
+        // Провод — нет: по нему ставят другие блоки.
+        if (Logic_Manager::is_node(m_current_hit.block_type) &&
+            !Logic_Manager::is_wire(m_current_hit.block_type)) {
+            m_redstone_interact = glm::ivec3(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z);
             m_action_cooldown = k_action_delay;
             m_current_hit.hit = false;
             return;
@@ -323,6 +385,16 @@ void Block_Interaction::update(float delta_time,
             return;
         }
 
+        // Саженец ели ставится только сверху на землю или дёрн.
+        if (Sapling_Manager::is_sapling(m_place_block)) {
+            const bool on_top = m_current_hit.place_x == m_current_hit.block_x &&
+                                m_current_hit.place_y == m_current_hit.block_y + 1 &&
+                                m_current_hit.place_z == m_current_hit.block_z;
+            if (!on_top || !Sapling_Manager::can_grow_on(m_current_hit.block_type)) {
+                return;
+            }
+        }
+
         const glm::vec3 place_pos(
             static_cast<float>(m_current_hit.place_x),
             static_cast<float>(m_current_hit.place_y),
@@ -360,6 +432,34 @@ void Block_Interaction::update(float delta_time,
                 } else {
                     placed_meta = to_player_z > 0.0f ? Block_Meta::facing_south : Block_Meta::facing_north;
                 }
+                // Ступеньки: высокая сторона — от игрока (по ней идут вверх, к игроку — вниз).
+                if (place_props.shape == Block_Shape::Stairs) {
+                    placed_meta = opposite_facing(placed_meta);
+                }
+            }
+
+            // Красная логика: рычаг/кнопка/зажиматель — на грань опоры, повторитель — выходом от игрока,
+            // провод — на твёрдую опору снизу. Без опоры не ставится (см. Logic_Manager::placement).
+            const bool is_redstone_node = Logic_Manager::is_node(m_place_block);
+            if (is_redstone_node) {
+                const float to_player_x = eye_position.x - (place_pos.x + 0.5f);
+                const float to_player_z = eye_position.z - (place_pos.z + 0.5f);
+                uint8_t toward_player = Block_Meta::facing_north;
+                if (std::abs(to_player_x) > std::abs(to_player_z)) {
+                    toward_player = to_player_x > 0.0f ? Block_Meta::facing_east : Block_Meta::facing_west;
+                } else {
+                    toward_player = to_player_z > 0.0f ? Block_Meta::facing_south : Block_Meta::facing_north;
+                }
+                auto world = make_chunk_world(chunk_manager);
+                uint8_t node_meta = 0;
+                if (!Logic_Manager::placement(
+                        m_place_block, world,
+                        glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z),
+                        glm::ivec3(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z),
+                        opposite_facing(toward_player), node_meta)) {
+                    return;
+                }
+                placed_meta = node_meta;
             }
 
             if (!chunk_manager.set_block_world(
@@ -371,8 +471,15 @@ void Block_Interaction::update(float delta_time,
             )) {
                 return;
             }
+            if (is_redstone_node) {
+                m_redstone_placed = glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z);
+            }
             if (survival) {
                 inventory.remove_resource(m_place_block, 1);
+            }
+            if (m_sapling_manager && Sapling_Manager::is_sapling(m_place_block)) {
+                m_sapling_manager->plant(glm::ivec3(m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z),
+                                         m_place_block);
             }
             invalidate_chunk_and_neighbors(
                 m_current_hit.place_x, m_current_hit.place_y, m_current_hit.place_z,

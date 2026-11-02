@@ -65,6 +65,7 @@ public:
     void set_hurt_flash(float amount) { m_hurt_flash = amount; }
 
     bool is_loaded() const { return m_model && m_model->is_loaded(); }
+    bool has_skeleton() const { return m_model && !m_model->get_bones().empty(); }
 
     // Габариты модели в её локальных координатах (до поворота по yaw, до масштаба), посчитанные
     // по РЕАЛЬНОЙ геометрии со скиннингом в bind-позе — ровно то, что рисует шейдер. Возвращает

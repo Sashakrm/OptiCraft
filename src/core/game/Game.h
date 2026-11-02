@@ -8,6 +8,8 @@
 #define GLFW_INCLUDE_NONE
 
 #include "core/app/Window.h"
+#include "world/logic/Logic_Manager.h"
+#include <cstdint>
 #include <string>
 #include "input/Input_Manager.h"
 #include "entities/player/Camera.h"
@@ -25,10 +27,12 @@
 #include "entities/player/Inventory.h"
 #include "world/blocks/Block_Interaction.h"
 #include "core/game/Day_Night_Cycle.h"
+#include "core/game/Weather_Cycle.h"
 #include "core/game/Tick.h"
 #include "mobs/Mobs_Update.h"
 #include "entities/player/Player_Model.h"
 #include "world/crafting/Crop_Manager.h"
+#include "world/crafting/Sapling_Manager.h"
 #include "entities/items/Dropped_Item.h"
 
 class Application;
@@ -60,6 +64,11 @@ private:
     void handle_tool_impulse(float delta_time);
     // Рост посевов на грядках (см. Crop_Manager.h); сохраняется в crops.txt рядом с миром.
     std::unique_ptr<Crop_Manager> m_crops_ptr;
+    // Рост еловых саженцев в деревья (см. Sapling_Manager.h); сохраняется в saplings.txt рядом с миром.
+    std::unique_ptr<Sapling_Manager> m_saplings_ptr;
+    // Красная логика (рычаги, кнопки, зажиматели, повторители, провод). Сбрасывается при смене мира.
+    Logic_Manager m_logic;
+    float m_logic_scan_timer = 0.0f;   // раз в секунду ищем узлы вокруг игрока
     // Выпавшие предметы (блоки, мясо...). Не держит GL-ресурсов — рисуется через Renderer,
     // поэтому порядок объявления относительно окна не важен.
     std::unique_ptr<Dropped_Item_Manager> m_dropped_items_ptr;
@@ -106,6 +115,9 @@ private:
     // Реальное время (20 минут по умолчанию — см. Config), а не игровые тики: пользователь
     // явно попросил именно длительность в реальных минутах, не привязанную к TPS/FPS.
     Day_Night_Cycle m_day_night_cycle;
+    Weather_Cycle m_weather;
+    // Ambient с учётом погоды (день × погода); им освещаются все объекты сцены.
+    float scene_ambient() const { return m_day_night_cycle.get_ambient_intensity() * m_weather.ambient_multiplier(); }
     Tick_Scheduler m_tick;  // централизованные тики (см. Tick.h)
 
     // Текущая дальность прорисовки в чанках. Стартует с Config::chunk_load_radius
@@ -117,6 +129,18 @@ private:
     int m_fps_frame_count{0};
     float m_current_fps{0.0f};
     bool m_show_debug_hud{false};
+    // F4 внутри F3: расширенный блок (кадры за секунду, TPS, мобы, чанки, цель прицела).
+    bool m_show_debug_extended{false};
+    // Окно «последняя полная секунда»: сбор времени кадров и TPS.
+    float m_frame_window_min_ms{0.0f};
+    float m_frame_window_max_ms{0.0f};
+    float m_frame_window_sum_ms{0.0f};
+    int m_frame_window_count{0};
+    float m_last_frame_min_ms{0.0f};
+    float m_last_frame_avg_ms{0.0f};
+    float m_last_frame_max_ms{0.0f};
+    float m_current_tps{0.0f};
+    std::uint64_t m_tps_tick_mark{0};
 
     bool m_is_running;
     bool m_is_shutdown{false};
@@ -132,6 +156,7 @@ private:
     bool is_camera_underwater() const;
     // Урожай: выпавшие предметы при сборе ростка и исчезновение дикой грядки.
     void handle_crop_harvest(const glm::ivec3& pos, Block_Types crop_block);
+    void handle_leaf_drops(const glm::ivec3& pos, Block_Types leaves);
 
     // --- Чат и команды ----------------------------------------------------------
     static constexpr size_t k_chat_log_capacity = 100;   // хранится в логе
@@ -281,6 +306,8 @@ public:
     int get_day_time_ticks() const;
     void set_day_time_ticks(int ticks);
     void add_day_time_ticks(int ticks);
+    float get_tick_speed() const { return m_tick.speed(); }
+    void set_tick_speed(float speed) { m_tick.set_speed(speed); }
     int kill_all_mobs() { return m_mobs.kill_all(); }
     void kill_player();
     void goto_spawn() { teleport_player(m_spawn_position); }
@@ -288,12 +315,22 @@ public:
     void set_game_mode(Game_Mode mode);
     // Возвращает, сколько предметов реально влезло в инвентарь (только Survival).
     int give_item(Block_Types type, int count);
+    bool enchant_held_item(int level);
     bool set_block_at(int x, int y, int z, Block_Types type);
+    // Команда /dungeon: ставит зачаток данжа (стены, пол, потолок, проём, сундук) от origin.
+    bool build_dungeon(const glm::ivec3& origin, std::uint32_t seed);
+    // Команда /portal: переносит игрока в другое измерение (имя из Dimension.h). Чанки разных
+    // измерений хранятся под разными ключами, поэтому миры не смешиваются.
+    bool switch_dimension(const std::string& name);
+    // Взрыв (динамит/кнопка): ломает блоки лучами и бьёт игрока и мобов рядом.
+    void detonate(const glm::ivec3& center, float radius);
+    const std::string& get_dimension_name() const { return m_world_settings.dimension; }
     int summon_pigs(int count) { return m_mobs.summon_pigs(count, get_player_position()); }
     int summon_cows(int count) { return m_mobs.summon_cows(count, get_player_position()); }
     int summon_horses(int count) { return m_mobs.summon_horses(count, get_player_position()); }
     int summon_sheep(int count) { return m_mobs.summon_sheep(count, get_player_position()); }
     int summon_zombies(int count) { return m_mobs.summon_zombies(count, get_player_position()); }
+    bool summon_boss(Boss_Kind kind) { return m_chunk_manager_ptr && m_mobs.summon_boss(kind, get_player_position(), *m_chunk_manager_ptr); }
     int summon_skeletons(int count) { return m_mobs.summon_skeletons(count, get_player_position()); }
     int summon_spiders(int count) { return m_mobs.summon_spiders(count, get_player_position()); }
     // Команда /breed: сразу «влюбляет» всех взрослых животных вида (pig|cow|horse).

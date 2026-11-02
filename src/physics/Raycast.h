@@ -16,6 +16,10 @@ struct Raycast_Hit {
     int place_z = 0;
     float distance = 0.0f;
     Block_Types block_type = Block_Types::Air;
+    // Для блоков с точным хитбоксом (кнопка, провод): бокс, в который попал луч, в мировых координатах.
+    bool has_box = false;
+    glm::vec3 box_lo{0.0f};
+    glm::vec3 box_hi{1.0f};
 };
 
 class Raycast {

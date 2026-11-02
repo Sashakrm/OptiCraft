@@ -22,10 +22,16 @@ void Day_Night_Cycle::update(float delta_time) {
 }
 
 void Day_Night_Cycle::advance(float seconds) {
-    m_time_seconds = std::fmod(m_time_seconds + seconds, m_full_cycle_seconds);
-    if (m_time_seconds < 0.0f) {
-        m_time_seconds += m_full_cycle_seconds;
+    float total = m_time_seconds + seconds;
+    while (total >= m_full_cycle_seconds) {
+        total -= m_full_cycle_seconds;
+        ++m_day_count;
     }
+    while (total < 0.0f) {
+        total += m_full_cycle_seconds;
+        --m_day_count;
+    }
+    m_time_seconds = total;
 }
 
 void Day_Night_Cycle::set_normalized_time(float t) {
@@ -74,7 +80,46 @@ float Day_Night_Cycle::get_ambient_intensity() const {
     const float t = std::clamp((elevation + 0.2f) / 0.5f, 0.0f, 1.0f);
     const float smooth_t = t * t * (3.0f - 2.0f * t);
     // Ночью не абсолютный чёрный (0.0), а тусклый минимум — см. комментарий в заголовке.
-    constexpr float night_ambient = 0.4f;
+    // Ночной минимум: 0.4 обычно, а при полной луне (фаза 32) — уровень 8 из 15.
+    const float night_ambient = get_night_light_floor() > 0 ? 8.0f / 15.0f : 0.4f;
     constexpr float day_ambient = 1.0f;
     return night_ambient + (day_ambient - night_ambient) * smooth_t;
+}
+
+float Day_Night_Cycle::get_sky_brightness() const {
+    const float elevation = sun_elevation();
+    const float t = std::clamp((elevation + 0.2f) / 0.5f, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+namespace {
+    // Период фаз луны в сутках: 1..32 затем 32..1 — 64 шага.
+    constexpr int kMoonPhaseCount = 32;
+    constexpr int kMoonPhasePeriod = 2 * kMoonPhaseCount;
+}
+
+int Day_Night_Cycle::get_moon_phase() const {
+    const int step = ((m_day_count % kMoonPhasePeriod) + kMoonPhasePeriod) % kMoonPhasePeriod;
+    return step < kMoonPhaseCount ? step + 1 : kMoonPhasePeriod - step;
+}
+
+int Day_Night_Cycle::get_sun_phase() const {
+    return (kMoonPhaseCount + 1) - get_moon_phase();
+}
+
+float Day_Night_Cycle::get_sun_darkness() const {
+    return static_cast<float>(get_sun_phase() - 1) / static_cast<float>(kMoonPhaseCount - 1);
+}
+
+float Day_Night_Cycle::get_moon_darkness() const {
+    return static_cast<float>(get_moon_phase() - 1) / static_cast<float>(kMoonPhaseCount - 1);
+}
+
+int Day_Night_Cycle::get_night_light_floor() const {
+    return get_moon_phase() == kMoonPhaseCount ? 8 : 0;
+}
+
+float Day_Night_Cycle::get_moon_illumination() const {
+    const float fraction = static_cast<float>(get_moon_phase() - 1) / static_cast<float>(kMoonPhaseCount - 1);
+    return 2.0f * fraction - 1.0f;
 }

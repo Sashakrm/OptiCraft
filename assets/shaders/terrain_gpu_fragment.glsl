@@ -7,14 +7,14 @@ out vec4 FragColor;
 in vec2 Local;
 in float NormalY;
 in float BlockLight;
+in float SkyLight;
 flat in vec4 Rect;
 in float AO;
 
 uniform sampler2D textureAtlas;
 // Множитель дня/ночи (см. Day_Night_Cycle::get_ambient_intensity) — 1.0 днём, тусклее ночью.
 uniform float ambient;
-// Максимальный уровень света от блока (Config::max_light_level), для нормализации нижнего
-// ниббла BlockLight; верхний ниббл хранит skylight (0..15).
+// Максимальный уровень света от блока (Config::max_light_level), для нормализации BlockLight.
 uniform float maxLightLevel;
 
 void main() {
@@ -28,13 +28,10 @@ void main() {
     vec2 uv = mix(Rect.xy, Rect.zw, f);
     vec4 tex_color = texture(textureAtlas, uv);
 
-    // BlockLight — упакованный байт: нижний ниббл = свет блока, верхний = небесный свет.
+    // BlockLight и SkyLight (0..15) интерполированы по квадру от углов: свет сглажен, без ступенек.
     // День/ночь влияет ТОЛЬКО на небесный свет, свет блоков в пещерах ночью не тускнеет.
-    float packed_light = floor(BlockLight + 0.5);
-    float block_light = mod(packed_light, 16.0);
-    float sky_light = floor(packed_light / 16.0);
-    float sky_scene_light = (sky_light / 15.0) * ambient;
-    float block_scene_light = block_light / maxLightLevel;
+    float sky_scene_light = (SkyLight / 15.0) * ambient;
+    float block_scene_light = BlockLight / maxLightLevel;
     // Не допускаем абсолютно чёрных поверхностей во время потокового обновления света.
     float scene_light = max(max(sky_scene_light, block_scene_light), 0.32);
 

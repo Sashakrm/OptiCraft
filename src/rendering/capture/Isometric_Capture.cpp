@@ -194,9 +194,9 @@ bool Isometric_Capture::prepare_render() {
     }
 
     if (std::getenv("OPTICRAFT_ISO_DEBUG")) {
-        size_t sv = 0, fv = 0, lv = 0;
-        for (const auto& r : renderables) if (r.meshes) { sv += r.meshes->solid.size(); fv += r.meshes->flora.size(); lv += r.meshes->liquid.size(); }
-        LOG_INFO("iso verts: chunks=" + std::to_string(renderables.size()) + " solid=" + std::to_string(sv) + " flora=" + std::to_string(fv) + " liquid=" + std::to_string(lv));
+        size_t sections = 0;
+        for (const auto& r : renderables) if (r.meshes) for (const auto& s : r.meshes->sections) sections += s.has_geometry ? 1 : 0;
+        LOG_INFO("iso chunks=" + std::to_string(renderables.size()) + " sections with geometry=" + std::to_string(sections));
     }
 
     // Целимся в центр чанка игрока: так изображение симметрично вокруг него.
@@ -344,9 +344,12 @@ bool Isometric_Capture::render_tile(int tile_index) {
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
     glViewport(0, 0, tile_w, tile_h);
     m_renderer.clear_screen(m_sky_color.r, m_sky_color.g, m_sky_color.b);
+    const bool occlusion_was_enabled = m_renderer.is_occlusion_enabled();
     m_renderer.set_occlusion_enabled(false);
+    m_renderer.set_gpu_sync_residency(true);   // снимок обязан быть полным: все чанки на GPU до отрисовки тайла
     m_renderer.render_chunks(renderables, m_view, projection, m_ambient);
-    m_renderer.set_occlusion_enabled(true);
+    m_renderer.set_gpu_sync_residency(false);
+    m_renderer.set_occlusion_enabled(occlusion_was_enabled);
 
     std::vector<uint8_t> tile;
     try {

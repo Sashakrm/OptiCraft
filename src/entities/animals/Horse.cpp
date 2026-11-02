@@ -393,7 +393,7 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
 
     // Прыжок всадника: нажатие пробела на земле.
     if (input.jump && m_on_ground) {
-        m_vertical_velocity = Config::horse_ride_jump_speed;
+        m_vertical_velocity = Config::horse_ride_jump_speed * m_effects.jump_factor();
         m_on_ground = false;
     }
 
@@ -422,7 +422,7 @@ void Horse::update_riding_motion(float dt, const Horse_Ride_Input& input) {
     glm::vec3 lateral = m_ride_velocity - forward * speed_along;
 
     // --- Газ / тормоз ---
-    const float max_forward = Config::horse_ride_max_speed * energy_factor *
+    const float max_forward = Config::horse_ride_max_speed * energy_factor * m_effects.speed_factor() *
                               (m_sprinting ? Config::horse_sprint_speed_multiplier : 1.0f);
     const float accel_scale = input.handbrake ? 0.5f : 1.0f;
     if (input.throttle > 0.0f) {
@@ -481,7 +481,7 @@ void Horse::integrate(float dt, const Chunk_Manager& chunk_manager) {
     glm::vec3 horizontal = m_ride_velocity + m_knockback;
     m_knockback *= std::exp(-6.0f * dt);
     if (glm::length(m_knockback) < 0.05f) m_knockback = glm::vec3(0.0f);
-    horizontal = horizontal * Liquid_Physics::horizontal_drag(wet) + wet.flow;
+    horizontal = horizontal * Liquid_Physics::horizontal_drag(wet) * m_effects.speed_factor() + wet.flow;
 
     bool blocked = false;
     glm::vec3 target = position;
@@ -526,6 +526,8 @@ void Horse::integrate(float dt, const Chunk_Manager& chunk_manager) {
 // ---------------------------------------------------------------------------------------
 void Horse::update(float dt, const Chunk_Manager& chunk_manager,
                    const Horse_Context& context, const Horse_Ride_Input& ride_input) {
+    const int regen_ticks = m_effects.update(dt);
+    if (!m_dying && regen_ticks > 0) m_health = std::min(Config::horse_max_health, m_health + static_cast<float>(regen_ticks));
     if (m_dying) {
         m_death_timer += dt;
         const float fall_t = std::clamp(m_death_timer / (Config::horse_death_seconds * 0.75f), 0.0f, 1.0f);

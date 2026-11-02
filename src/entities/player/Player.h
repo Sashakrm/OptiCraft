@@ -10,6 +10,7 @@
 #include "input/Input_Manager.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "physics/Liquid_Physics.h"
+#include "entities/effects/Status_Effects.h"
 
 class Player {
 private:
@@ -27,6 +28,9 @@ private:
 
     // Полёт
     bool m_is_flying = false;
+    bool m_double_jump_flight = false; // двойной прыжок переключает полёт (только творческий режим)
+    bool m_jump_was_down = false;      // Space был зажат в прошлом кадре — ловим фронт нажатия
+    float m_jump_tap_timer = 0.0f;     // > 0: идёт окно, в котором второе нажатие даст полёт
     bool m_noclip = false;    // полёт сквозь блоки (третья ступень F1: режим наблюдателя)
     float m_fly_speed = Config::player_fly_speed;
 
@@ -46,6 +50,7 @@ private:
     // Голод (Survival). Модель как в Minecraft 1.8: еда (0..max) + насыщение + истощение,
     // см. константы в Config.h и update_hunger(). В Creative не тратится (m_hunger_enabled).
     int m_food_level = Config::player_max_food;
+    Status_Effects m_effects;
     float m_saturation = Config::player_initial_saturation;
     float m_exhaustion = 0.0f;
     float m_hunger_regen_timer = 0.0f;
@@ -82,6 +87,10 @@ private:
     // Полёт с коллизиями: движение по осям по очереди, упёрся — гасим скорость по этой оси.
     void move_flying_with_collision(float delta_time, const Chunk_Manager& chunk_manager);
     bool is_solid_block_at(const glm::vec3& world_pos, const Chunk_Manager& chunk_manager) const;
+    // Пересекает ли AABB игрока [pmin,pmax] твёрдую часть блока в клетке (x,y,z): для кубов — весь блок,
+    // для блоков формы — их боксы (см. Block_Shapes.h).
+    bool block_hits_box(int x, int y, int z, const glm::vec3& pmin, const glm::vec3& pmax,
+                        const Chunk_Manager& chunk_manager) const;
 
     bool would_fit_at_height(float height, const Chunk_Manager& chunk_manager) const;
     void update_crouch(const Chunk_Manager& chunk_manager);
@@ -103,6 +112,9 @@ public:
     // Noclip — полёт без коллизий; имеет смысл только вместе с полётом.
     void set_noclip(bool noclip) { m_noclip = noclip && m_is_flying; }
     bool is_noclip() const { return m_noclip; }
+    // Творческий режим: два прыжка подряд (Space) переключают полёт. В выживании выключено.
+    void set_double_jump_flight(bool enabled) { m_double_jump_flight = enabled; m_jump_tap_timer = 0.0f; }
+    bool double_jump_flight() const { return m_double_jump_flight; }
 
     // Верховая езда
     bool is_riding() const { return m_is_riding; }
@@ -123,6 +135,10 @@ public:
     bool is_alive() const { return m_health > 0; }
     void take_damage(int amount);
     void heal(int amount);
+
+    // Эффекты зелий (регенерация, скорость, сила прыжка). Тикают в update().
+    Status_Effects& effects() { return m_effects; }
+    const Status_Effects& effects() const { return m_effects; }
 
     // Голод. update_hunger зовётся каждый кадр из Game (только в Survival и пока игрок жив):
     // переводит истощение в потерю насыщения/еды, лечит при сытости и бьёт при полном голоде.
@@ -151,6 +167,7 @@ public:
     // Горизонталь уходит в m_impulse и затухает; вертикаль даётся сразу скоростью прыжка.
     void apply_impulse(const glm::vec3& direction, float speed);
     // Горизонтальная скорость тела (включая импульс и течение) — от неё зависит урон удара.
+    const glm::vec3& get_velocity() const { return m_velocity; }
     float get_horizontal_speed() const { return glm::length(glm::vec2(m_velocity.x, m_velocity.z)); }
 
     // Воздух (Survival): сколько секунд осталось и голова ли под водой (для HUD).

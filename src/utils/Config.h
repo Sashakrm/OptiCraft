@@ -39,7 +39,7 @@ namespace Config {
     // Допустимые значения дальности прорисовки (в чанках), которые перебирает
     // кнопка в меню настроек. chunk_load_radius — значение по умолчанию.
     constexpr int render_distance_min = 2;
-    constexpr int render_distance_max = 16;
+    constexpr int render_distance_max = 48;
     // Дальность прорисовки травы и цветов, в чанках. Флора — самая мелкая и самая
     // многочисленная геометрия, вдалеке она вырождается в пиксельный шум, поэтому
     // её радиус задаётся отдельно от общей дальности. -1 = без ограничения.
@@ -50,6 +50,18 @@ namespace Config {
     // на 1 за каждый блок пути через прозрачные соседние клетки (см. Chunk_Manager::propagate_light).
     // 14 подобрано под явное требование "радиус около 14 блоков".
     constexpr int max_light_level = 14;
+
+    // Дальность прямой тени от непрозрачных блоков над клеткой (в блоках). Крыша ближе этого
+    // расстояния закрывает небо (клетка темнеет), а дальше — не отбрасывает тени вообще: парящий
+    // остров высоко над землёй не даёт тени на поверхность. Пещеры выше этого значения будут
+    // освещены сверху, поэтому дальность не стоит делать слишком большой.
+    constexpr int sky_shadow_range = 32;
+    // Погода: сколько длится одно состояние (ясно / облачно / дождь), в секундах реального времени.
+    constexpr float weather_min_duration = 180.0f;
+    constexpr float weather_max_duration = 480.0f;
+
+    // Враги в выживании появляются только там, где освещение ниже этого значения (0..15).
+    constexpr int hostile_spawn_max_light = 3;   // спавн при свете < 4
     constexpr int decoration_overhang = 8;
     constexpr uint16_t seed =1327;
 
@@ -69,8 +81,10 @@ namespace Config {
     constexpr int player_max_health = 20;
     constexpr float player_crouch_height = 1.5f;
     constexpr float player_sneak_speed_multiplier = 0.3f;  // Shift: скорость ходьбы × это значение
+    constexpr float player_step_height = 0.5f;             // подъём без прыжка: полублок (ступеньки, плиты)
     constexpr float player_sneak_edge_drop = 0.6f;         // Shift: не шагать туда, где под ногами пусто глубже этого
-    constexpr float player_fly_speed = 8.0f;
+    constexpr float player_fly_speed = 198.0f;
+    constexpr float double_jump_window_seconds = 0.35f;
     // Бег: удержание Ctrl на земле при движении вперёд. Не работает при приседе и в полёте.
     constexpr float player_sprint_speed_multiplier = 1.3f;
     constexpr float exhaustion_sprint_per_meter = 0.1f;   // бег тратит сытость в 10 раз быстрее ходьбы
@@ -164,6 +178,11 @@ namespace Config {
     constexpr int cow_drop_max = 3;
     constexpr int horse_drop_min = 1;
     constexpr int horse_drop_max = 3;
+    // Кожа: падает вместе с мясом у коров и лошадей (Survival, при убийстве).
+    constexpr int cow_leather_min = 1;
+    constexpr int cow_leather_max = 2;
+    constexpr int horse_leather_min = 1;
+    constexpr int horse_leather_max = 2;
 
     // --- Враждебные мобы (Survival, по умолчанию появляются вокруг игрока) -----------------
     // Зомби и скелет: видят игрока в radius (вдвое меньше, если игрок крадётся), бегут к нему и
@@ -399,6 +418,24 @@ namespace Config {
     // Каждое очко защиты снижает урон от мобов на (1/25), но не больше чем на 20 очков (80%).
     constexpr int armor_points_cap = 20;
     constexpr float armor_points_divisor = 25.0f;
+
+    // --- Зелья-шарики и эффекты (см. entities/effects/Status_Effects.h) ----------------------
+    // Регенерация: 1 HP за тик; тик каждые potion_regen_interval секунд (делится на уровень).
+    constexpr float potion_regen_duration = 12.0f;
+    constexpr float potion_regen_interval = 2.5f;
+    // Скорость: +potion_speed_bonus за каждый уровень.
+    constexpr float potion_speed_duration = 30.0f;
+    constexpr float potion_speed_bonus = 0.25f;
+    // Сила прыжка: +potion_jump_bonus за каждый уровень.
+    constexpr float potion_jump_duration = 30.0f;
+    constexpr float potion_jump_bonus = 0.35f;
+    // Шарик летит с этой скоростью (блоков/с) и разбивается о блок, моба или через potion_thrown_lifetime.
+    constexpr float potion_throw_speed = 14.0f;
+    constexpr float potion_thrown_lifetime = 6.0f;
+    // Радиус разлёта: все мобы и игрок внутри получают эффект.
+    constexpr float potion_splash_radius = 2.5f;
+    // Шарик попадает в моба, если его центр ближе этого расстояния к телу моба.
+    constexpr float potion_mob_hit_radius = 0.8f;
 }
 
 #endif //OPTICRAFT_CONFIG_H

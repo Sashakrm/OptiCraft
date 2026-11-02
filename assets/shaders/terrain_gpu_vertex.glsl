@@ -1,26 +1,26 @@
 #version 430 core
 // Вершинный шейдер GPU-мешера (см. Renderer::draw_solid_gpu). Квад не хранится как шесть Terrain_Vertex:
-// каждая вершина разворачивается из 8-байтной записи квада (mesh_greedy.comp) прямо здесь.
+// каждая вершина разворачивается из 16-байтной записи квада (mesh_greedy.comp) прямо здесь.
 // Выходы совпадают с terrain_vertex.glsl, поэтому фрагментный шейдер общий по смыслу.
 //
-// Вызов: glMultiDrawArraysIndirect, first = 0, baseInstance = глобальный номер секции
-// (слот*4 + секция). gl_BaseInstance в GLSL 4.30 нет, поэтому номер приходит атрибутом aSection
+// Вызов: glMultiDrawArraysIndirect, first = номер первого квада секции в пуле * 6, baseInstance =
+// ручка чанка*4 + секция. gl_BaseInstance в GLSL 4.30 нет, поэтому номер приходит атрибутом aSection
 // с делителем 1: при baseInstance GL читает элемент с индексом baseInstance + 0, а буфер
-// содержит тождественную последовательность 0..N-1. Вершина: квад = gl_VertexID / 6, угол = %6.
+// содержит тождественную последовательность 0..N-1. gl_VertexID у DrawArrays начинается с first,
+// поэтому квад = gl_VertexID / 6 — абсолютный номер в пуле, угол = gl_VertexID % 6.
 layout(location = 0) in uint aSection;
-layout(std430, binding = 2) readonly buffer Quads { uvec2 quads[]; };
+layout(std430, binding = 2) readonly buffer Quads { uvec4 quads[]; };
 layout(std430, binding = 8) readonly buffer Rects { vec4 rects[]; };
-// Мировой минимальный угол каждого слота (xyz); w не используется.
+// Мировой минимальный угол каждого чанка по ручке (xyz); w не используется.
 layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 
-uniform int u_quad_cap;
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
+// Готовая projection * view (model здесь всегда единичная): одно умножение на вершину вместо трёх.
+uniform mat4 view_projection;
 
 out vec2 Local;
 out float NormalY;
 out float BlockLight;
+out float SkyLight;
 flat out vec4 Rect;
 out float AO;
 
@@ -49,15 +49,17 @@ void main() {
     const uint k = vid - qi * 6u;
     const uint sec = aSection;
 
-    const uvec2 rec = quads[sec * uint(u_quad_cap) + qi];
+    const uvec4 rec = quads[qi];
     const uint w0 = rec.x;
     const uint w1 = rec.y;
+    const uint w2 = rec.z;   // свет четырёх углов: байт угла = sky<<4 | blk
     const vec3 cell = vec3(float(w0 & 31u), float((w0 >> 5u) & 31u), float((w0 >> 10u) & 31u));
     const uint axis = (w0 >> 15u) & 3u;
     const bool pos = ((w0 >> 17u) & 1u) != 0u;
     const float w = float(((w0 >> 18u) & 31u) + 1u);
     const float h = float(((w0 >> 23u) & 31u) + 1u);
     const bool rot = ((w0 >> 28u) & 1u) != 0u;
+    const float normal_extent = float(1u << ((w0 >> 29u) & 3u));
 
     // AO углов: два бита на угол (код fu + 2*fv), см. face_ao в Chunk.cpp. Диагональ идёт через
     // более тёмную пару углов, поэтому порядок вершин выбирается по AO.
@@ -72,7 +74,7 @@ void main() {
     const float fu = float(code & 1);
     const float fv = float((code >> 1) & 1);
     const vec3 base = origins[sec >> 2u].xyz + cell;
-    const float plane = pos ? 1.0 : 0.0;
+    const float plane = pos ? normal_extent : 0.0;
 
     vec3 p;
     vec2 local;
@@ -91,8 +93,10 @@ void main() {
 
     Local = local;
     NormalY = (axis == 1u) ? (pos ? 1.0 : -1.0) : 0.0;
-    BlockLight = float((w1 >> 16u) & 0xFFu);
+    const uint cl = (w2 >> (8u * uint(code))) & 0xFFu;
+    SkyLight = float(cl >> 4u);
+    BlockLight = float(cl & 15u);
     Rect = rects[w1 & 0x7FFFu];
     AO = float((ao_bits >> (2u * uint(code))) & 3u);
-    gl_Position = projection * view * model * vec4(p, 1.0);
+    gl_Position = view_projection * vec4(p, 1.0);
 }

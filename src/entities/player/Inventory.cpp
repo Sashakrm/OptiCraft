@@ -265,7 +265,7 @@ void Inventory::damage_armor(int amount) {
     for (Item_Stack& piece : m_armor) {
         if (piece.is_empty()) continue;
         piece.damage += amount;
-        if (piece.damage >= get_block_props(piece.type).max_durability) piece = Item_Stack{};
+        if (piece.damage >= effective_max_durability(piece)) piece = Item_Stack{};
     }
 }
 
@@ -363,7 +363,7 @@ bool Inventory::damage_selected_tool(int amount) {
     if (m_mode != Game_Mode::Survival) return false;
     Item_Stack& slot = m_hotbar[static_cast<size_t>(m_selected_index)];
     if (slot.is_empty()) return false;
-    const int max_durability = get_block_props(slot.type).max_durability;
+    const int max_durability = effective_max_durability(slot);
     if (max_durability <= 0) return false;
     slot.damage += amount;
     if (slot.damage >= max_durability) {
@@ -371,6 +371,13 @@ bool Inventory::damage_selected_tool(int amount) {
         return true;
     }
     return false;
+}
+
+bool Inventory::enchant_selected_durability(int level) {
+    Item_Stack& slot = m_hotbar[static_cast<size_t>(m_selected_index)];
+    if (slot.is_empty() || get_block_props(slot.type).max_durability <= 0) return false;
+    slot.enchant_durability = std::clamp(level, 0, 3);
+    return true;
 }
 
 bool Inventory::consume_selected(int count) {
@@ -430,16 +437,19 @@ std::string Inventory::serialize() const {
         if (m_hotbar[i].is_empty()) continue;
         out << "h " << i << " " << static_cast<int>(m_hotbar[i].type) << " " << m_hotbar[i].count << "\n";
         if (m_hotbar[i].damage > 0) out << "hd " << i << " " << m_hotbar[i].damage << "\n";
+        if (m_hotbar[i].enchant_durability > 0) out << "he " << i << " " << m_hotbar[i].enchant_durability << "\n";
     }
     for (size_t i = 0; i < m_storage.size(); ++i) {
         if (m_storage[i].is_empty()) continue;
         out << "s " << i << " " << static_cast<int>(m_storage[i].type) << " " << m_storage[i].count << "\n";
         if (m_storage[i].damage > 0) out << "sd " << i << " " << m_storage[i].damage << "\n";
+        if (m_storage[i].enchant_durability > 0) out << "se " << i << " " << m_storage[i].enchant_durability << "\n";
     }
     for (size_t i = 0; i < m_armor.size(); ++i) {
         if (m_armor[i].is_empty()) continue;
         out << "a " << i << " " << static_cast<int>(m_armor[i].type) << "\n";
         if (m_armor[i].damage > 0) out << "ad " << i << " " << m_armor[i].damage << "\n";
+        if (m_armor[i].enchant_durability > 0) out << "ae " << i << " " << m_armor[i].enchant_durability << "\n";
     }
     return out.str();
 }
@@ -466,6 +476,17 @@ void Inventory::deserialize(const std::string& text) {
         } else if (tag == "ad") {
             size_t i = 0; int dmg = 0; in >> i >> dmg;
             if (i < m_armor.size() && !m_armor[i].is_empty()) m_armor[i].damage = std::max(0, dmg);
+        } else if (tag == "he" || tag == "se") {
+            size_t i = 0; int level = 0; in >> i >> level;
+            std::vector<Item_Stack>& list = tag == "he" ? m_hotbar : m_storage;
+            if (i < list.size() && !list[i].is_empty() && level > 0) {
+                list[i].enchant_durability = std::clamp(level, 0, 3);
+            }
+        } else if (tag == "ae") {
+            size_t i = 0; int level = 0; in >> i >> level;
+            if (i < m_armor.size() && !m_armor[i].is_empty() && level > 0) {
+                m_armor[i].enchant_durability = std::clamp(level, 0, 3);
+            }
         } else if (tag == "hd" || tag == "sd") {
             size_t i = 0; int dmg = 0; in >> i >> dmg;
             std::vector<Item_Stack>& list = tag == "hd" ? m_hotbar : m_storage;

@@ -12,14 +12,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Тип сборки" FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
-                 Debug Release RelWithDebInfo MinSizeRel)
+            Debug Release RelWithDebInfo MinSizeRel)
     message(STATUS "CMAKE_BUILD_TYPE не задан — используется Release")
 endif()
 
-# Нативные инструкции ускоряют шум, но собранный бинарник перестаёт запускаться
-# на более старых процессорах. По умолчанию выключено; включается через
-# -DOPTICRAFT_NATIVE_ARCH=ON, когда сборка только для своей машины.
-option(OPTICRAFT_NATIVE_ARCH "Оптимизировать под процессор сборочной машины" OFF)
+# Нативные инструкции ускоряют шум/битовые очереди. Для локальной игры включены,
+# так как сборка запускается на той же машине. Для переносимого релиза отключить:
+# -DOPTICRAFT_NATIVE_ARCH=OFF.
+option(OPTICRAFT_NATIVE_ARCH "Оптимизировать под процессор сборочной машины" ON)
+
+# Межмодульная оптимизация (LTO) в Release включена по умолчанию: это позволяет
+# оптимизатору видеть мелкие функции шума/сеток между .cpp-файлами. При необходимости
+# её можно отключить через -DOPTICRAFT_LTO=OFF; время линковки может увеличиться.
+option(OPTICRAFT_LTO "Включить LTO в Release" ON)
 
 # Удобно для IDE (VS Code, CLion и т.д.)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -38,7 +43,10 @@ set(SOURCES
         ${SRC_DIR}/core/app/Application.cpp
         ${SRC_DIR}/core/game/Game.cpp
         ${SRC_DIR}/core/game/Day_Night_Cycle.cpp
+        ${SRC_DIR}/core/game/Weather_Cycle.cpp
         ${SRC_DIR}/core/game/Tick.cpp
+        ${SRC_DIR}/mobs/Boss.cpp
+        ${SRC_DIR}/mobs/Knight_Ai.cpp
         ${SRC_DIR}/mobs/Mobs_Update.cpp
 
         # entities
@@ -61,6 +69,7 @@ set(SOURCES
         # utils
         ${SRC_DIR}/utils/logging/Logger.cpp
         ${SRC_DIR}/utils/text/Json.cpp
+        ${SRC_DIR}/utils/binary/Binary_Json.cpp
         ${SRC_DIR}/utils/text/Localization.cpp
 
         # world
@@ -69,6 +78,8 @@ set(SOURCES
         ${SRC_DIR}/world/blocks/Block_Entity_Store.cpp
         ${SRC_DIR}/world/crafting/Recipe.cpp
         ${SRC_DIR}/world/crafting/Crop_Manager.cpp
+        ${SRC_DIR}/world/crafting/Sapling_Manager.cpp
+        ${SRC_DIR}/world/logic/Logic_Manager.cpp
         ${SRC_DIR}/world/crafting/Smelting.cpp
         ${SRC_DIR}/world/storage/Region_File.cpp
         ${SRC_DIR}/world/storage/Chunk_IO.cpp
@@ -86,6 +97,7 @@ set(SOURCES
         ${SRC_DIR}/world/storage/World_File.cpp
         ${SRC_DIR}/world/fluids/Fluid_Simulator.cpp
         ${SRC_DIR}/world/dimensions/Dimension.cpp
+        ${SRC_DIR}/world/structures/Dungeon_Layout.cpp
 
         # physics
         ${SRC_DIR}/physics/Raycast.cpp
@@ -107,6 +119,8 @@ set(SOURCES
         ${SRC_DIR}/entities/hostile/Hostile_Mob.cpp
         ${SRC_DIR}/entities/animals/ai/Horse_AI.cpp
         ${SRC_DIR}/entities/animals/Horse.cpp
+        src/world/blocks/Block_Shapes.cpp
+        src/entities/effects/Status_Effects.cpp
 )
 
 set(PLATFORM_SOURCES
@@ -120,6 +134,16 @@ set(THIRD_PARTY_SOURCES
         # шум для генерации мира (OpenSimplex2S, C)
         ${CMAKE_CURRENT_SOURCE_DIR}/external/opensimplex/OpenSimplex2S.c
 )
+
+# =============== Инструмент json -> OCJB (tools/json2bin) ===============
+# Переводит ассеты (blocks.json, рецепты, атласы, ...) в бинарный формат *.ocb и читает их обратно.
+add_executable(json2bin
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/json2bin/json2bin.cpp
+        ${SRC_DIR}/utils/binary/Binary_Json.cpp
+        ${SRC_DIR}/utils/text/Json.cpp
+        ${SRC_DIR}/utils/logging/Logger.cpp
+)
+target_include_directories(json2bin PRIVATE ${SRC_DIR})
 
 # =============== Создаём исполняемый файл ===============
 add_executable(${PROJECT_NAME}
@@ -188,6 +212,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 
         ${SRC_DIR}/mobs/Mob_Model.h
         ${SRC_DIR}/mobs/Mob.h
+        ${SRC_DIR}/mobs/Knight_Ai.h
         ${SRC_DIR}/mobs/Mobs_Update.h
 
         ${SRC_DIR}/entities/animals/ai/Pig_AI.h
@@ -228,6 +253,16 @@ find_package(glfw3 REQUIRED QUIET)
 if(UNIX AND NOT APPLE)
     find_package(X11 REQUIRED)
     find_package(Threads REQUIRED)
+endif()
+
+if(OPTICRAFT_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT OPTICRAFT_IPO_OK OUTPUT OPTICRAFT_IPO_LOG)
+    if(OPTICRAFT_IPO_OK)
+        set_property(TARGET ${PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    else()
+        message(WARNING "LTO не поддерживается компилятором: ${OPTICRAFT_IPO_LOG}")
+    endif()
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

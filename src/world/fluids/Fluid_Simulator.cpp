@@ -19,12 +19,30 @@ namespace {
         bool loaded = false;
     };
 
+    // Чанк, из которого читали последним. Соседние клетки почти всегда лежат в одном чанке, поэтому
+    // повторный поиск в хеш-таблице чанков не нужен. Кэш сбрасывается на входе в update/notify_changed:
+    // между кадрами чанк мог быть выгружен или заменён.
+    struct Last_Chunk {
+        const Chunk_Manager* owner = nullptr;
+        glm::ivec3 key{0};
+        Chunk* chunk = nullptr;
+        bool valid = false;
+    };
+    Last_Chunk g_last_chunk;
+    void reset_chunk_cache() { g_last_chunk.valid = false; }
+
     // Клетка мира; за пределами загруженных чанков и высот мира loaded = false.
     Cell read_cell(Chunk_Manager& chunks, const glm::ivec3& p) {
         Cell cell;
         if (p.y < Config::world_min_y || p.y > Config::world_max_y) return cell;
         const glm::ivec3 c = chunks.get_chunk_coords_for_world(p.x, p.y, p.z);
-        Chunk* chunk = chunks.get_chunk(c.x, c.y, c.z);
+        Chunk* chunk;
+        if (g_last_chunk.valid && g_last_chunk.owner == &chunks && g_last_chunk.key == c) {
+            chunk = g_last_chunk.chunk;
+        } else {
+            chunk = chunks.get_chunk(c.x, c.y, c.z);
+            g_last_chunk = {&chunks, c, chunk, true};
+        }
         if (!chunk) return cell;
         const int lx = p.x - c.x * Config::chunk_size;
         const int ly = p.y - c.y * Config::chunk_height;
@@ -232,6 +250,7 @@ void Fluid_Simulator::schedule(const glm::ivec3& position, int delay_ticks) {
 }
 
 void Fluid_Simulator::notify_changed(Chunk_Manager& chunks, const glm::ivec3& position) {
+    reset_chunk_cache();
     static constexpr glm::ivec3 k_around[7] = {
         {0, 0, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
     };
@@ -245,6 +264,7 @@ void Fluid_Simulator::notify_changed(Chunk_Manager& chunks, const glm::ivec3& po
 }
 
 void Fluid_Simulator::update(Chunk_Manager& chunks, float delta_time) {
+    reset_chunk_cache();
     if (m_scheduled.empty()) {
         m_accumulator = 0.0f;   // без работы время не копим: иначе после паузы был бы всплеск тиков
         return;

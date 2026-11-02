@@ -11,6 +11,7 @@
 #define OPTICRAFT_PASSIVE_ANIMAL_H
 
 #include <glm/glm.hpp>
+#include "entities/effects/Status_Effects.h"
 #include <random>
 #include <string>
 #include "entities/animals/Breeding.h"
@@ -69,6 +70,10 @@ public:
     // Урон среды (утопление): без отбрасывания. Возвращает true, если умер.
     bool take_drowning_damage(float amount);
     bool is_dying() const { return m_dying; }
+    float get_health() const { return m_health; }
+    Status_Effects& effects() { return m_effects; }
+    const Status_Effects& effects() const { return m_effects; }
+    bool is_panicking() const { return m_panic_timer > 0.0f; }
     bool kill() {
         if (m_dying) return false;
         m_health = 0.0f; m_dying = true; m_death_timer = 0.0f; m_knockback = glm::vec3(0.0f);
@@ -90,6 +95,7 @@ private:
     Breeding_State m_breeding;
 
     float m_health;
+    Status_Effects m_effects;
     float m_invulnerable_timer = 0.0f;
     float m_hurt_flash_timer = 0.0f;
     float m_panic_timer = 0.0f;

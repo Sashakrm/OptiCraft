@@ -5,6 +5,7 @@
 #include "utils/logging/Logger.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -49,6 +50,54 @@ inline int floordiv_int(int a, int b) {
     // std::mt19937 (624 слова состояния) на каждый блок поверхности.
     int deterministic_roll(int x, int z, uint32_t seed, int salt, int modulo) {
         return static_cast<int>(hash_position(x, z, seed, salt) % static_cast<uint64_t>(modulo));
+    }
+
+    // Размещение деревьев с минимальным расстоянием. Каждый столбец получает
+    // детерминированный приоритет из хеша; дерево растёт только там, где приоритет
+    // строго выше, чем у всех столбцов в квадрате радиуса `radius`. Так два дерева
+    // никогда не окажутся ближе radius+1 блоков друг к другу, и не нужно знать
+    // соседние чанки. Приоритет не зависит от биома, поэтому граница биома не
+    // даёт дыр: решает только хеш.
+    constexpr int kTreeAnchorSalt = 9;
+
+    bool is_tree_anchor(int x, int z, uint32_t seed, int radius) {
+        const uint64_t self = hash_position(x, z, seed, kTreeAnchorSalt);
+        for (int dz = -radius; dz <= radius; ++dz) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (dx == 0 && dz == 0) continue;
+                if (hash_position(x + dx, z + dz, seed, kTreeAnchorSalt) >= self) return false;
+            }
+        }
+        return true;
+    }
+
+    // Редкие деревья (слизовые ивы): мир разбит на ячейки 60x60, в каждой не больше одного
+    // кандидата, смещённого от центра ячейки не далее чем на ±5. Кандидаты соседних ячеек
+    // отстоят не меньше чем на 60 - 2*5 = 50 блоков, поэтому два дерева ближе 50 не встречаются.
+    constexpr int kSparseCell = 60;
+    constexpr int kSparseJitter = 5;
+    constexpr int kSparseSalt = 0x5C1F;
+    constexpr uint64_t kSparseExistPercent = 40;   // какая доля ячеек вообще получает дерево
+
+    bool is_sparse_tree_anchor(int x, int z, uint32_t seed) {
+        const int cell_x = static_cast<int>(std::floor(static_cast<double>(x) / kSparseCell));
+        const int cell_z = static_cast<int>(std::floor(static_cast<double>(z) / kSparseCell));
+        const uint64_t h = hash_position(cell_x, cell_z, seed, kSparseSalt);
+        if ((h >> 32) % 100 >= kSparseExistPercent) return false;
+        const int span = 2 * kSparseJitter + 1;
+        const int jx = static_cast<int>(h % span) - kSparseJitter;
+        const int jz = static_cast<int>((h >> 16) % span) - kSparseJitter;
+        const int tx = cell_x * kSparseCell + kSparseCell / 2 + jx;
+        const int tz = cell_z * kSparseCell + kSparseCell / 2 + jz;
+        return x == tx && z == tz;
+    }
+
+    // Плотность леса по биому: доля подходящих якорей, где реально растёт дерево. Якоря
+    // (is_tree_anchor) и так не ближе radius+1 друг к другу; этот отдельный хеш разреживает
+    // их, чтобы между стволами и кронами оставались просветы и по лесу можно было ходить.
+    constexpr int kTreeDensitySalt = 0x7DE5;
+    bool passes_tree_density(int x, int z, uint32_t seed, int percent) {
+        return hash_position(x, z, seed, kTreeDensitySalt) % 100 < static_cast<uint64_t>(percent);
     }
 
     double interval_distance(double value, double min_value, double max_value) {
@@ -108,19 +157,14 @@ const std::vector<Biome_Id>& selectable_single_biomes() {
 // ни одной строки памяти и не нуждаются в синхронизации. Каждый кэш прямого
 // отображения (direct-mapped): попадание — одно сравнение ключа, промах — пересчёт.
 namespace {
-    struct Terrain_Point {
-        int key_x = 0, key_z = 0;
-        bool valid = false;
-        double continentalness = 0.0;
-        double erosion = 0.0;
-        double mountainness = 0.0;
-        double surface_height = 0.0;
-        uint32_t epoch = 0;
-    };
-
-    constexpr size_t kTerrainCacheBits = 13;             // 8192 колонок
+    // 32768 колонок на поток: построители рек и пещер обходят окна в сотни блоков и вытесняли
+    // из прежних 8192 записей рельеф, нужный генерации чанков.
+    constexpr size_t kTerrainCacheBits = 15;
     constexpr size_t kTerrainCacheSize = 1u << kTerrainCacheBits;
     constexpr size_t kTerrainCacheMask = kTerrainCacheSize - 1;
+
+    // Максимальная высота структуры (дерева) над поверхностью: выше неё декорации чанк не затрагивают.
+    constexpr int kDecorationMaxHeight = 26;
 
     constexpr size_t kColumnCacheBits = 13;              // 8192 колонки
     constexpr size_t kColumnCacheSize = 1u << kColumnCacheBits;
@@ -308,10 +352,16 @@ double World_Generator::continental_elevation(double c) const {
 double World_Generator::raw_surface_height(int world_x, int world_z,
                                            double continentalness,
                                            double erosion) const {
+    return raw_surface_height(world_x, world_z, continentalness, erosion,
+                              normalize_noise(fbm2(m_mountain, world_x, world_z, 4, 0.00125, 2.0, 0.5)));
+}
+
+double World_Generator::raw_surface_height(int world_x, int world_z,
+                                           double continentalness,
+                                           double erosion,
+                                           double mountain_signal) const {
     const double broad_terrain = fbm2(m_terrain, world_x, world_z, 5, 0.0022, 2.0, 0.5);
     const double detail_terrain = fbm2(m_detail, world_x, world_z, 3, 0.012, 2.0, 0.5);
-    const double mountain_signal = normalize_noise(
-        fbm2(m_mountain, world_x, world_z, 4, 0.00125, 2.0, 0.5));
 
     const double base = continental_elevation(continentalness);
 
@@ -353,10 +403,35 @@ double World_Generator::raw_surface_height(int world_x, int world_z,
 //  Кэш рельефа и колонок
 // ---------------------------------------------------------------------------
 namespace {
-    Terrain_Point* terrain_cache_slot(int x, int z) {
-        static thread_local Terrain_Point cache[kTerrainCacheSize];
+    World_Generator::Terrain_Point* terrain_cache_slot(int x, int z) {
+        static thread_local World_Generator::Terrain_Point cache[kTerrainCacheSize];
         return &cache[cache_index2(x, z, kTerrainCacheMask)];
     }
+}
+
+World_Generator::Terrain_Point World_Generator::terrain_point(int x, int z) const {
+    Terrain_Point* slot = terrain_cache_slot(x, z);
+    if (slot->valid && slot->epoch == m_cache_epoch && slot->key_x == x && slot->key_z == z) {
+        return *slot;
+    }
+
+    Terrain_Point point;
+    point.key_x = x;
+    point.key_z = z;
+    point.valid = true;
+    point.epoch = m_cache_epoch;
+    point.continentalness = split_signed_noise(
+        fbm2(m_continental, x, z, 5, 0.00022, 2.0, 0.5));
+    point.erosion = normalize_noise(fbm2(m_erosion, x, z, 4, 0.0018, 2.0, 0.5));
+    point.mountainness = normalize_noise(
+        fbm2(m_mountain, x, z, 4, 0.00125, 2.0, 0.5));
+    // Сигнал гор уже посчитан выше (mountainness) — второй раз тот же fbm не вычисляем.
+    point.surface_height = raw_surface_height(x, z,
+                                              point.continentalness,
+                                              point.erosion,
+                                              point.mountainness);
+    *slot = point;
+    return point;
 }
 
 // Континентальность, эрозия, горность и высота поверхности одной колонки.
@@ -370,31 +445,7 @@ World_Generator::Column World_Generator::build_column(int world_x, int world_z) 
 
     if (!m_noise_environment) return column;
 
-    const auto terrain_of = [this](int x, int z) -> Terrain_Point {
-        Terrain_Point* slot = terrain_cache_slot(x, z);
-        if (slot->valid && slot->epoch == m_cache_epoch &&
-            slot->key_x == x && slot->key_z == z) {
-            return *slot;
-        }
-
-        Terrain_Point point;
-        point.key_x = x;
-        point.key_z = z;
-        point.valid = true;
-        point.epoch = m_cache_epoch;
-        point.continentalness = split_signed_noise(
-            fbm2(m_continental, x, z, 5, 0.00022, 2.0, 0.5));
-        point.erosion = normalize_noise(fbm2(m_erosion, x, z, 4, 0.0018, 2.0, 0.5));
-        point.mountainness = normalize_noise(
-            fbm2(m_mountain, x, z, 4, 0.00125, 2.0, 0.5));
-        point.surface_height = raw_surface_height(x, z,
-                                                  point.continentalness,
-                                                  point.erosion);
-        *slot = point;
-        return point;
-    };
-
-    const Terrain_Point here = terrain_of(world_x, world_z);
+    const Terrain_Point here = terrain_point(world_x, world_z);
     column.continentalness = here.continentalness;
     column.erosion = here.erosion;
     column.mountainness = here.mountainness;
@@ -404,8 +455,8 @@ World_Generator::Column World_Generator::build_column(int world_x, int world_z) 
     // Наклон нужен, чтобы песок ложился только на пологий берег, а не на отвесную
     // скалу. Соседние точки рельефа почти всегда уже в кэше — их считает соседняя
     // колонка того же чанка.
-    const double east = terrain_of(world_x + 1, world_z).surface_height;
-    const double north = terrain_of(world_x, world_z + 1).surface_height;
+    const double east = terrain_point(world_x + 1, world_z).surface_height;
+    const double north = terrain_point(world_x, world_z + 1).surface_height;
     column.slope = std::max(std::abs(east - here.surface_height),
                             std::abs(north - here.surface_height));
 
@@ -476,7 +527,7 @@ bool World_Generator::sky_anchor_valid(int anchor_x, int anchor_z) const {
     const double mountain_signal = normalize_noise(
         fbm2(m_mountain, anchor_x, anchor_z, 4, 0.00125, 2.0, 0.5));
 
-    const double surface = raw_surface_height(anchor_x, anchor_z, c, erosion);
+    const double surface = raw_surface_height(anchor_x, anchor_z, c, erosion, mountain_signal);
 
     const bool mountain = mountain_signal > 0.75 && erosion > 0.25 && surface > 80.0;
     const bool ocean = c < -0.19;
@@ -799,8 +850,9 @@ Block_Types World_Generator::surface_block_for(int world_x, int world_z,
     }
 }
 
-Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int world_z,
-                                                  const Column& column) const {
+Block_Types World_Generator::subsurface_block_for(
+    int world_x, int world_y, int world_z, const Column& column,
+    const Subsurface_Coordinates* coordinates, double ore_y) const {
     const double below_surface = column.surface_height - static_cast<double>(world_y);
 
     constexpr double kMantleDepth = 4.0;
@@ -829,18 +881,30 @@ Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int 
 
     // Шум руды считаем лениво — только ниже мантии (дорогой noise3).
     const double ore = normalize_noise(m_caves.noise3(
-        world_x * 0.11, world_y * 0.11, world_z * 0.11));
+        coordinates ? coordinates->ore_x : world_x * 0.11,
+        coordinates ? ore_y : world_y * 0.11,
+        coordinates ? coordinates->ore_z : world_z * 0.11));
     if (below_surface >= 250.0) {
         if (ore > 0.84) return Block_Types::Rare_Mineral;
         if (ore > 0.76) return Block_Types::Diamond_Ore;
         return Block_Types::Deep_Stone;
     }
+    // Уголь и медь — свой шум (другое смещение и частота), чтобы жилы не совпадали с железом.
+    const auto vein = [&](double offset_x, double offset_y, double offset_z) {
+        return normalize_noise(m_caves.noise3(world_x * 0.13 + offset_x,
+                                              world_y * 0.13 + offset_y,
+                                              world_z * 0.13 + offset_z));
+    };
     if (below_surface >= 90.0) {
         if (ore > 0.915) return Block_Types::Diamond_Ore;
         if (ore > 0.86) return Block_Types::Gold_Ore;
+        if (vein(31.7, -4.2, 9.9) > 0.86) return Block_Types::Copper_Ore;
+        if (vein(-17.3, 12.6, 5.1) > 0.80) return Block_Types::Coal_Ore;
         if (ore > 0.74) return Block_Types::Iron_Ore;
         return Block_Types::Stone;
     }
+    if (vein(31.7, -4.2, 9.9) > 0.86) return Block_Types::Copper_Ore;
+    if (vein(-17.3, 12.6, 5.1) > 0.80) return Block_Types::Coal_Ore;
     if (ore > 0.82) return Block_Types::Iron_Ore;
     if (ore > 0.70 && column.biome == Biome_Id::Forest) return Block_Types::Mossy_Stone;
     return Block_Types::Stone;
@@ -849,6 +913,28 @@ Block_Types World_Generator::subsurface_block_for(int world_x, int world_y, int 
 Block_Types World_Generator::block_in_column(const Column& column,
                                              int world_x, int world_y,
                                              int world_z) const {
+    const bool village_center = m_dimension->villages &&
+        world_y > column.height &&
+        world_y <= column.height + Structure_Placement::kMarkerHeight &&
+        m_structures->village_center_at(world_x, world_z);
+    return block_in_column(column, world_x, world_y, world_z, village_center);
+}
+
+Block_Types World_Generator::block_in_column(const Column& column,
+                                             int world_x, int world_y,
+                                             int world_z,
+                                             bool village_center) const {
+    return block_in_column(column, world_x, world_y, world_z, village_center, nullptr, nullptr);
+}
+
+Block_Types World_Generator::block_in_column(const Column& column,
+                                             int world_x, int world_y,
+                                             int world_z,
+                                             bool village_center,
+                                             const River_Network::Column* river_column,
+                                             const Cave_Kind* cave_kind,
+                                             const Subsurface_Coordinates* material_coordinates,
+                                             double ore_y) const {
     // Измерение без земли (только острова): ни рельефа, ни воды, ни пещер.
     if (!m_dimension->ground) return Block_Types::Air;
 
@@ -857,7 +943,7 @@ Block_Types World_Generator::block_in_column(const Column& column,
     // Маркер деревни: столб над центром деревни (пока только для проверки размещения).
     if (m_dimension->villages && world_y > height &&
         world_y <= height + Structure_Placement::kMarkerHeight &&
-        m_structures->village_center_at(world_x, world_z)) {
+        village_center) {
         return Block_Types::Diamond;
     }
 
@@ -868,7 +954,18 @@ Block_Types World_Generator::block_in_column(const Column& column,
 
     // Реки: русло вырезано до уровня воды, поэтому проверяем до пещер и поверхности.
     if (m_dimension->rivers) {
-        switch (m_river_network->kind_at(world_x, world_y, world_z)) {
+        River_Kind kind = River_Kind::None;
+        if (river_column) {
+            // Эквивалент River_Network::kind_at, но профиль X/Z уже вычислен один раз
+            // на колонку вокселей, а не запрашивается повторно для каждого Y.
+            if (river_column->river && world_y > river_column->bed) {
+                if (world_y <= river_column->water) kind = River_Kind::Water;
+                else if (world_y <= river_column->top) kind = River_Kind::Air;
+            }
+        } else {
+            kind = m_river_network->kind_at(world_x, world_y, world_z);
+        }
+        switch (kind) {
             case River_Kind::Air:
                 return Block_Types::Air;
             case River_Kind::Water:
@@ -882,7 +979,9 @@ Block_Types World_Generator::block_in_column(const Column& column,
     // Вырезание и вода решаются в Cave_Network по мировым координатам, поэтому здесь только
     // перевод типа вокселя в блок.
     if (m_dimension->caves) {
-        switch (m_cave_network->kind_at(world_x, world_y, world_z)) {
+        const Cave_Kind kind = cave_kind ? *cave_kind
+                                        : m_cave_network->kind_at(world_x, world_y, world_z);
+        switch (kind) {
             case Cave_Kind::Air:
             case Cave_Kind::Sealed_Dry:
                 return Block_Types::Air;
@@ -895,7 +994,8 @@ Block_Types World_Generator::block_in_column(const Column& column,
     }
 
     if (world_y == height) return surface_block_for(world_x, world_z, column);
-    return subsurface_block_for(world_x, world_y, world_z, column);
+    return subsurface_block_for(world_x, world_y, world_z, column, material_coordinates,
+                                 ore_y);
 }
 
 // ---------------------------------------------------------------------------
@@ -940,12 +1040,17 @@ int World_Generator::get_height(int world_x, int world_z) const {
         case Terrain_Mode::Void: return m_dimension->spawn_height - 2; // spawn = height + 2
         case Terrain_Mode::Noise: break;
     }
-    return column_at(world_x, world_z).height;
+    // Построители пещер и рек спрашивают только высоту (десятки тысяч раз): строить для этого полную
+    // Column с климатом, наклоном и биомом незачем. Результат тот же: Column::height = floor(surface_height).
+    if (!m_noise_environment) return 0;
+    return static_cast<int>(std::floor(terrain_point(world_x, world_z).surface_height));
 }
 
 Block_Types World_Generator::get_block(int world_x, int world_y, int world_z) const {
     if (world_y < Config::world_min_y || world_y > Config::world_max_y)
         return Block_Types::Air;
+    if (world_y == Config::world_min_y)
+        return Block_Types::Mantle_Stone;
 
     switch (m_dimension->terrain) {
         case Terrain_Mode::Flat: return m_dimension->flat_block_at(world_y);
@@ -998,6 +1103,14 @@ World_Sample World_Generator::sample_with_connections(int world_x, int world_y, 
     return s;
 }
 
+Biome_Id World_Generator::biome_id(int world_x, int world_y, int world_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise) return m_biome;
+    const Column column = column_at(world_x, world_z);
+    const Cave_Kind cave = m_dimension->caves
+        ? m_cave_network->kind_at(world_x, world_y, world_z) : Cave_Kind::None;
+    return biome_at(column, world_y, cave);
+}
+
 std::string World_Generator::get_biome_name(int world_x, int world_y, int world_z) const {
     if (m_dimension->terrain != Terrain_Mode::Noise) return m_dimension->display_name;
     const Column column = column_at(world_x, world_z);
@@ -1023,90 +1136,280 @@ Fast_Rng World_Generator::make_rng(int world_x, int world_z, int salt) const {
 // считал ВЕСЬ климат колонки (около 30 выборок шума) плюс поиск связности пещер.
 // Здесь колонка считается один раз на (x, z) — 1024 раза вместо 32768 — и дальше
 // заполнение столбца это просто сравнения целых чисел.
+// Нижний слой мира — мантийный камень во всех измерениях (аналог бедрока).
+namespace {
+void apply_mantle_floor(Chunk_Block_Grid& grid, int chunk_y) {
+    if (chunk_y != Config::world_min_chunk_y) return;
+    const int local_y = Config::world_min_y - chunk_y * Config::chunk_height;
+    for (int z = 0; z < Config::chunk_size; ++z)
+        for (int x = 0; x < Config::chunk_size; ++x)
+            grid.set(x, local_y, z, Block_Types::Mantle_Stone);
+}
+} // namespace
+
 void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
                                      int chunk_x, int chunk_y, int chunk_z) const {
-    const int start_x = chunk_x * Config::chunk_size;
-    const int start_z = chunk_z * Config::chunk_size;
-    const int start_y = chunk_y * Config::chunk_height;
-    const int end_y = start_y + Config::chunk_height - 1;
+    Chunk_Block_Grid* output = &blocks;
+    generate_chunks(&output, &chunk_y, 1, chunk_x, chunk_z);
+    apply_mantle_floor(blocks, chunk_y);
+}
 
-    // Генерируем в плоский буфер и один раз строим палитру (assign_flat): запись в палитровую
-    // сетку воксель за вокселем (set) на порядки медленнее. thread_local — генерация идёт в
-    // воркерах, буфер переиспользуется без аллокаций.
-    thread_local std::vector<Block_ID> flat;
-    flat.assign(Chunk_Block_Grid::voxel_count, 0);   // 0 = Air
+void World_Generator::generate_chunk_column(const std::vector<Chunk*>& chunks) const {
+    if (chunks.empty() || !chunks.front()) return;
+    const int chunk_x = chunks.front()->get_chunk_x();
+    const int chunk_z = chunks.front()->get_chunk_z();
 
-    // Не-шумовые режимы (Flat/Void): слои одинаковы по всему чанку, шумы не нужны.
-    if (m_dimension->terrain != Terrain_Mode::Noise) {
-        if (m_dimension->terrain == Terrain_Mode::Flat) {
-            for (int y = 0; y < Config::chunk_height; ++y) {
-                const int world_y = start_y + y;
-                if (world_y < Config::world_min_y || world_y > Config::world_max_y) continue;
-                const Block_Types block = m_dimension->flat_block_at(world_y);
-                if (block == Block_Types::Air) continue;
-                const size_t row = static_cast<size_t>(y) * Config::chunk_size * Config::chunk_size;
-                std::fill_n(flat.begin() + row, Config::chunk_size * Config::chunk_size,
-                            static_cast<Block_ID>((block)));
+    std::vector<Chunk_Block_Grid*> outputs;
+    std::vector<int> chunk_ys;
+    outputs.reserve(chunks.size());
+    chunk_ys.reserve(chunks.size());
+    for (Chunk* chunk : chunks) {
+        if (!chunk || chunk->get_chunk_x() != chunk_x || chunk->get_chunk_z() != chunk_z)
+            continue;
+        outputs.push_back(&chunk->get_blocks_mutable());
+        chunk_ys.push_back(chunk->get_chunk_y());
+    }
+    if (!outputs.empty()) generate_chunks(outputs.data(), chunk_ys.data(), outputs.size(), chunk_x, chunk_z);
+}
+
+struct World_Generator::Prepared_Column {
+    static constexpr size_t N = static_cast<size_t>(Config::chunk_size);
+    static constexpr size_t Layer = N * N;
+    static constexpr size_t Voxels = Chunk_Block_Grid::voxel_count;
+
+    int chunk_x = 0;
+    int chunk_z = 0;
+    std::vector<int> chunk_ys;
+    bool need_ground_columns = false;
+    bool any_sky_range = false;
+    bool need_caves = false;
+    Terrain_Mode terrain = Terrain_Mode::Noise;
+    std::array<Column, Layer> columns{};
+    std::array<int, Layer> solid_top{};
+    std::array<uint8_t, Layer> village_center{};
+    std::array<River_Network::Column, Layer> river_columns{};
+    std::array<Subsurface_Coordinates, Layer> subsurface_coordinates{};
+    // Indexed [chunk_index][y][z][x], read-only after preparation.
+    std::vector<Cave_Kind> cave_flat;
+};
+
+void World_Generator::generate_chunks(Chunk_Block_Grid* const* outputs, const int* chunk_ys,
+                                      size_t count, int chunk_x, int chunk_z) const {
+    if (!outputs || !chunk_ys || count == 0) return;
+    std::vector<int> ys(chunk_ys, chunk_ys + count);
+    auto prepared = prepare_chunk_column(chunk_x, chunk_z, ys);
+    for (size_t i = 0; i < count; ++i) {
+        if (outputs[i]) generate_prepared_chunk(prepared, i, *outputs[i]);
+    }
+}
+
+std::shared_ptr<World_Generator::Prepared_Column> World_Generator::prepare_chunk_column(
+    int chunk_x, int chunk_z, const std::vector<int>& chunk_ys) const {
+    using Prepared = World_Generator::Prepared_Column;
+    constexpr int N = Config::chunk_size;
+    constexpr int H = Config::chunk_height;
+    constexpr size_t Layer = Prepared::Layer;
+    constexpr size_t Voxels = Prepared::Voxels;
+
+    auto prepared = std::make_shared<Prepared>();
+    prepared->chunk_x = chunk_x;
+    prepared->chunk_z = chunk_z;
+    prepared->chunk_ys = chunk_ys;
+    prepared->terrain = m_dimension->terrain;
+    if (chunk_ys.empty()) return prepared;
+    if (m_dimension->terrain != Terrain_Mode::Noise) return prepared;
+
+    const int start_x = chunk_x * N;
+    const int start_z = chunk_z * N;
+    prepared->need_ground_columns = m_dimension->ground;
+    for (int cy : chunk_ys) {
+        const int y0 = cy * H;
+        prepared->any_sky_range |= m_dimension->sky_islands && y0 + H - 1 >= 200;
+    }
+
+    if (!prepared->need_ground_columns && !prepared->any_sky_range) return prepared;
+
+    if (prepared->need_ground_columns) {
+        for (int z = 0; z < N; ++z) {
+            for (int x = 0; x < N; ++x) {
+                const size_t ci = static_cast<size_t>(z) * N + x;
+                const int wx = start_x + x;
+                const int wz = start_z + z;
+                prepared->subsurface_coordinates[ci] = Subsurface_Coordinates{
+                    wx * 0.11, wz * 0.11};
+                prepared->columns[ci] = column_at(wx, wz);
+                if (m_dimension->rivers)
+                    prepared->river_columns[ci] = m_river_network->column_at(wx, wz);
+                prepared->solid_top[ci] = std::max(prepared->columns[ci].height, kSeaLevel);
+                const bool is_village_center = m_dimension->villages &&
+                    m_structures->village_center_at(wx, wz);
+                prepared->village_center[ci] = static_cast<uint8_t>(is_village_center);
+                if (is_village_center) {
+                    prepared->solid_top[ci] = std::max(prepared->solid_top[ci],
+                        prepared->columns[ci].height + Structure_Placement::kMarkerHeight);
+                }
             }
         }
-        blocks.assign_flat(flat.data());
+    }
+
+    // Cache cave membership once per (x,z,y) voxel in the full prepared column, so each
+    // parallel build task can read its own slice without touching region/cache locks.
+    prepared->need_caves = prepared->need_ground_columns && m_dimension->caves;
+    if (prepared->need_caves) {
+        prepared->cave_flat.assign(chunk_ys.size() * Voxels, Cave_Kind::None);
+        for (size_t ci = 0; ci < chunk_ys.size(); ++ci) {
+            const int start_y = chunk_ys[ci] * H;
+            if (start_y > Cave_Network::kNetworkMaxY ||
+                start_y + H - 1 < Cave_Network::kSealedMinY) continue;
+            Cave_Kind* const cave_dst = prepared->cave_flat.data() + ci * Voxels;
+            for (int z = 0; z < N; ++z) {
+                for (int x = 0; x < N; ++x) {
+                    m_cave_network->fill_column_kinds(start_x + x, start_z + z,
+                        start_y, H, cave_dst + static_cast<size_t>(z) * N + x, Layer);
+                }
+            }
+        }
+    }
+    return prepared;
+}
+
+void World_Generator::generate_prepared_chunk(
+    const std::shared_ptr<Prepared_Column>& prepared, size_t index,
+    Chunk_Block_Grid& output) const {
+    generate_prepared_chunk_impl(prepared, index, output, nullptr);
+    if (prepared && index < prepared->chunk_ys.size()) apply_mantle_floor(output, prepared->chunk_ys[index]);
+}
+
+void World_Generator::generate_prepared_chunk(
+    const std::shared_ptr<Prepared_Column>& prepared, size_t index,
+    Chunk& chunk) const {
+    generate_prepared_chunk_impl(prepared, index, chunk.get_blocks_mutable(), &chunk);
+    if (prepared && index < prepared->chunk_ys.size()) apply_mantle_floor(chunk.get_blocks_mutable(), prepared->chunk_ys[index]);
+}
+
+void World_Generator::generate_prepared_chunk_impl(
+    const std::shared_ptr<Prepared_Column>& prepared, size_t index,
+    Chunk_Block_Grid& output, Chunk* owner) const {
+    if (!prepared || index >= prepared->chunk_ys.size()) return;
+    constexpr int N = Config::chunk_size;
+    constexpr int H = Config::chunk_height;
+    constexpr size_t Layer = Prepared_Column::Layer;
+    constexpr size_t Voxels = Prepared_Column::Voxels;
+    const int start_y = prepared->chunk_ys[index] * H;
+    const int start_x = prepared->chunk_x * N;
+    const int start_z = prepared->chunk_z * N;
+
+    // Each worker owns its scratch buffer. The final packing happens independently per chunk.
+    thread_local std::vector<Block_ID> flat;
+    flat.resize(Voxels);
+    std::fill(flat.begin(), flat.end(), Block_ID{0});
+    std::array<int, H> layer_non_air{};
+    const auto publish = [&]() {
+        output.assign_flat(flat.data());
+        if (owner) owner->set_layer_block_counts(layer_non_air);
+    };
+
+    if (prepared->terrain == Terrain_Mode::Flat) {
+        for (int y = 0; y < H; ++y) {
+            const int world_y = start_y + y;
+            if (world_y < Config::world_min_y || world_y > Config::world_max_y) continue;
+            const Block_Types block = m_dimension->flat_block_at(world_y);
+            if (block != Block_Types::Air) {
+                std::fill_n(flat.data() + static_cast<size_t>(y) * Layer, Layer,
+                            static_cast<Block_ID>(block));
+                layer_non_air[y] = static_cast<int>(Layer);
+            }
+        }
+        publish();
+        return;
+    }
+    if (prepared->terrain == Terrain_Mode::Void ||
+        (!prepared->need_ground_columns && !prepared->any_sky_range)) {
+        publish();
         return;
     }
 
-    // Парящие острова живут только выше Y=200 — для всех остальных чанков этот
-    // дорогой путь не выполняется вовсе. Если в измерении нет ни островов, ни земли
-    // (Single_Islands), чанк ниже Y=200 пуст и дальше считать нечего.
-    const bool sky_range = m_dimension->sky_islands && end_y >= 200;
-    if (!m_dimension->ground && !sky_range) {
-        blocks.assign_flat(flat.data());
-        return;
-    }
-
-    for (int z = 0; z < Config::chunk_size; ++z) {
-        for (int x = 0; x < Config::chunk_size; ++x) {
-            const int world_x = start_x + x;
-            const int world_z = start_z + z;
-            const Column column = column_at(world_x, world_z);
-
-            // Весь столбец выше поверхности и выше уровня моря — чистый воздух,
-            // заполнять нечего (кроме диапазона парящих островов).
-            int solid_top = std::max(column.height, kSeaLevel);
-            if (m_dimension->villages && m_structures->village_center_at(world_x, world_z))
-                solid_top = std::max(solid_top, column.height + Structure_Placement::kMarkerHeight);
-            if (!sky_range && start_y > solid_top) continue;
-
-            const int y_from = start_y;
-            const int y_to = std::min(end_y, sky_range ? end_y : solid_top);
-
-            for (int world_y = y_from; world_y <= y_to; ++world_y) {
-                if (world_y < Config::world_min_y || world_y > Config::world_max_y)
-                    continue;
-
-                Block_Types block;
+    const bool sky_range = m_dimension->sky_islands && start_y + H - 1 >= 200;
+    for (int y = 0; y < H; ++y) {
+        const int world_y = start_y + y;
+        if (world_y < Config::world_min_y || world_y > Config::world_max_y) continue;
+        const double ore_noise_y = world_y * 0.11;
+        Block_ID* const row = flat.data() + static_cast<size_t>(y) * Layer;
+        for (int z = 0; z < N; ++z) {
+            const size_t col_row = static_cast<size_t>(z) * N;
+            for (int x = 0; x < N; ++x) {
+                const size_t cidx = col_row + x;
+                const int world_x = start_x + x;
+                const int world_z = start_z + z;
+                Block_Types block = Block_Types::Air;
                 if (sky_range && world_y >= 200 &&
                     sky_island_block(world_x, world_y, world_z)) {
-                    // Остров: верхний блок — трава, нижние — облачный камень.
                     block = sky_island_block(world_x, world_y + 1, world_z)
-                          ? Block_Types::Cloud_Stone : Block_Types::Grass;
+                        ? Block_Types::Cloud_Stone : Block_Types::Grass;
+                } else if (!prepared->need_ground_columns) {
+                    continue;
+                } else if (world_y > prepared->solid_top[cidx]) {
+                    continue;
                 } else {
-                    block = block_in_column(column, world_x, world_y, world_z);
+                    const Cave_Kind* cave_kind = nullptr;
+                    if (prepared->need_caves) {
+                        cave_kind = &prepared->cave_flat[index * Voxels +
+                            static_cast<size_t>(y) * Layer + cidx];
+                    }
+                    const River_Network::Column* river_column = m_dimension->rivers
+                        ? &prepared->river_columns[cidx] : nullptr;
+                    block = block_in_column(prepared->columns[cidx], world_x, world_y, world_z,
+                        prepared->village_center[cidx] != 0, river_column, cave_kind,
+                        &prepared->subsurface_coordinates[cidx], ore_noise_y);
                 }
-
                 if (block != Block_Types::Air) {
-                    const size_t index = (static_cast<size_t>(world_y - start_y) * Config::chunk_size +
-                                          static_cast<size_t>(z)) * Config::chunk_size +
-                                         static_cast<size_t>(x);
-                    flat[index] = static_cast<Block_ID>((block));
+                    row[cidx] = static_cast<Block_ID>(block);
+                    ++layer_non_air[y];
                 }
             }
         }
     }
+    publish();
+}
 
-    blocks.assign_flat(flat.data());
+uint8_t World_Generator::generation_region_missing_parts_for_chunk(int chunk_x, int chunk_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->ground) return 0;
+
+    const int world_x = chunk_x * Config::chunk_size;
+    const int world_z = chunk_z * Config::chunk_size;
+    uint8_t missing = 0;
+    if (m_dimension->caves && m_cave_network && !m_cave_network->region_ready_at(world_x, world_z))
+        missing |= kRegionPartCaves;
+    if (m_dimension->rivers && m_river_network && !m_river_network->region_ready_at(world_x, world_z))
+        missing |= kRegionPartRivers;
+    return missing;
+}
+
+bool World_Generator::generation_region_ready_for_chunk(int chunk_x, int chunk_z) const {
+    return generation_region_missing_parts_for_chunk(chunk_x, chunk_z) == 0;
+}
+
+void World_Generator::prewarm_generation_region_parts_for_chunk(int chunk_x, int chunk_z,
+                                                                 uint8_t parts) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->ground) return;
+
+    const int world_x = chunk_x * Config::chunk_size;
+    const int world_z = chunk_z * Config::chunk_size;
+    // Cave and river regions are independent and can be built by separate worker tasks.
+    if ((parts & kRegionPartCaves) && m_dimension->caves && m_cave_network)
+        m_cave_network->prewarm_region_at(world_x, world_z);
+    if ((parts & kRegionPartRivers) && m_dimension->rivers && m_river_network)
+        m_river_network->prewarm_region_at(world_x, world_z);
+}
+
+void World_Generator::prewarm_generation_region_for_chunk(int chunk_x, int chunk_z) const {
+    prewarm_generation_region_parts_for_chunk(chunk_x, chunk_z,
+        static_cast<uint8_t>(kRegionPartCaves | kRegionPartRivers));
 }
 
 bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chunk_z) const {
     const int start_y = chunk_y * Config::chunk_height;
+    if (chunk_y == Config::world_min_chunk_y) return false;   // там мантийный слой
     switch (m_dimension->terrain) {
         case Terrain_Mode::Void: return true;
         case Terrain_Mode::Flat: return start_y > m_dimension->flat_top_y();
@@ -1152,31 +1455,70 @@ bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chun
 // ---------------------------------------------------------------------------
 //  Декорации
 // ---------------------------------------------------------------------------
+bool World_Generator::may_decorate_chunk(int chunk_x, int chunk_y, int chunk_z) const {
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations || !m_dimension->ground)
+        return false;
+
+    // Поверхность Overworld ограничена сверху формулой рельефа: базовая отметка <=107,
+    // hill term <=43, mountain term <=235, detail <=8 (итого <394). 400 — запас.
+    // Декорации растут только вверх от поверхности >= уровня моря; поэтому на нижних
+    // Y и далеко выше максимально возможной поверхности нет смысла сканировать 48x48.
+    const int chunk_min_y = chunk_y * Config::chunk_height;
+    const int chunk_max_y = chunk_min_y + Config::chunk_height - 1;
+    constexpr int kConservativeMaxSurface = 400;
+    return chunk_max_y >= kSeaLevel &&
+           chunk_min_y <= kConservativeMaxSurface + kDecorationMaxHeight;
+}
+
 void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) const {
-    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations) return;
-    const Column column = column_at(world_x, world_z);
-    const int terrain_height = column.height;
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations || !m_dimension->ground) return;
 
-    if (!m_dimension->ground) return;   // на островах декораций нет: деревья стояли бы в пустоте
-
-    if (terrain_height < Config::world_min_y + 1 ||
-        terrain_height > Config::world_max_y - 20)
-        return;
-
-    // Ранний выход: если поверхность этой колонки вообще не попадает в вертикальный
-    // диапазон чанка (с запасом на высоту дерева), декорировать нечего. Раньше все
-    // 17 вертикальных чанков столбца прогоняли полный проход по 48x48 колонкам,
-    // хотя поверхность есть только в одном из них.
     const int chunk_min_y = chunk.get_chunk_y() * Config::chunk_height;
     const int chunk_max_y = chunk_min_y + Config::chunk_height - 1;
-    constexpr int kMaxStructureHeight = 26;
-    if (terrain_height + kMaxStructureHeight < chunk_min_y ||
-        terrain_height > chunk_max_y)
-        return;
 
-    // Ниже уровня моря ничего не сажаем: растение под водой висело бы в воде.
-    if (terrain_height < kSeaLevel) return;
+    // Дешёвая детерминированная проверка кандидата ДО вычисления даже высоты поверхности.
+    // Большинство координат в нахлёсте 48x48 не является ни деревом, ни растением; раньше
+    // ради них считались температура, влажность, weirdness и биом. Проверки ниже — только
+    // необходимые условия. Лишний кандидат допустим, пропустить настоящую декорацию нельзя.
+    auto rng = make_rng(world_x, world_z, 2);
+    std::uniform_int_distribution<int> roll(0, 999);
+    const int flora_roll = roll(rng);
+    Fast_Rng rng_after_flora = rng;
+    const int tree_roll_preview = roll(rng_after_flora);
 
+    bool carrot_candidate = false;
+    if (flora_roll >= 90) {
+        static constexpr int k_dx[5] = {0, 1, -1, 0, 0};
+        static constexpr int k_dz[5] = {0, 0, 0, 1, -1};
+        for (int i = 0; i < 5 && !carrot_candidate; ++i) {
+            const uint64_t h = hash_position(world_x - k_dx[i], world_z - k_dz[i], m_seed, 77);
+            if (h % 1000u >= static_cast<uint64_t>(Config::wild_carrot_patch_per_mille_plains)) continue;
+            if (i != 0 && ((h >> 12) + static_cast<uint32_t>(i) * 7u) % 100u >= 55u) continue;
+            carrot_candidate = true;
+        }
+    }
+    // Радиус 2/3 anchor обязательно проходит проверку радиуса 1; это консервативный
+    // фильтр для дуба/берёзы/ели/джунглей/акации без чтения биома.
+    bool regular_tree_candidate = false;
+    bool sparse_tree_candidate = false;
+    if (flora_roll >= 90 && !carrot_candidate && tree_roll_preview != 0) {
+        regular_tree_candidate = is_tree_anchor(world_x, world_z, m_seed, 1);
+        if (!regular_tree_candidate)
+            sparse_tree_candidate = is_sparse_tree_anchor(world_x, world_z, m_seed);
+        if (!regular_tree_candidate && !sparse_tree_candidate) return;
+    }
+
+    // Поверхность вычисляется только для реальных кандидатов декораций. terrain_point даёт
+    // тот же floor(surface_height), что и Column, но без дополнительных климатических шумов.
+    const int quick_height = static_cast<int>(std::floor(terrain_point(world_x, world_z).surface_height));
+    if (quick_height < Config::world_min_y + 1 ||
+        quick_height > Config::world_max_y - 20 ||
+        quick_height + kDecorationMaxHeight < chunk_min_y ||
+        quick_height > chunk_max_y ||
+        quick_height < kSeaLevel) return;
+
+    const Column column = column_at(world_x, world_z);
+    const int terrain_height = column.height;
     const Biome_Id biome = column.biome;
     const Block_Types surface = block_in_column(column, world_x, terrain_height, world_z);
     if (surface == Block_Types::Air) return;   // устье пещеры: растить там нечего
@@ -1186,10 +1528,6 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
         surface == Block_Types::Sand || surface == Block_Types::Gravel)
         return;
 
-    auto rng = make_rng(world_x, world_z, 2);
-    std::uniform_int_distribution<int> roll(0, 999);
-
-    const int flora_roll = roll(rng);
     int flora_frequency = 0;
     Block_Types flora = Block_Types::Tall_Grass;
 
@@ -1269,36 +1607,53 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     }
 
     const int tree_roll = roll(rng);
-    int tree_frequency = 0;
+    // Тип дерева и радиус расстояния до соседей. Радиус = (ширина кроны / 2) + 1,
+    // чтобы кроны соседних деревьев не срастались в стену и между стволами
+    // оставался проход шириной минимум в блок. Ель самая широкая внизу — ей нужен
+    // самый большой отступ.
+    bool has_trees = false;
     Tree_Type tree_type = Tree_Type::Oak;
+    int anchor_radius = 1;
+    // Процент подходящих якорей с деревом (см. passes_tree_density). Меньше — реже лес.
+    int tree_density = 100;
 
     switch (biome) {
-        case Biome_Id::Forest:       tree_frequency = 115; tree_type = Tree_Type::Oak; break;
-        case Biome_Id::Birch_Forest: tree_frequency = 115; tree_type = Tree_Type::Birch; break;
-        case Biome_Id::Taiga:        tree_frequency = 105; tree_type = Tree_Type::Spruce; break;
-        case Biome_Id::Jungle:       tree_frequency = 80;  tree_type = Tree_Type::Jungle; break;
-        case Biome_Id::Savanna:      tree_frequency = 145; tree_type = Tree_Type::Acacia; break;
-        case Biome_Id::Slime:        tree_frequency = 120; tree_type = Tree_Type::Slimewood; break;
+        // Обычные биомы: радиус — минимальный шаг между стволами, плотность — доля занятых мест.
+        // Лиственный лес: дубы с просветами, кроны не сливаются в стену.
+        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;    anchor_radius = 3; tree_density = 55; break;
+        // Берёзовый лес светлый и редкий: стволы стоят далеко друг от друга.
+        case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;  anchor_radius = 3; tree_density = 40; break;
+        // Тайга: ели широкие внизу, поэтому шаг больше, а часть мест пустует (поляны).
+        case Biome_Id::Taiga:        has_trees = true; tree_type = Tree_Type::Spruce; anchor_radius = 4; tree_density = 60; break;
+        case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle; anchor_radius = 4; tree_density = 50; break;
+        // Саванна: редкие зонтичные акации.
+        case Biome_Id::Savanna:      has_trees = true; tree_type = Tree_Type::Acacia; anchor_radius = 4; tree_density = 25; break;
+                // Слизовые ивы редкие: расстояние между ними 50+ блоков (см. is_sparse_tree_anchor).
+        case Biome_Id::Slime:        has_trees = true; tree_type = Tree_Type::Slimewood; anchor_radius = 4; break;
         default: break;
     }
 
     // Дерево не растёт на обрыве — корень должен стоять на пологой земле.
-    if (column.slope > 4.0) tree_frequency = 0;
+    if (column.slope > 4.0) has_trees = false;
 
-    if (terrain_height >= kSeaLevel && tree_frequency > 0 && tree_roll < tree_frequency) {
+    if (terrain_height >= kSeaLevel && has_trees &&
+        (tree_type == Tree_Type::Slimewood
+            ? is_sparse_tree_anchor(world_x, world_z, m_seed)
+            : is_tree_anchor(world_x, world_z, m_seed, anchor_radius) &&
+              passes_tree_density(world_x, world_z, m_seed, tree_density))) {
         const auto setter = [&](int x, int y, int z, Block_Types type) {
-            // Структура ставится только в уже пустой воксель, поэтому дерево
-            // никогда не перезаписывает рельеф или столб воды.
-            if (get_block(x, y, z) != Block_Types::Air) return;
-
+            // Воксель вне этого чанка не меняется — полный get_block (колонка + шум) для него не нужен.
             const int lx = x - chunk.get_chunk_x() * Config::chunk_size;
             const int ly = y - chunk_min_y;
             const int lz = z - chunk.get_chunk_z() * Config::chunk_size;
-            if (lx >= 0 && lx < Config::chunk_size &&
-                ly >= 0 && ly < Config::chunk_height &&
-                lz >= 0 && lz < Config::chunk_size) {
-                chunk.set_block(lx, ly, lz, type);
-            }
+            if (lx < 0 || lx >= Config::chunk_size ||
+                ly < 0 || ly >= Config::chunk_height ||
+                lz < 0 || lz >= Config::chunk_size) return;
+
+            // Структура ставится только в уже пустой воксель, поэтому дерево
+            // никогда не перезаписывает рельеф или столб воды.
+            if (get_block(x, y, z) != Block_Types::Air) return;
+            chunk.set_block(lx, ly, lz, type);
         };
         Tree_Generator::place_tree(tree_type, world_x, terrain_height, world_z, setter, rng);
     }
