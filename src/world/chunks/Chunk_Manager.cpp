@@ -946,6 +946,8 @@ bool Chunk_Manager::is_chunk_loaded(int cx, int cy, int cz) const {
 }
 
 bool Chunk_Manager::save_chunk_to_disk(const Chunk& chunk) const {
+    // Единственный критерий сохранения блока/метаданных — флаг modified. Его выставляют
+    // Chunk::set_block / Chunk::set_meta, вызываемые через set_block_world и пакетный путь.
     // Нетронутый чанк детерминированно восстанавливается генератором по сиду,
     // поэтому записывать его незачем. Раньше выгрузка сохраняла подряд все
     // чанки, и обычная ходьба по миру превращалась в поток записей на диск.
@@ -1936,7 +1938,10 @@ void Chunk_Manager::clear() {
         save_chunk_to_disk(*chunk);
         m_unloaded_since_last_query.push_back(position);
     });
-    // Индекс region-файла живёт в памяти между записями — здесь он уезжает на диск.
+    // Сначала обязательно дожидаемся асинхронного писателя: write_batch обновляет индекс
+    // региона только после записи payload. Если сбросить индекс раньше, сохранённые выше
+    // чанки могут остаться без актуальной записи в заголовке region-файла.
+    m_chunk_io->drain();
     m_world_file.flush_chunks(m_generation_folder);
     m_chunks.clear();
     ++m_chunk_set_epoch;
@@ -2024,6 +2029,8 @@ uint8_t Chunk_Manager::get_block_meta_world(int wx, int wy, int wz) const {
                            wz - cz * Config::chunk_size);
 }
 
+// Меняет только метаданные блока (например, состояние горящей печи). Chunk::set_meta
+// также помечает чанк изменённым, поэтому эти изменения проходят тем же путём сохранения.
 bool Chunk_Manager::set_block_meta_world(int wx, int wy, int wz, uint8_t meta) {
     if (wy < Config::world_min_y || wy > Config::world_max_y) return false;
     const int cx = Math_Helpers::floor_div(wx, Config::chunk_size);
@@ -2041,6 +2048,8 @@ bool Chunk_Manager::set_block_meta_world(int wx, int wy, int wz, uint8_t meta) {
     return true;
 }
 
+// Центральная точка изменения блока в мировых координатах. Помимо самих данных здесь
+// синхронизируются block entities, свет, меши соседей и флаг сохранения чанка.
 bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, uint8_t meta) {
     if (wy < Config::world_min_y || wy > Config::world_max_y) {
         return false;

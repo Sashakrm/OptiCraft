@@ -1003,6 +1003,8 @@ void Chunk::set_meta(int x, int y, int z, uint8_t value) {
     }
     m_blocks.set_meta(x, y, z, value);
     mark_mesh_dirty();
+    // Метаданные (например, направление печи или состояние блока) тоже являются
+    // частью сохранения чанка: не сбрасываем этот флаг до записи в Region_File.
     m_is_modified = true;
 }
 
@@ -1021,6 +1023,8 @@ void Chunk::set_block(int x, int y, int z, Block_Types type) {
 
     m_blocks.set(x, y, z, type);
     mark_mesh_dirty();
+    // Любая игровая правка блока делает чанк кандидатом на сохранение при выгрузке,
+    // Chunk_Manager::save_all() или очистке/смене мира.
     m_is_modified = true;
 }
 

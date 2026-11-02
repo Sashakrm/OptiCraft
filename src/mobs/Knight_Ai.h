@@ -25,6 +25,7 @@ struct Knight_Tick_Result {
     int player_damage = 0;
 };
 
+// Каталог приёмов. Count служит верхней границей при переборе кандидатов в choose_attack().
 enum class Knight_Attack : uint8_t {
     None = 0,
     Swipe,
@@ -38,6 +39,8 @@ enum class Knight_Attack : uint8_t {
     Count
 };
 
+// Состояния конечного автомата босса. Windup/Attacking/Recovery разделены,
+// чтобы у игрока было читаемое окно предупреждения и возможность уклониться.
 enum class Knight_State : uint8_t {
     Dormant,
     Chase,
@@ -113,6 +116,7 @@ private:
         glm::vec3 clamp(const glm::vec3& p, float margin = 0.0f) const;
     };
 
+    // Представление и базовое состояние существа.
     std::string m_name;
     Mob m_model;
     Status_Effects m_effects;
@@ -125,6 +129,8 @@ private:
     float m_health = MAX_HEALTH;
     float m_hurt_timer = 0.0f;
     float m_death_timer = 0.0f;
+    // m_state_timer используется локально текущим состоянием (windup, active, recovery).
+    // cooldown — отдельная блокировка повторного выбора атаки после завершения приёма.
     float m_state_timer = 0.0f;
     float m_attack_cooldown = 0.0f;
     float m_jump_cooldown = 0.0f;
@@ -136,6 +142,7 @@ private:
     Knight_Attack m_last_attack = Knight_Attack::None;
     bool m_has_target = false;
     bool m_grounded = true;
+    // Одноразовые флаги окон попадания: один приём может нанести урон один, два или три раза.
     bool m_hit_primary = false;
     bool m_hit_secondary = false;
     bool m_hit_tertiary = false;
@@ -163,15 +170,18 @@ private:
     int m_jump_pattern_events = 0;
     float m_player_hit_event_cooldown = 0.0f;
 
+    // Габарит тела используется и коллизией перемещения, и внешней системой hitbox.
     static constexpr float BODY_HALF_X = 1.15f;
     static constexpr float BODY_HALF_Z = 0.62f;
     static constexpr float BODY_HEIGHT = 3.18f;
     static constexpr float GRAVITY = 38.0f;
 
+    // Восприятие и физические проверки мира.
     bool has_line_of_sight(const Knight_Player_View& player, const Chunk_Manager& chunks) const;
     bool can_see_player(const Knight_Player_View& player, const Chunk_Manager& chunks) const;
     bool can_occupy(const glm::vec3& feet_position, const Chunk_Manager& chunks) const;
     bool has_ground_below(const glm::vec3& feet_position, const Chunk_Manager& chunks) const;
+    // Обучение: evidence накапливается только за распознанные эпизоды, а не за каждый кадр.
     void update_learning(const Knight_Player_View& player, float dt);
     void record_pattern_episode(Knight_Player_Pattern pattern, int direction = 0);
     void refresh_learned_pattern();
@@ -181,6 +191,7 @@ private:
     bool facing_player(const Knight_Player_View& player) const;
     bool can_see_at_impact(const Knight_Player_View& player, const Chunk_Manager& chunks) const;
     void set_animation(const char* name, bool loop = true);
+    // Боевые решения и перемещение.
     void update_phase();
     void update_movement(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks);
     void move_towards(const glm::vec3& target, float speed, float dt, const Chunk_Manager& chunks);
@@ -189,6 +200,7 @@ private:
     void start_attack(Knight_Attack attack, const Knight_Player_View& player);
     Knight_Attack choose_attack(const Knight_Player_View& player, const Chunk_Manager& chunks);
     bool attack_is_available(Knight_Attack attack, float distance) const;
+    // Обработчики отдельных участков конечного автомата атаки и общего поведения.
     void update_windup(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks);
     void update_attack(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks, Knight_Tick_Result& result);
     void apply_attack_hit(const Knight_Player_View& player, const Chunk_Manager& chunks, float range,

@@ -40,6 +40,10 @@ public:
 
     // Буфер из пула. kNone — буферы кончились (вызывающий обходит буферы сам).
     uint32_t acquire_stage();
+    // В отличие от обычного acquire, этот вариант ждёт освобождения буфера.
+    // Загрузка уже сохранённого чанка не должна превращаться в генерацию только
+    // потому, что все временные буферы сейчас заняты асинхронной записью.
+    uint32_t acquire_stage_wait();
     void release_stage(uint32_t index);
     Chunk_Block_Grid& stage(uint32_t index) { return m_stages[index]; }
 
@@ -93,6 +97,10 @@ private:
     std::atomic<uint64_t> m_free_head{0};
 
     std::mutex m_mutex;
+    // Отдельная пара mutex/CV нужна, чтобы ожидание свободного буфера не удерживало
+    // m_mutex: писатель использует его при завершении пачки и освобождении stage.
+    std::mutex m_stage_wait_mutex;
+    std::condition_variable m_stage_available_cv;
     std::condition_variable m_queue_cv;
     std::condition_variable m_idle_cv;
     std::vector<Write_Item> m_queue;

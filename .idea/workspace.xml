@@ -29,12 +29,16 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="обновление ИИ">
+    <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="хот патч">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Day_Night_Cycle.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/mobs/Knight_Ai.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Knight_Ai.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/mobs/Knight_Ai.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Knight_Ai.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Region_File.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Chunk_IO.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Chunk_IO.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/storage/Chunk_IO.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/storage/Chunk_IO.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -78,23 +82,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.000015797826897" />
-      <entry key="MS500" value="1.125222391034994" />
-      <entry key="S2" value="1.9290212557131774" />
-      <entry key="S5" value="2.461470752444666" />
-      <entry key="S10" value="2.7076447483853006" />
-      <entry key="S30" value="2.923187329024043" />
-      <entry key="S60" value="3.3213901075631367" />
-      <entry key="M2" value="5.417499887200448" />
-      <entry key="M5" value="23.98166573842747" />
-      <entry key="M10" value="59.466498295139765" />
-      <entry key="M15" value="101.74237224720682" />
-      <entry key="M30" value="283.55692841079986" />
-      <entry key="H1" value="767.1518422456196" />
-      <entry key="H2" value="1653.0769557940703" />
-      <entry key="H4" value="2755.967478924208" />
-      <entry key="D1" value="4737.245471535176" />
-      <entry key="W1" value="5274.210749577578" />
+      <entry key="MS100" value="1.0259162930132204" />
+      <entry key="MS500" value="1.525086369582628" />
+      <entry key="S2" value="2.5651497439053967" />
+      <entry key="S5" value="3.2618423354591175" />
+      <entry key="S10" value="3.595325167213987" />
+      <entry key="S30" value="3.8562254875445423" />
+      <entry key="S60" value="3.9269352076272734" />
+      <entry key="M2" value="3.9631679210928663" />
+      <entry key="M5" value="3.9853524189599643" />
+      <entry key="M10" value="4.145156915408013" />
+      <entry key="M15" value="5.901845179181667" />
+      <entry key="M30" value="42.816217536346706" />
+      <entry key="H1" value="287.8440241648243" />
+      <entry key="H2" value="1009.5252083187705" />
+      <entry key="H4" value="2153.4339543260216" />
+      <entry key="D1" value="4549.003593109761" />
+      <entry key="W1" value="5247.089156154951" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -102,37 +106,37 @@
       <entry key="S2" value="0.0" />
       <entry key="S5" value="0.0" />
       <entry key="S10" value="0.0" />
-      <entry key="S30" value="5.847247057461655E-199" />
-      <entry key="S60" value="7.64672940377877E-100" />
-      <entry key="M2" value="2.765272030701226E-50" />
-      <entry key="M5" value="1.5020871968865145E-20" />
-      <entry key="M10" value="1.2256022016441387E-10" />
-      <entry key="M15" value="2.4682889801136683E-7" />
-      <entry key="M30" value="5.130514766288525E-4" />
-      <entry key="H1" value="0.029236750376740124" />
-      <entry key="H2" value="0.2934099296706994" />
-      <entry key="H4" value="1.0436079051840401" />
-      <entry key="D1" value="3.182548538227779" />
-      <entry key="W1" value="3.871064780380211" />
+      <entry key="S30" value="8.932837287780993E-251" />
+      <entry key="S60" value="9.451368836195487E-126" />
+      <entry key="M2" value="3.074307862949827E-63" />
+      <entry key="M5" value="9.887783355995571E-26" />
+      <entry key="M10" value="3.144498786128004E-13" />
+      <entry key="M15" value="4.625910971539336E-9" />
+      <entry key="M30" value="7.023629186962017E-5" />
+      <entry key="H1" value="0.010817562579019873" />
+      <entry key="H2" value="0.17847400339955632" />
+      <entry key="H4" value="0.8139307181576151" />
+      <entry key="D1" value="3.053397758792527" />
+      <entry key="W1" value="3.848222751230192" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.9526529437050462" />
-      <entry key="MS500" value="1.1142056412901462" />
-      <entry key="S2" value="1.9241482111792896" />
-      <entry key="S5" value="2.4589722715370343" />
-      <entry key="S10" value="2.7062692817739467" />
-      <entry key="S30" value="2.922690091511297" />
-      <entry key="S60" value="3.3210937791587605" />
-      <entry key="M2" value="5.417177349780363" />
-      <entry key="M5" value="23.980757582268538" />
-      <entry key="M10" value="59.46536200537132" />
-      <entry key="M15" value="101.74122713647174" />
-      <entry key="M30" value="283.55622020193834" />
-      <entry key="H1" value="767.1795612295084" />
-      <entry key="H2" value="1653.3684324805545" />
-      <entry key="H4" value="2757.0090504943078" />
-      <entry key="D1" value="4740.427256866887" />
-      <entry key="W1" value="5278.081686933141" />
+      <entry key="MS100" value="0.8691509102273796" />
+      <entry key="MS500" value="1.4768785738008479" />
+      <entry key="S2" value="2.543653396795482" />
+      <entry key="S5" value="3.250572085938523" />
+      <entry key="S10" value="3.589043557461699" />
+      <entry key="S30" value="3.853962310663063" />
+      <entry key="S60" value="3.9257806304823983" />
+      <entry key="M2" value="3.9625847391686846" />
+      <entry key="M5" value="3.9851177066872805" />
+      <entry key="M10" value="4.145036406377177" />
+      <entry key="M15" value="5.9017452688837775" />
+      <entry key="M30" value="42.816081331687606" />
+      <entry key="H1" value="287.85426052316615" />
+      <entry key="H2" value="1009.7024965602476" />
+      <entry key="H4" value="2154.246291956268" />
+      <entry key="D1" value="4552.0562578153795" />
+      <entry key="W1" value="5250.937252116362" />
     </decayedShown>
   </component>
   <component name="ProjectApplicationVersion">
@@ -184,19 +188,14 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
-    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
     <configuration name="json2bin" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="json2bin" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="json2bin">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
     <list>
-      <item itemvalue="CMake Application.json2bin" />
       <item itemvalue="CMake Application.OptiCraft" />
+      <item itemvalue="CMake Application.json2bin" />
     </list>
   </component>
   <component name="SelectedDebugProfileService">{
@@ -261,7 +260,8 @@
     <MESSAGE value="общее обновление" />
     <MESSAGE value="увеличение производительности генератора мира" />
     <MESSAGE value="обновление ИИ" />
-    <option name="LAST_COMMIT_MESSAGE" value="обновление ИИ" />
+    <MESSAGE value="хот патч" />
+    <option name="LAST_COMMIT_MESSAGE" value="хот патч" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

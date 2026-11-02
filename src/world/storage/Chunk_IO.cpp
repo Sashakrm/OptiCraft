@@ -44,12 +44,34 @@ uint32_t Chunk_IO::acquire_stage() {
     }
 }
 
+uint32_t Chunk_IO::acquire_stage_wait() {
+    // Пул обычно не исчерпывается, но при массовой выгрузке изменённых чанков это возможно.
+    // В таком случае ждём освобождения буфера вместо того, чтобы объявлять сохранённый чанк
+    // отсутствующим и отправлять его на повторную генерацию.
+    if (m_stage_count == 0) return kNone;
+
+    while (true) {
+        const uint32_t index = acquire_stage();
+        if (index != kNone) return index;
+
+        // Проверка внутри wait защищает от потерянного уведомления: если буфер успел
+        // освободиться до входа в ожидание, predicate сразу позволит продолжить.
+        std::unique_lock<std::mutex> lock(m_stage_wait_mutex);
+        m_stage_available_cv.wait(lock, [this] {
+            return static_cast<uint32_t>(m_free_head.load(std::memory_order_acquire)) != kNone;
+        });
+    }
+}
+
 void Chunk_IO::release_stage(uint32_t index) {
     uint64_t head = m_free_head.load(std::memory_order_acquire);
     do {
         m_headers[index].next.store(static_cast<uint32_t>(head), std::memory_order_relaxed);
     } while (!m_free_head.compare_exchange_weak(head, pack(tag_of(head) + 1, index),
                                                 std::memory_order_release, std::memory_order_acquire));
+
+    // Разбудить disk_reader, если он ждал свободный stage для чтения сохранённого чанка.
+    m_stage_available_cv.notify_all();
 }
 
 bool Chunk_IO::enqueue_write(const std::shared_ptr<Region_File>& region, const Region_File::Key& key,
@@ -82,42 +104,52 @@ void Chunk_IO::read_batch(const std::shared_ptr<Region_File>& region,
     stages.assign(keys.size(), kNone);
 
     std::vector<size_t> disk_index;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        for (size_t i = 0; i < keys.size(); ++i) {
+    std::vector<Region_File::Key> read_keys;
+    std::vector<Chunk_Block_Grid*> read_outs;
+    disk_index.reserve(keys.size());
+    read_keys.reserve(keys.size());
+    read_outs.reserve(keys.size());
+
+    // Сначала резервируем выходной stage для каждого ключа. Если чанк ещё находится
+    // в очереди записи, копируем наиболее свежую версию прямо из её буфера. Если запись
+    // уже завершилась, читаем этот же ключ с диска ниже, одним упорядоченным batch-вызовом.
+    // Важное отличие от прежней логики: исчерпание пула теперь приводит к ожиданию, а не к
+    // возврату kNone, который Chunk_Manager ошибочно трактовал как «чанка нет — генерировать».
+    for (size_t i = 0; i < keys.size(); ++i) {
+        const uint32_t output_stage = acquire_stage_wait();
+        if (output_stage == kNone) continue; // Только для специально созданного пула размера 0.
+        stages[i] = output_stage;
+
+        bool copied_from_pending = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
             const auto it = m_pending.find(Pending_Key{region.get(), keys[i]});
-            if (it == m_pending.end()) {
-                disk_index.push_back(i);
-                continue;
+            if (it != m_pending.end()) {
+                // Пока удерживается m_mutex, писатель не может удалить запись из pending
+                // и освободить её stage; поэтому источник остаётся валидным на всё копирование.
+                m_stages[output_stage] = m_stages[it->second];
+                copied_from_pending = true;
             }
-            // Чанк ещё в очереди записи: берём его из буфера очереди, а не с диска (там может быть старая версия).
-            const uint32_t copy = acquire_stage();
-            if (copy == kNone) continue;   // буферов нет: отдадим генератору
-            m_stages[copy] = m_stages[it->second];
-            stages[i] = copy;
+        }
+
+        if (!copied_from_pending) {
+            disk_index.push_back(i);
+            read_keys.push_back(keys[i]);
+            read_outs.push_back(&m_stages[output_stage]);
         }
     }
 
-    // Буферы под чтение с диска.
-    std::vector<size_t> to_read;
-    std::vector<Region_File::Key> read_keys;
-    std::vector<Chunk_Block_Grid*> read_outs;
-    for (size_t i : disk_index) {
-        const uint32_t s = acquire_stage();
-        if (s == kNone) break;   // буферов нет: остальные пойдут генератору
-        stages[i] = s;
-        to_read.push_back(i);
-        read_keys.push_back(keys[i]);
-        read_outs.push_back(&m_stages[s]);
-    }
     if (read_keys.empty()) return;
 
+    // Region_File сам сортирует ключи по секторам на диске, уменьшая количество seek.
     std::vector<uint8_t> ok;
     region->read_batch(read_keys, read_outs, ok);
-    for (size_t j = 0; j < to_read.size(); ++j) {
+    for (size_t j = 0; j < disk_index.size(); ++j) {
         if (!ok[j]) {
-            release_stage(stages[to_read[j]]);
-            stages[to_read[j]] = kNone;
+            // Реально отсутствующий/повреждённый файл — единственный случай, когда вызывающий
+            // код получает kNone и может безопасно перейти к процедурной генерации.
+            release_stage(stages[disk_index[j]]);
+            stages[disk_index[j]] = kNone;
         }
     }
 }

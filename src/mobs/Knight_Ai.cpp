@@ -18,30 +18,36 @@ constexpr float kTwoPi = glm::two_pi<float>();
 constexpr float kHurtSeconds = 0.42f;
 constexpr float kDegToRad = kPi / 180.0f;
 
+// Приводит угол к диапазону [-PI, PI], чтобы разворот всегда шёл по кратчайшей дуге.
 float wrap_angle(float angle) {
     while (angle > kPi) angle -= kTwoPi;
     while (angle < -kPi) angle += kTwoPi;
     return angle;
 }
 
+// Возвращает кратчайшую знаковую разницу между двумя углами yaw.
 float angle_delta(float from, float to) {
     return wrap_angle(to - from);
 }
 
+// Горизонтальная дистанция без разницы высот; используется для дальности атак и преследования.
 float horizontal_distance(const glm::vec3& a, const glm::vec3& b) {
     return glm::length(glm::vec2(a.x - b.x, a.z - b.z));
 }
 
+// Переводит yaw в единичное направление взгляда по плоскости XZ.
 glm::vec3 forward_from_yaw(float yaw) {
     return {std::sin(yaw), 0.0f, std::cos(yaw)};
 }
 
+// Проверяет опору/препятствие по свойству блока; за пределами мира считается твёрдой границей.
 bool solid_block(const Chunk_Manager& chunks, int x, int y, int z) {
     if (y < Config::world_min_y || y > Config::world_max_y) return true;
     const Block_Types block = chunks.get_block_world(x, y, z);
     return get_block_props(block).is_solid;
 }
 
+// Единый набор временных и боевых параметров каждой атаки.
 struct Attack_Properties {
     float range;
     float damage;
@@ -51,6 +57,7 @@ struct Attack_Properties {
     float cooldown;
 };
 
+// Таблица характеристик атаки: дальность, урон, подготовка, активная фаза, восстановление и перезарядка.
 Attack_Properties attack_properties(Knight_Attack attack) {
     switch (attack) {
         case Knight_Attack::Swipe:        return {5.6f, 19.0f, 0.62f, 0.32f, 0.72f, 1.35f};
@@ -65,6 +72,7 @@ Attack_Properties attack_properties(Knight_Attack attack) {
     }
 }
 
+// Связывает логический тип удара с именем анимации внутри knight.glb.
 const char* attack_animation(Knight_Attack attack) {
     switch (attack) {
         case Knight_Attack::Swipe: return "Attack_Slash";
@@ -80,6 +88,7 @@ const char* attack_animation(Knight_Attack attack) {
 }
 }
 
+// Проверяет, находится ли точка внутри боевой арены с учётом срезанных углов и габарита босса.
 bool Knight_Ai::Arena::contains(const glm::vec3& p, float margin) const {
     const float rx = std::max(1.0f, half_x - margin);
     const float rz = std::max(1.0f, half_z - margin);
@@ -97,6 +106,7 @@ bool Knight_Ai::Arena::contains(const glm::vec3& p, float margin) const {
     return true;
 }
 
+// Возвращает ближайшую допустимую точку арены: ограничивает стены, потолок, пол и диагональные углы.
 glm::vec3 Knight_Ai::Arena::clamp(const glm::vec3& input, float margin) const {
     glm::vec3 p = input;
     const float rx = std::max(1.0f, half_x - margin);
@@ -123,6 +133,7 @@ glm::vec3 Knight_Ai::Arena::clamp(const glm::vec3& input, float margin) const {
     return p;
 }
 
+// Создаёт босса, фиксирует центр арены в точке призыва и корректирует начальную позицию внутрь неё.
 Knight_Ai::Knight_Ai(std::string name, const glm::vec3& spawn_position)
     : m_name(std::move(name)), m_position(spawn_position), m_last_seen_position(spawn_position) {
     m_arena.center = spawn_position;
@@ -130,6 +141,7 @@ Knight_Ai::Knight_Ai(std::string name, const glm::vec3& spawn_position)
     m_position = m_arena.clamp(spawn_position, 1.5f);
 }
 
+// Мгновенно разворачивает модель к заданной точке; используется при постановке босса/сценарном появлении.
 void Knight_Ai::face_towards(const glm::vec3& target) {
     glm::vec3 direction = target - m_position;
     direction.y = 0.0f;
@@ -138,6 +150,7 @@ void Knight_Ai::face_towards(const glm::vec3& target) {
     m_model.set_yaw_degrees(glm::degrees(m_yaw));
 }
 
+// Загружает обязательную модель, проверяет скелет и все клипы, без которых поведение босса неполноценно.
 bool Knight_Ai::load_model() {
     if (!m_model.load(MODEL_PATH)) {
         LOG_ERROR(std::string("Knight_Ai: required model could not be loaded: ") + MODEL_PATH);
@@ -164,6 +177,7 @@ bool Knight_Ai::load_model() {
     return true;
 }
 
+// Проверяет физическую видимость игрока: луч от корпуса рыцаря к глазам игрока блокируют только непрозрачные блоки.
 bool Knight_Ai::has_line_of_sight(const Knight_Player_View& player, const Chunk_Manager& chunks) const {
     if (!player.alive) return false;
 
@@ -192,6 +206,7 @@ bool Knight_Ai::has_line_of_sight(const Knight_Player_View& player, const Chunk_
     return true;
 }
 
+// Полное условие захвата цели: игрок жив, в дальности, виден через блоки и находится в угле обзора текущей фазы.
 bool Knight_Ai::can_see_player(const Knight_Player_View& player, const Chunk_Manager& chunks) const {
     if (!player.alive) return false;
     const float distance = glm::distance(m_position + glm::vec3(0, 1.5f, 0), player.position);
@@ -207,6 +222,7 @@ bool Knight_Ai::can_see_player(const Knight_Player_View& player, const Chunk_Man
     return std::acos(dot) <= half_fov;
 }
 
+// Проверяет, помещается ли весь объём тела рыцаря в точке, не пересекая твёрдые блоки.
 bool Knight_Ai::can_occupy(const glm::vec3& feet, const Chunk_Manager& chunks) const {
     const glm::vec3 lo(feet.x - BODY_HALF_X, feet.y + 0.05f, feet.z - BODY_HALF_Z);
     const glm::vec3 hi(feet.x + BODY_HALF_X, feet.y + BODY_HEIGHT - 0.05f, feet.z + BODY_HALF_Z);
@@ -223,6 +239,7 @@ bool Knight_Ai::can_occupy(const glm::vec3& feet, const Chunk_Manager& chunks) c
     return true;
 }
 
+// Проверяет опору под четырьмя углами ног; также считает пол арены гарантированной опорой.
 bool Knight_Ai::has_ground_below(const glm::vec3& feet, const Chunk_Manager& chunks) const {
     const float y = feet.y - 0.12f;
     const float x_offset = BODY_HALF_X * 0.72f;
@@ -236,6 +253,7 @@ bool Knight_Ai::has_ground_below(const glm::vec3& feet, const Chunk_Manager& chu
     return feet.y <= m_arena.floor_y + 0.02f;
 }
 
+// Сбрасывает только текущую незавершённую попытку распознавания манёвра, не стирая долговременную память.
 void Knight_Ai::reset_pattern_candidate() {
     m_candidate_pattern = Knight_Player_Pattern::None;
     m_candidate_duration = 0.0f;
@@ -245,12 +263,14 @@ void Knight_Ai::reset_pattern_candidate() {
     m_candidate_direction = 0;
 }
 
+// Суммирует доказательства по всем стратегиям; используется для отладки/отображения степени обучения.
 float Knight_Ai::get_pattern_evidence() const {
     float total = 0.0f;
     for (float value : m_pattern_evidence) total += value;
     return total;
 }
 
+// Выбирает наиболее подтверждённую стратегию и применяет пороги/гистерезис, чтобы босс не переучивался от одного движения.
 void Knight_Ai::refresh_learned_pattern() {
     float total = 0.0f;
     float best_score = 0.0f;
@@ -304,6 +324,7 @@ void Knight_Ai::refresh_learned_pattern() {
     }
 }
 
+// Добавляет одно завершённое наблюдение стратегии и при необходимости запоминает сторону флангового обхода.
 void Knight_Ai::record_pattern_episode(Knight_Player_Pattern pattern, int direction) {
     if (pattern == Knight_Player_Pattern::None || pattern == Knight_Player_Pattern::Count)
         return;
@@ -322,6 +343,7 @@ void Knight_Ai::record_pattern_episode(Knight_Player_Pattern pattern, int direct
     }
 }
 
+// Анализирует движение игрока во времени: фиксирует законченные манёвры, ослабляет старые доказательства и обновляет память.
 void Knight_Ai::update_learning(const Knight_Player_View& player, float dt) {
     // Долгая память: полураспад около трёх минут. Один необычный манёвр
     // практически не меняет накопленную модель поведения.
@@ -463,6 +485,7 @@ void Knight_Ai::update_learning(const Knight_Player_View& player, float dt) {
     refresh_learned_pattern();
 }
 
+// Регистрирует только фактическое попадание по боссу и классифицирует его как фланговую или ближнюю повторную тактику.
 void Knight_Ai::observe_player_hit(const glm::vec3& attacker_position) {
     // Считаем только отдельные реальные попадания. Удар из задней полусферы
     // подтверждает фланговую тактику; фронтальный/боковой удар — повторный
@@ -486,6 +509,7 @@ void Knight_Ai::observe_player_hit(const glm::vec3& attacker_position) {
     m_player_hit_event_cooldown = 1.05f;
 }
 
+// Оценивает будущую позицию игрока по его скорости, ограничивая горизонт прогнозирования и длину упреждения.
 glm::vec3 Knight_Ai::predict_player(const Knight_Player_View& player, float seconds) const {
     seconds = glm::clamp(seconds, 0.0f, 1.15f);
     glm::vec3 velocity = player.velocity;
@@ -499,6 +523,7 @@ glm::vec3 Knight_Ai::predict_player(const Knight_Player_View& player, float seco
     return predicted;
 }
 
+// Плавно поворачивает рыцаря к цели с угловой скоростью, растущей вместе с фазой босса.
 void Knight_Ai::rotate_towards(const glm::vec3& target, float dt, float multiplier) {
     glm::vec3 direction = target - m_position;
     direction.y = 0.0f;
@@ -510,6 +535,7 @@ void Knight_Ai::rotate_towards(const glm::vec3& target, float dt, float multipli
     m_model.set_yaw_degrees(glm::degrees(m_yaw));
 }
 
+// Проверяет, попадает ли игрок в передний сектор рыцаря без повторного трассирования блоков.
 bool Knight_Ai::facing_player(const Knight_Player_View& player) const {
     glm::vec3 d = player.position - m_position;
     d.y = 0.0f;
@@ -519,11 +545,13 @@ bool Knight_Ai::facing_player(const Knight_Player_View& player) const {
     return glm::dot(forward_from_yaw(m_yaw), d) >= std::cos(half_fov);
 }
 
+// Повторно подтверждает видимость прямо в момент нанесения урона, не позволяя бить через стену или спину.
 bool Knight_Ai::can_see_at_impact(const Knight_Player_View& player, const Chunk_Manager& chunks) const {
     // Атака не наносит урон без прямой видимости и нахождения игрока в секторе обзора.
     return can_see_player(player, chunks);
 }
 
+// Безопасно переключает клип модели; при повторном запуске одноразовой атаки сбрасывает её через Idle.
 void Knight_Ai::set_animation(const char* name, bool loop) {
     if (!m_model.is_loaded()) return;
     const std::string requested = name ? name : "Idle";
@@ -551,6 +579,7 @@ void Knight_Ai::set_animation(const char* name, bool loop) {
     m_current_animation = requested;
 }
 
+// Переключает босса между тремя фазами по оставшемуся здоровью и ускоряет доступность следующего действия.
 void Knight_Ai::update_phase() {
     const float ratio = get_health_percent();
     const int next_phase = ratio <= 0.34f ? 3 : (ratio <= 0.68f ? 2 : 1);
@@ -562,6 +591,7 @@ void Knight_Ai::update_phase() {
     set_animation("Attack_Slam", false);
 }
 
+// Фильтрует атаки по радиусу и фазе: мощные приёмы открываются только по мере потери здоровья.
 bool Knight_Ai::attack_is_available(Knight_Attack attack, float distance) const {
     if (attack == Knight_Attack::None) return false;
     const Attack_Properties info = attack_properties(attack);
@@ -582,9 +612,12 @@ bool Knight_Ai::attack_is_available(Knight_Attack attack, float distance) const 
     }
 }
 
+// Выбирает удар из доступных с весами по дистанции и выученной стратегии игрока; выбор вероятностный, а не жёсткий.
 Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const Chunk_Manager& chunks) {
     if (!can_see_player(player, chunks) || m_attack_cooldown > 0.0f) return Knight_Attack::None;
     const float distance = horizontal_distance(m_position, player.position);
+    // Кандидаты хранятся в фиксированных массивах: выбор атаки не выделяет память в игровом тике.
+    // Вес определяет вероятность приёма, но не гарантирует его — повторный бой не становится полностью шаблонным.
     std::array<Knight_Attack, 8> candidates{};
     std::array<float, 8> weights{};
     std::size_t count = 0;
@@ -607,6 +640,7 @@ Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const C
         }
         // Контрмеры включаются только после подтверждения устойчивой стратегии
         // игрока несколькими завершёнными эпизодами, а не по текущей позиции.
+        // Поэтому рыцарь не реагирует мгновенно на каждый шаг: он наказывает повторяемую тактику.
         switch (m_learned_pattern) {
             case Knight_Player_Pattern::Rear_Flank:
             case Knight_Player_Pattern::Orbit_Left:
@@ -642,6 +676,8 @@ Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const C
     }
     if (count == 0) return Knight_Attack::None;
 
+    // Преобразуем веса в диапазон [0, total] и выбираем один приём пропорционально его весу.
+    // Так адаптивные контрмеры повышают шанс подходящей атаки, но сохраняют вариативность поведения.
     float total = 0.0f;
     for (std::size_t i = 0; i < count; ++i) total += weights[i];
     // Детерминированное псевдослучайное число без выделения памяти/глобального RNG.
@@ -654,6 +690,7 @@ Knight_Attack Knight_Ai::choose_attack(const Knight_Player_View& player, const C
     return candidates[count - 1];
 }
 
+// Фиксирует выбранную атаку, заранее рассчитывает точку прицеливания и запускает фазу подготовки (windup).
 void Knight_Ai::start_attack(Knight_Attack attack, const Knight_Player_View& player) {
     if (attack == Knight_Attack::None) return;
     const Attack_Properties info = attack_properties(attack);
@@ -666,6 +703,7 @@ void Knight_Ai::start_attack(Knight_Attack attack, const Knight_Player_View& pla
     set_animation(attack_animation(attack), false);
 }
 
+// Делает один шаг к цели с проверкой коллизий, попыткой перешагнуть уступ и локальным обходом препятствия.
 void Knight_Ai::move_towards(const glm::vec3& target, float speed, float dt, const Chunk_Manager& chunks) {
     glm::vec3 delta = target - m_position;
     delta.y = 0.0f;
@@ -719,6 +757,7 @@ void Knight_Ai::move_towards(const glm::vec3& target, float speed, float dt, con
     }
 }
 
+// Задаёт начальную скорость прыжка; флаг attack_landing превращает приземление в завершающий удар Leap Strike.
 void Knight_Ai::begin_jump(const glm::vec3& target, int phase, bool attack_landing) {
     if (!m_grounded) return;
     glm::vec3 delta = target - m_position;
@@ -738,6 +777,7 @@ void Knight_Ai::begin_jump(const glm::vec3& target, int phase, bool attack_landi
     set_animation("Jump", false);
 }
 
+// Симулирует прыжок по осям, обрабатывает столкновения и при боевом прыжке проверяет урон при приземлении.
 void Knight_Ai::update_jump(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks, Knight_Tick_Result& result) {
     m_velocity.y -= GRAVITY * dt;
     glm::vec3 next = m_arena.clamp(m_position + glm::vec3(m_velocity.x * dt, 0.0f, m_velocity.z * dt), 1.5f);
@@ -777,6 +817,7 @@ void Knight_Ai::update_jump(float dt, const Knight_Player_View& player, const Ch
     }
 }
 
+// Единая проверка попадания: видимость, дальность, высота и угол удара; при успехе добавляет урон в результат тика.
 void Knight_Ai::apply_attack_hit(const Knight_Player_View& player, const Chunk_Manager& chunks,
                                  float range, float damage, float arc_degrees, Knight_Tick_Result& result) {
     if (!can_see_at_impact(player, chunks)) return;
@@ -796,6 +837,7 @@ void Knight_Ai::apply_attack_hit(const Knight_Player_View& player, const Chunk_M
     result.player_damage += static_cast<int>(std::round(damage));
 }
 
+// Фаза предупреждения перед атакой: рыцарь доворачивается к прогнозируемой позиции и отменяет удар, если потерял цель.
 void Knight_Ai::update_windup(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks) {
     if (!can_see_player(player, chunks)) {
         m_state = Knight_State::Recovery;
@@ -823,6 +865,7 @@ void Knight_Ai::update_windup(float dt, const Knight_Player_View& player, const 
     }
 }
 
+// Выполняет активную фазу выбранного приёма и вызывает проверку попадания в заданные моменты анимации.
 void Knight_Ai::update_attack(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks, Knight_Tick_Result& result) {
     const Attack_Properties info = attack_properties(m_current_attack);
     m_state_timer += dt;
@@ -908,6 +951,8 @@ void Knight_Ai::update_attack(float dt, const Knight_Player_View& player, const 
         default: break;
     }
 
+    // По окончании активного окна удар больше не может попадать: переходим в восстановление
+    // и назначаем cooldown с поправкой на текущую фазу босса.
     if (t >= info.active) {
         m_state = Knight_State::Recovery;
         m_state_timer = info.recovery;
@@ -915,6 +960,7 @@ void Knight_Ai::update_attack(float dt, const Knight_Player_View& player, const 
     }
 }
 
+// Даёт атаке закончиться и затем возвращает босса к преследованию либо к точке призыва.
 void Knight_Ai::update_recovery(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks) {
     m_state_timer -= dt;
     if (m_state_timer > 0.0f) return;
@@ -924,6 +970,7 @@ void Knight_Ai::update_recovery(float dt, const Knight_Player_View& player, cons
     set_animation("Idle", true);
 }
 
+// Выбирает цель движения с упреждением, применяет выученный фланговый перехват и решает, нужен ли прыжок.
 void Knight_Ai::update_movement(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks) {
     const float distance = horizontal_distance(m_position, player.position);
     const float speed = (m_phase == 1 ? 5.2f : (m_phase == 2 ? 7.8f : 10.6f)) * m_effects.speed_factor();
@@ -967,6 +1014,7 @@ void Knight_Ai::update_movement(float dt, const Knight_Player_View& player, cons
     }
 }
 
+// Главная машина состояний: обнаружение, преследование, подготовка/удар, восстановление и возвращение домой.
 void Knight_Ai::update_ai(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks, Knight_Tick_Result& result) {
     const bool los = player.alive && has_line_of_sight(player, chunks);
     const float distance = glm::distance(m_position + glm::vec3(0, 1.4f, 0), player.position);
@@ -1012,6 +1060,8 @@ void Knight_Ai::update_ai(float dt, const Knight_Player_View& player, const Chun
         return;
     }
 
+    // Состояния не исполняются параллельно: каждый тик делегируется ровно одному обработчику.
+    // Вложенные обработчики могут сменить m_state, и следующий тик продолжит уже новую фазу.
     switch (m_state) {
         case Knight_State::Dormant:
             if (visible) m_state = Knight_State::Chase;
@@ -1064,6 +1114,7 @@ void Knight_Ai::update_ai(float dt, const Knight_Player_View& player, const Chun
     }
 }
 
+// Один шаг симуляции босса: ограничивает dt, обновляет эффекты/фазы/ИИ, гравитацию и скелетную анимацию.
 Knight_Tick_Result Knight_Ai::update(float dt, const Knight_Player_View& player, const Chunk_Manager& chunks) {
     Knight_Tick_Result result;
     dt = glm::clamp(dt, 0.0f, 0.05f);
@@ -1107,6 +1158,7 @@ Knight_Tick_Result Knight_Ai::update(float dt, const Knight_Player_View& player,
     return result;
 }
 
+// Применяет полученный урон, прерывает текущий приём, включает реакцию Hit и при нуле HP убивает босса.
 bool Knight_Ai::take_damage(float amount, const glm::vec3& attacker_position) {
     if (m_dying || amount <= 0.0f) return false;
     m_health = std::max(0.0f, m_health - amount);
@@ -1125,6 +1177,7 @@ bool Knight_Ai::take_damage(float amount, const glm::vec3& attacker_position) {
     return false;
 }
 
+// Переводит босса в необратимое состояние смерти и запускает финальную анимацию.
 bool Knight_Ai::kill() {
     if (m_dying) return false;
     m_dying = true;
@@ -1135,11 +1188,13 @@ bool Knight_Ai::kill() {
     return true;
 }
 
+// Выдаёт мировой AABB тела рыцаря, используемый системой попаданий игрока.
 void Knight_Ai::compute_hitbox(glm::vec3& out_min, glm::vec3& out_max) const {
     out_min = m_position + glm::vec3(-BODY_HALF_X, 0.05f, -BODY_HALF_Z);
     out_max = m_position + glm::vec3(BODY_HALF_X, BODY_HEIGHT, BODY_HALF_Z);
 }
 
+// Передаёт отрисовку текущей позы модели в общий Mob renderer.
 void Knight_Ai::render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient) const {
     m_model.render(shader, view, projection, ambient);
 }
