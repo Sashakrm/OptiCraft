@@ -473,7 +473,11 @@ bool Region_File::read_locked(const Key& key, Chunk_Block_Grid& blocks) {
 
 bool Region_File::write(const Key& key, const Chunk_Block_Grid& blocks) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return write_locked(key, blocks);
+    // Одиночная запись используется аварийным путём Chunk_IO и миграцией legacy-файлов.
+    // Она обязана закрепить новый индекс на диске так же, как write_batch, прежде чем
+    // вызывающий код подтвердит успех или удалит исходный legacy-файл.
+    if (!write_locked(key, blocks)) return false;
+    return flush_locked();
 }
 
 bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
@@ -495,6 +499,10 @@ bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
     const uint8_t* payload = block_bytes;
     uint32_t payload_bytes = block_len;
     uint32_t format = use_rle ? k_format_rle16 : k_format_raw16;
+    // Владелец payload для формата с метаданными должен жить до m_stream.write ниже.
+    // Если объявить этот vector внутри if (blocks.has_meta()), указатель payload станет
+    // висячим сразу после выхода из блока if, и на диск попадут случайные байты.
+    std::vector<uint8_t> meta_payload;
 
     // Чанк с метаданными блоков: оборачиваем блоки (как выбраны выше) и дописываем метаданные.
     // Плотный формат: [1 байт use_rle][4 байта block_len][block bytes][4 байта meta_count]
@@ -503,7 +511,6 @@ bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
     if (blocks.has_meta()) {
         const auto& entries = blocks.meta_entries();   // плотный: [индекс, значение, ...]
         const uint32_t meta_count = static_cast<uint32_t>(entries.size() / 2);
-        std::vector<uint8_t> meta_payload;
         meta_payload.reserve(1 + 4 + block_len + 4 + static_cast<size_t>(meta_count) * 3);
         meta_payload.push_back(use_rle ? 1 : 0);
         const auto append_u32 = [&meta_payload](uint32_t v) {
@@ -527,23 +534,16 @@ bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
 
     const uint32_t needed_sectors = (payload_bytes + k_sector_size - 1) / k_sector_size;
 
+    // Используем copy-on-write: сначала записываем новый payload в отдельный диапазон,
+    // затем обновляем индекс и заголовок. Нельзя переписывать старые сектора на месте:
+    // если приложение/ОС завершится посреди записи, старый индекс должен продолжать
+    // ссылаться на целую предыдущую версию пользовательского чанка.
     Entry entry;
-    auto it = m_index.find(key);
-    if (it != m_index.end() && it->second.sector_count >= needed_sectors) {
-        // Влезает в уже выделенное место — переписываем на месте и отдаём
-        // обратно лишний хвост.
-        entry.first_sector = it->second.first_sector;
-        if (it->second.sector_count > needed_sectors) {
-            release_sectors_locked(entry.first_sector + needed_sectors,
-                                   it->second.sector_count - needed_sectors);
-        }
-    } else {
-        if (it != m_index.end()) {
-            release_sectors_locked(it->second.first_sector, it->second.sector_count);
-        }
-        entry.first_sector = allocate_sectors_locked(needed_sectors);
-    }
+    const auto old = m_index.find(key);
+    const bool had_old_entry = old != m_index.end();
+    const Entry old_entry = had_old_entry ? old->second : Entry{};
 
+    entry.first_sector = allocate_sectors_locked(needed_sectors);
     entry.sector_count = needed_sectors;
     entry.payload_bytes = payload_bytes;
     entry.format = format;
@@ -553,11 +553,18 @@ bool Region_File::write_locked(const Key& key, const Chunk_Block_Grid& blocks) {
     m_stream.write(reinterpret_cast<const char*>(payload), payload_bytes);
     if (!m_stream) {
         m_stream.clear();
+        // Новый диапазон не стал частью индекса — его можно безопасно вернуть в free-list.
+        release_sectors_locked(entry.first_sector, entry.sector_count);
         LOG_ERROR("Region_File: write failed for chunk " + std::to_string(key.x) + "," +
                   std::to_string(key.y) + "," + std::to_string(key.z));
         return false;
     }
 
+    if (had_old_entry) {
+        // Освободим старую версию только после того, как flush_locked успешно переключит
+        // заголовок на индекс с новым payload. До этого old_entry остаётся восстановимым.
+        m_retired_data_ranges.push_back({old_entry.first_sector, old_entry.sector_count});
+    }
     m_index[key] = entry;
     m_index_dirty = true;
     return true;
@@ -618,8 +625,15 @@ bool Region_File::flush_locked() {
     }
     m_stream.flush();
 
-    // Заголовок уже указывает на новый индекс: старый индекс становится свободным местом.
+    // Заголовок уже указывает на новый индекс: старый индекс и предыдущие версии payload
+    // теперь больше не нужны. До этого момента они намеренно оставались занятыми, чтобы
+    // прежнее сохранение можно было прочитать после аварийного завершения процесса.
     release_sectors_locked(m_index_first_sector, m_index_sector_count);
+    for (const Free_Range& range : m_retired_data_ranges) {
+        release_sectors_locked(range.first_sector, range.sector_count);
+    }
+    m_retired_data_ranges.clear();
+
     m_index_first_sector = index_first_sector;
     m_index_sector_count = index_sectors;
     m_index_dirty = false;

@@ -131,6 +131,9 @@ private:
     std::fstream m_stream;
     std::unordered_map<Key, Entry, Key_Hash> m_index;
     std::vector<Free_Range> m_free_list;
+    // Старые payload-диапазоны нельзя переиспользовать, пока новый индекс не закреплён
+    // заголовком на диске: при аварийном завершении старый индекс должен остаться читаемым.
+    std::vector<Free_Range> m_retired_data_ranges;
     uint32_t m_next_sector = 0;       // первый сектор за концом занятых данных
     bool m_index_dirty = false;
     // Где сейчас лежит индекс на диске (0 / 0 — индекса нет). Старый индекс освобождается

@@ -2,6 +2,7 @@
 
 #include "utils/logging/Logger.h"
 
+#include <algorithm>
 #include <map>
 #include <utility>
 
@@ -45,18 +46,19 @@ uint32_t Chunk_IO::acquire_stage() {
 }
 
 uint32_t Chunk_IO::acquire_stage_wait() {
-    // Пул обычно не исчерпывается, но при массовой выгрузке изменённых чанков это возможно.
+    // Пул обычно не исчерпывается, но при массовой загрузке и сохранении это возможно.
     // В таком случае ждём освобождения буфера вместо того, чтобы объявлять сохранённый чанк
     // отсутствующим и отправлять его на повторную генерацию.
     if (m_stage_count == 0) return kNone;
 
+    // Один и тот же mutex защищает и проверку свободного списка, и переход в wait.
+    // Это важно: иначе release_stage мог бы отправить notify между проверкой и wait,
+    // после чего читатель уснул бы навсегда, хотя свободный stage уже существует.
+    std::unique_lock<std::mutex> lock(m_stage_wait_mutex);
     while (true) {
         const uint32_t index = acquire_stage();
         if (index != kNone) return index;
 
-        // Проверка внутри wait защищает от потерянного уведомления: если буфер успел
-        // освободиться до входа в ожидание, predicate сразу позволит продолжить.
-        std::unique_lock<std::mutex> lock(m_stage_wait_mutex);
         m_stage_available_cv.wait(lock, [this] {
             return static_cast<uint32_t>(m_free_head.load(std::memory_order_acquire)) != kNone;
         });
@@ -64,11 +66,15 @@ uint32_t Chunk_IO::acquire_stage_wait() {
 }
 
 void Chunk_IO::release_stage(uint32_t index) {
-    uint64_t head = m_free_head.load(std::memory_order_acquire);
-    do {
-        m_headers[index].next.store(static_cast<uint32_t>(head), std::memory_order_relaxed);
-    } while (!m_free_head.compare_exchange_weak(head, pack(tag_of(head) + 1, index),
-                                                std::memory_order_release, std::memory_order_acquire));
+    {
+        // Меняем состояние под тем же mutex, под которым acquire_stage_wait проверяет predicate.
+        std::lock_guard<std::mutex> lock(m_stage_wait_mutex);
+        uint64_t head = m_free_head.load(std::memory_order_acquire);
+        do {
+            m_headers[index].next.store(static_cast<uint32_t>(head), std::memory_order_relaxed);
+        } while (!m_free_head.compare_exchange_weak(head, pack(tag_of(head) + 1, index),
+                                                    std::memory_order_release, std::memory_order_acquire));
+    }
 
     // Разбудить disk_reader, если он ждал свободный stage для чтения сохранённого чанка.
     m_stage_available_cv.notify_all();
@@ -76,15 +82,36 @@ void Chunk_IO::release_stage(uint32_t index) {
 
 bool Chunk_IO::enqueue_write(const std::shared_ptr<Region_File>& region, const Region_File::Key& key,
                              const Chunk_Block_Grid& blocks) {
+    // Сначала получаем отдельный stage. До постановки в очередь он принадлежит только
+    // вызывающему потоку, поэтому исходный чанк можно безопасно скопировать без m_mutex.
     const uint32_t index = acquire_stage();
     if (index == kNone) return false;
-
-    // Буфер принадлежит нам до постановки в очередь, поэтому копию делаем без замка.
     m_stages[index] = blocks;
+
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        const Pending_Key pending_key{region.get(), key};
+        const auto pending = m_pending.find(pending_key);
+
+        if (pending != m_pending.end()) {
+            // Если предыдущая версия всё ещё в общей очереди, писатель её ещё не забрал.
+            // Заменяем содержимое её stage новой копией вместо накопления десятков устаревших
+            // снимков одного чанка при быстром строительстве/работе жидкостей.
+            const auto queued = std::find_if(m_queue.begin(), m_queue.end(), [&](const Write_Item& item) {
+                return item.region.get() == region.get() && item.key == key &&
+                       item.stage == pending->second;
+            });
+            if (queued != m_queue.end()) {
+                m_stages[queued->stage] = blocks;
+                release_stage(index);
+                return true;
+            }
+        }
+
+        // Предыдущая версия уже обрабатывается writer-потоком. Добавляем новую запись
+        // после неё: так последняя версия чанка гарантированно станет последней на диске.
         m_queue.push_back({region, key, index});
-        m_pending[Pending_Key{region.get(), key}] = index;
+        m_pending[pending_key] = index;
     }
     m_queue_cv.notify_one();
     return true;
@@ -184,8 +211,34 @@ void Chunk_IO::writer_loop() {
                 keys.push_back(batch[i].key);
                 blocks.push_back(&m_stages[batch[i].stage]);
             }
-            if (!batch[indices.front()].region->write_batch(keys, blocks)) {
-                LOG_ERROR("Chunk_IO: пачка записи не сохранилась полностью");
+            const auto& region = batch[indices.front()].region;
+            bool saved = false;
+
+            // Повторяем пакетную запись: временная ошибка файловой системы или неудачный
+            // сброс индекса не должны сразу превращать пользовательскую постройку в потерянную.
+            for (int attempt = 0; attempt < 3 && !saved; ++attempt) {
+                saved = region->write_batch(keys, blocks);
+            }
+
+            if (!saved) {
+                // Если пакетный сброс всё ещё не проходит, пробуем записать чанки отдельно.
+                // Это более медленный аварийный путь, но он позволяет не терять успешные записи
+                // из-за одной проблемной записи в общей пачке.
+                bool all_saved = true;
+                for (size_t j = 0; j < indices.size(); ++j) {
+                    bool chunk_saved = false;
+                    for (int attempt = 0; attempt < 3 && !chunk_saved; ++attempt) {
+                        chunk_saved = region->write(keys[j], *blocks[j]);
+                    }
+                    all_saved = all_saved && chunk_saved;
+                    if (!chunk_saved) {
+                        LOG_ERROR("Chunk_IO: не удалось сохранить чанк " +
+                                  std::to_string(keys[j].x) + " " +
+                                  std::to_string(keys[j].y) + " " +
+                                  std::to_string(keys[j].z));
+                    }
+                }
+                if (!all_saved) LOG_ERROR("Chunk_IO: часть чанков не удалось записать даже по отдельности");
             }
         }
 

@@ -309,5 +309,8 @@ bool World_File::save_chunk(int chunk_x, int chunk_y, int chunk_z,
 
 void World_File::flush_chunks(const std::string& generation_folder) const {
     auto region = Region_File::get(get_region_path(generation_folder));
-    if (region) region->flush();
+    if (region && !region->flush()) {
+        LOG_ERROR("World_File: не удалось сбросить индекс чанков: " +
+                  get_region_path(generation_folder).string());
+    }
 }

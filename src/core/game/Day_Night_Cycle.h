@@ -13,6 +13,7 @@
 class Day_Night_Cycle {
 public:
     // full_cycle_seconds: длительность ПОЛНОГО круга (день + ночь), по умолчанию 20 минут,
+    // как и попросили — не 20 минут дня И 20 минут ночи отдельно.
     explicit Day_Night_Cycle(float full_cycle_seconds = 1200.0f);
 
     void update(float delta_time);

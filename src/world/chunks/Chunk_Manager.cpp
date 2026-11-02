@@ -136,9 +136,12 @@ Chunk_Manager::~Chunk_Manager() {
 
 void Chunk_Manager::save_all() {
     m_chunks.for_each([this](const glm::ivec3&, const Chunk_Ptr& chunk) {
-        save_chunk_to_disk(*chunk);
+        if (!save_chunk_to_disk(*chunk)) {
+            LOG_ERROR("Chunk_Manager::save_all: не удалось поставить чанк на сохранение");
+        }
     });
-    // Дописываем очередь записи до конца, и только потом сбрасываем индексы регионов.
+    // Дожидаемся не просто опустошения очереди, а завершения последней записи и её индекса.
+    // Только после этого сбрасываем Region_File на диск.
     m_chunk_io->drain();
     m_world_file.flush_chunks(m_generation_folder);
     Block_Entity_Store::save(get_block_entities_path(), m_block_entities);
@@ -958,15 +961,26 @@ bool Chunk_Manager::save_chunk_to_disk(const Chunk& chunk) const {
     const auto region = Region_File::get(m_world_file.get_region_path(m_generation_folder));
     if (region && m_chunk_io->enqueue_write(region, key, chunk.get_blocks())) return true;
 
-    // Буферов нет: дожидаемся очереди, чтобы более старая запись не перезаписала эту, и пишем синхронно.
+    // Буферов нет: дожидаемся очереди, чтобы более старая запись не перезаписала эту,
+    // после чего сохраняем текущий снимок напрямую. Ошибка возвращается вызывающему коду.
     m_chunk_io->drain();
-    return m_world_file.save_chunk(chunk.get_chunk_x(), chunk.get_chunk_y(), chunk.get_chunk_z(),
-                                   m_generation_folder, chunk.get_blocks());
+    const bool saved = m_world_file.save_chunk(chunk.get_chunk_x(), chunk.get_chunk_y(), chunk.get_chunk_z(),
+                                               m_generation_folder, chunk.get_blocks());
+    if (!saved) {
+        LOG_ERROR("Chunk_Manager: синхронное сохранение чанка завершилось ошибкой " +
+                  std::to_string(chunk.get_chunk_x()) + " " +
+                  std::to_string(chunk.get_chunk_y()) + " " +
+                  std::to_string(chunk.get_chunk_z()));
+    }
+    return saved;
 }
 
 void Chunk_Manager::unload_chunk(int cx, int cy, int cz) {
     if (Chunk* existing = m_chunks.find(cx, cy, cz)) {
-        save_chunk_to_disk(*existing);
+        if (!save_chunk_to_disk(*existing)) {
+            LOG_ERROR("Chunk_Manager::unload_chunk: не удалось сохранить выгружаемый чанк " +
+                      std::to_string(cx) + " " + std::to_string(cy) + " " + std::to_string(cz));
+        }
         m_unloaded_since_last_query.push_back({cx, cy, cz});
         m_chunks.erase(cx, cy, cz);
         m_light_sources.erase({cx, cy, cz});   // при следующей загрузке чанка источники найдутся заново
@@ -1935,7 +1949,11 @@ void Chunk_Manager::rebuild_dirty_chunks() {
 void Chunk_Manager::clear() {
     ++m_generation_id;
     m_chunks.for_each([this](const glm::ivec3& position, const Chunk_Ptr& chunk) {
-        save_chunk_to_disk(*chunk);
+        if (!save_chunk_to_disk(*chunk)) {
+            LOG_ERROR("Chunk_Manager::clear: не удалось сохранить чанк " +
+                      std::to_string(position.x) + " " + std::to_string(position.y) + " " +
+                      std::to_string(position.z));
+        }
         m_unloaded_since_last_query.push_back(position);
     });
     // Сначала обязательно дожидаемся асинхронного писателя: write_batch обновляет индекс
@@ -2043,6 +2061,11 @@ bool Chunk_Manager::set_block_meta_world(int wx, int wy, int wz, uint8_t meta) {
     const int lz = wz - cz * Config::chunk_size;
     if (chunk->get_meta(lx, ly, lz) == meta) return false;
     chunk->set_meta(lx, ly, lz, meta);
+    // Метаданные блока (направление, состояние печи и т.п.) сохраняются тем же путём,
+    // что и id блока. Запись асинхронная, поэтому кадр не ждёт завершения дискового IO.
+    if (!save_chunk_to_disk(*chunk)) {
+        LOG_ERROR("Chunk_Manager: не удалось поставить метаданные чанка на сохранение");
+    }
     // Метаданные влияют только на грани самого блока (соседние чанки не пересобираем).
     request_urgent_mesh_rebuild(cx, cy, cz);
     return true;
@@ -2113,11 +2136,14 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
         relight_sky_light_near(world_pos);
     }
 
-    // Раньше здесь на КАЖДЫЙ поставленный блок целиком переписывался 32-килобайтный
-    // чанк — синхронно, из главного потока, прямо в кадре. Теперь правка только
-    // помечает чанк изменённым: на диск он уедет при выгрузке, при выходе и при
-    // явном сохранении мира (Chunk_Manager::save_all).
+    // Отмечаем чанк изменённым и сразу ставим актуальный снимок в асинхронную очередь.
+    // Главный поток копирует данные в stage, но сам файл пишет отдельный writer-поток.
+    // Chunk_IO объединяет ещё не начатые записи одного ключа, чтобы серия быстрых правок
+    // не создавала очередь из устаревших копий одного и того же чанка.
     chunk->mark_modified();
+    if (!save_chunk_to_disk(*chunk)) {
+        LOG_ERROR("Chunk_Manager: не удалось поставить изменённый чанк на сохранение");
+    }
 
     // Соседние жидкости должны отреагировать на правку (вода хлынет в пробитую стену).
     m_fluids.notify_changed(*this, world_pos);
@@ -2131,6 +2157,9 @@ void Chunk_Manager::set_blocks_world_batch(const std::vector<std::pair<glm::ivec
     glm::ivec3 light_lo(std::numeric_limits<int>::max());
     glm::ivec3 light_hi(std::numeric_limits<int>::min());
     bool any_light_change = false;
+    // Несколько клеток одной массовой операции часто лежат в одном чанке.
+    // Сохраним каждый затронутый чанк один раз после завершения пакетного изменения.
+    std::unordered_set<Chunk*> chunks_to_save;
 
     for (const auto& [pos, type] : writes) {
         if (pos.y < Config::world_min_y || pos.y > Config::world_max_y) continue;
@@ -2148,6 +2177,7 @@ void Chunk_Manager::set_blocks_world_batch(const std::vector<std::pair<glm::ivec
         chunk->set_block(lx, ly, lz, type);
         sync_block_entity(pos.x, pos.y, pos.z, old_type, type);
         chunk->mark_modified();
+        chunks_to_save.insert(chunk);
 
         // Меш: как в set_block_world, но запрос на пересборку — один на чанк (дедуп в очереди).
         request_urgent_mesh_rebuild(cx, cy, cz);
@@ -2191,6 +2221,13 @@ void Chunk_Manager::set_blocks_world_batch(const std::vector<std::pair<glm::ivec
                                 light_hi.x + r, std::min(Config::world_max_y, light_hi.y + r), light_hi.z + r);
         relight_sky_light_box(light_lo.x - r, std::max(Config::world_min_y, light_lo.y - shadow - r), light_lo.z - r,
                               light_hi.x + r, std::min(Config::world_max_y, light_hi.y + r), light_hi.z + r);
+    }
+
+    // После пакетной операции в очередь попадает только последний снимок каждого чанка.
+    for (Chunk* chunk : chunks_to_save) {
+        if (chunk && !save_chunk_to_disk(*chunk)) {
+            LOG_ERROR("Chunk_Manager: не удалось поставить чанк из пакетного изменения на сохранение");
+        }
     }
 }
 
