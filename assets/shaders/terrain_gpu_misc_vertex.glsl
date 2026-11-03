@@ -19,8 +19,10 @@ out vec2 Local;       // shaped: 0..1 по грани бокса
 out vec2 TexCoord;    // flora/liquid: готовая UV в атласе
 out float NormalY;
 out vec3 FragPos;
+out vec3 WorldNormal;
 out float BlockLight;
 out float SkyLight;
+out float Appearance;
 flat out vec4 Rect;
 
 // Порядок вершин квада по коду угла c = fu + 2*fv. Обычный обход (0,1,3),(0,3,2) — наружу у граней
@@ -40,11 +42,13 @@ void main() {
     const uint face = (w0 >> 15u) & 7u;
     const uint packed_light = (w0 >> 18u) & 0xFFu;
     const vec4 rect = rects[rec.y & 0x7FFFu];
-    const vec3 base = origins[sec >> 2u].xyz + cell;
+    const vec4 chunk_origin = origins[sec >> 2u];
+    const vec3 base = chunk_origin.xyz + cell;
 
     vec3 p;
     vec2 tc_param;      // (u, v) в долях спрайта
     float normal_y = 1.0;
+    vec3 world_normal = vec3(0.0, 1.0, 0.0);
 
     if (u_kind == 2) {
         // Флора: диагональ 6 идёт (x0,z0)->(x1,z1), диагональ 7 — (x1,z0)->(x0,z1).
@@ -71,6 +75,10 @@ void main() {
         const float fv = float((code >> 1) & 1);
         const bool pos = (face & 1u) == 0u;
         const uint axis = face >> 1u;
+        world_normal = vec3(0.0);
+        if (axis == 0u) world_normal.x = pos ? 1.0 : -1.0;
+        else if (axis == 1u) world_normal.y = pos ? 1.0 : -1.0;
+        else world_normal.z = pos ? 1.0 : -1.0;
         if (u_kind == 1) {
             // Бокс в 1/64 клетки.
             const vec3 lo = vec3(float(rec.z & 127u), float((rec.z >> 7u) & 127u), float((rec.z >> 14u) & 127u)) / 64.0;
@@ -107,10 +115,15 @@ void main() {
         }
     }
 
+    // Block-space reveal keeps the exact positions shared by neighboring chunks.
+    float appear = clamp((time - chunk_origin.w) / 0.42, 0.0, 1.0);
+    Appearance = appear * appear * (3.0 - 2.0 * appear);
+
     Local = tc_param;
     TexCoord = mix(rect.xy, rect.zw, tc_param);
     NormalY = normal_y;
     FragPos = p;
+    WorldNormal = world_normal;
     SkyLight = float(packed_light >> 4u);
     BlockLight = float(packed_light & 15u);
     Rect = rect;

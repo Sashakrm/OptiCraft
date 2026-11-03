@@ -143,9 +143,12 @@ void Game::run() {
 
     while (m_is_running && !m_window_ptr->should_close()) {
         const float current_time = static_cast<float>(glfwGetTime());
-        const float raw_frame_ms = (current_time - m_last_frame_time) * 1000.0f;
-        m_delta_time = current_time - m_last_frame_time;
+        const float raw_frame_delta = std::max(0.0f, current_time - m_last_frame_time);
+        const float raw_frame_ms = raw_frame_delta * 1000.0f;
+        m_last_raw_frame_ms = raw_frame_ms;
+        m_delta_time = raw_frame_delta;
         m_last_frame_time = current_time;
+        // Only simulation/physics delta is clamped. FPS/TPS accounting below uses real elapsed time.
         m_delta_time = std::clamp(m_delta_time, 0.001f, 0.1f);
 
         // Настоящее время кадра (без обрезки clamp выше), чтобы редкие просадки были видны в F3+F4.
@@ -160,7 +163,9 @@ void Game::run() {
         m_frame_window_count++;
 
         m_fps_frame_count++;
-        m_fps_update_timer += m_delta_time;
+        // Do not use the clamped simulation delta here: that capped the FPS display at 10
+        // whenever a real frame took 100 ms or longer.
+        m_fps_update_timer += raw_frame_delta;
         if (m_fps_update_timer >= 1.0f) {
             m_current_fps = static_cast<float>(m_fps_frame_count) / m_fps_update_timer;
             std::cout << "\r[FPSCOUNTER] FPS: " << m_fps_frame_count << "      " << std::flush;
@@ -180,9 +185,14 @@ void Game::run() {
         }
 
         m_input_ptr->update();
+        const double update_begin = glfwGetTime();
         m_application_ptr->handle_input();
         m_application_ptr->update(m_delta_time);
+        m_last_update_cpu_ms = static_cast<float>((glfwGetTime() - update_begin) * 1000.0);
+
+        const double render_begin = glfwGetTime();
         m_application_ptr->render();
+        m_last_render_cpu_ms = static_cast<float>((glfwGetTime() - render_begin) * 1000.0);
 
         // Отладочный хук для автоматических скриншотов: если задана OPTICRAFT_SHOT_REQUEST и
         // такой файл существует, в нём лежит путь, куда сохранить кадр (PPM).
@@ -433,6 +443,7 @@ void Game::load_options() {
     }
     Hud::set_gui_scale_setting(m_gui_scale_setting);
     m_renderer_ptr->set_flora_render_distance(m_flora_distance);
+    m_renderer_ptr->set_render_distance(m_render_distance);
 }
 
 void Game::save_options() const {
@@ -448,6 +459,7 @@ void Game::save_options() const {
 void Game::set_render_distance(int chunks) {
     m_render_distance = std::clamp(chunks, Config::render_distance_min, Config::render_distance_max);
     if (m_chunk_manager_ptr) m_chunk_manager_ptr->set_load_radius(m_render_distance);
+    if (m_renderer_ptr) m_renderer_ptr->set_render_distance(m_render_distance);
 }
 
 void Game::set_flora_distance(int chunks) {
@@ -724,8 +736,8 @@ float Game::get_world_load_progress() const {
 
 void Game::pump_world_loading() {
     if (!m_chunk_manager_ptr) return;
-    m_chunk_manager_ptr->collect_finished_chunks();
-    m_chunk_manager_ptr->collect_finished_mesh_jobs();
+    // update_player_position() already collects completed chunk and mesh jobs. Calling the
+    // collectors here as well doubled main-thread chunk insertion during the loading screen.
     const glm::vec3 p = m_player_ptr->get_position();
     m_chunk_manager_ptr->update_player_position(p.x, p.y, p.z);
 }
@@ -1205,10 +1217,12 @@ void Game::apply_mob_result(const Mob_Result& result) {
 
 void Game::update_gameplay(float delta_time, bool simulation_active, bool player_actions) {
     poll_iso_capture_result();
-    m_chunk_manager_ptr->collect_finished_chunks();
-    m_chunk_manager_ptr->collect_finished_mesh_jobs();
 
     if (!simulation_active) {
+        // On paused frames update_player_position() is not reached, so collect worker results
+        // here. Active frames collect them exactly once inside update_player_position().
+        m_chunk_manager_ptr->collect_finished_chunks();
+        m_chunk_manager_ptr->collect_finished_mesh_jobs();
         // Мир на паузе, пока открыт экран контейнера, но печь должна продолжать жариться —
         // иначе игрок не увидит, как пожарилось мясо, пока держит окно печи открытым.
         if (is_container_open()) {
@@ -1418,7 +1432,9 @@ void Game::render_gameplay(bool show_gameplay_hud) {
         }
     };
     m_renderer_ptr->render_chunks(renderable, view, projection,
-                                  scene_ambient(), m_spectator, draw_mobs);
+                                  scene_ambient(), m_spectator, draw_mobs,
+                                  camera_position, sky_color,
+                                  m_day_night_cycle.get_sun_direction(), true);
 
     // Выпавшие предметы: одна динамическая геометрия на все, тем же атласом, что и блоки.
     m_dropped_items_mesh.clear();
@@ -1506,7 +1522,7 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     if (m_show_debug_hud) {
         Hud_Debug_Stats stats{};
         stats.fps = m_current_fps;
-        stats.frame_time_ms = m_delta_time * 1000.0f;
+        stats.frame_time_ms = m_last_raw_frame_ms;
         stats.player_position = m_player_ptr->get_position();
         stats.seed = m_world_settings.seed;
         stats.generation_folder = m_generation_folder;
@@ -1529,6 +1545,9 @@ void Game::render_gameplay(bool show_gameplay_hud) {
             stats.frame_min_ms = m_last_frame_min_ms;
             stats.frame_avg_ms = m_last_frame_avg_ms;
             stats.frame_max_ms = m_last_frame_max_ms;
+            stats.update_cpu_ms = m_last_update_cpu_ms;
+            stats.render_cpu_ms = m_last_render_cpu_ms;
+            stats.render_gpu_ms = m_renderer_ptr->get_last_gpu_frame_ms();
             stats.tps = m_current_tps;
             const Mobs_Update::Mob_Debug_Counts counts = m_mobs.debug_counts();
             stats.hostile_count = counts.hostile;
@@ -1537,6 +1556,9 @@ void Game::render_gameplay(bool show_gameplay_hud) {
             stats.chunk_mesh_pending = work.mesh_pending;
             stats.chunk_mesh_requeued = work.mesh_requeued;
             stats.chunk_loads_requested = work.loads_requested;
+            stats.chunk_generation_jobs_queued = work.generation_jobs_queued;
+            stats.chunk_mesh_jobs_queued = work.mesh_jobs_queued;
+            stats.chunk_columns_backlogged = work.columns_backlogged;
             stats.target_lines = m_mobs.debug_target_lines();
         }
 

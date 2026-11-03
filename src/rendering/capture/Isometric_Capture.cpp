@@ -347,7 +347,10 @@ bool Isometric_Capture::render_tile(int tile_index) {
     const bool occlusion_was_enabled = m_renderer.is_occlusion_enabled();
     m_renderer.set_occlusion_enabled(false);
     m_renderer.set_gpu_sync_residency(true);   // снимок обязан быть полным: все чанки на GPU до отрисовки тайла
-    m_renderer.render_chunks(renderables, m_view, projection, m_ambient);
+    // Изометрический снимок не использует игровую дистанционную дымку: она могла бы
+    // искусственно затемнить края композиции и исказить цвета запечённой сцены.
+    m_renderer.render_chunks(renderables, m_view, projection, m_ambient, false, {},
+                             glm::vec3(0.0f), m_sky_color, glm::vec3(0.35f, 0.85f, 0.25f), false);
     m_renderer.set_gpu_sync_residency(false);
     m_renderer.set_occlusion_enabled(occlusion_was_enabled);
 

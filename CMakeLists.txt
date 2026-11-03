@@ -171,6 +171,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/rendering/capture/Isometric_Capture.h
         ${SRC_DIR}/rendering/Renderer.h
         ${SRC_DIR}/rendering/Shader.h
+        ${SRC_DIR}/utils/concurrency/Render_Worker_Pool.h
         ${SRC_DIR}/rendering/atlas/Texture_Atlas.h
         ${SRC_DIR}/rendering/atlas/Atlas_Registry.h
 
@@ -250,9 +251,9 @@ find_package(OpenGL REQUIRED)
 # GLFW (ищем системную)
 find_package(glfw3 REQUIRED QUIET)
 
+find_package(Threads REQUIRED)
 if(UNIX AND NOT APPLE)
     find_package(X11 REQUIRED)
-    find_package(Threads REQUIRED)
 endif()
 
 if(OPTICRAFT_LTO)
@@ -269,7 +270,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         OpenGL::GL
         glfw
         ${X11_LIBRARIES}
-        ${CMAKE_THREAD_LIBS_INIT}
+        Threads::Threads
         ${CMAKE_DL_LIBS}        # для dlopen (нужен glad на Linux)
 )
 

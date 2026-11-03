@@ -1,12 +1,12 @@
 #version 430 core
-// Финализация GPU-мешеров: по счётчикам квадов и списку видимых секций пишет команды
-// glMultiDrawArraysIndirect для одного вида геометрии (solid, shaped, flora или liquid) — вызывается
-// по разу на вид. Команда на каждую пару (запись списка, секция); порядок записей списка и есть порядок
-// отрисовки (CPU кладёт туда чанки от ближних к дальним, для жидкости — от дальних к ближним).
+// Финализация GPU-мешера: по счётчикам квадов и списку видимых секций пишет команды
+// для одного вида геометрии (solid, shaped, flora или liquid) — по разу на вид.
+// Команда приходится на каждую пару (запись списка, секция), а порядок списка задаёт порядок отрисовки.
+// В классическом режиме это DrawArraysIndirectCommand; в EXT/NV-режимах — команда запуска одной
+// task-workgroup, которая затем разворачивает диапазон квадов в mesh-workgroups.
 //
-// Квады секции лежат в пуле подряд, поэтому `first` = номер первого квада * 6, а в вершинном шейдере
-// gl_VertexID / 6 — это сразу абсолютный номер квада. В baseInstance уходит ручка*4 + секция: по ней
-// вершинный шейдер (атрибутом aSection с делителем 1) находит начало координат своего чанка.
+// Квады секции лежат в пуле подряд. Классическому vertex shader нужны `first` и `baseInstance`;
+// mesh pipeline получает те же данные через SSBO Order/Ranges в mesh_task.task.
 layout(local_size_x = 64) in;
 
 layout(std430, binding = 3) readonly buffer Counts { uint counts[]; };
@@ -14,13 +14,14 @@ layout(std430, binding = 3) readonly buffer Counts { uint counts[]; };
 layout(std430, binding = 4) readonly buffer Order { uvec2 order[]; };
 // Место потока в пуле: .x — первый квад, .y — ёмкость (квадов сверх неё нет в памяти).
 layout(std430, binding = 6) readonly buffer Ranges { uvec2 ranges[]; };
-// DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
+// Четыре uint на слот: DrawArrays (4 слова), EXT (3 слова + padding), NV (2 слова + padding).
 layout(std430, binding = 7) writeonly buffer Cmd { uvec4 cmds[]; };
 
 uniform int u_entry_count;    // записей в списке отрисовки этого вида
 uniform int u_kind;           // 0 solid, 1 shaped, 2 flora, 3 liquid
 uniform uint u_order_offset;  // начало списка этого вида в Order
 uniform uint u_cmd_offset;    // начало команд этого вида в Cmd
+uniform int u_mesh_mode;       // 0 = DrawArrays, 1 = EXT task group, 2 = NV task group
 
 void main() {
     const uint g = gl_GlobalInvocationID.x;
@@ -32,5 +33,16 @@ void main() {
     const uvec2 range = ranges[stream];
     const uint quads = min(counts[stream], range.y);
     const bool visible = ((item.y >> sec) & 1u) != 0u;
-    cmds[u_cmd_offset + g] = uvec4((visible && quads > 0u) ? quads * 6u : 0u, 1u, range.x * 6u, item.x * 4u + sec);
+    if (u_mesh_mode == 1) {
+        // EXT DrawMeshTasksIndirectCommand: num_groups_x, num_groups_y, num_groups_z.
+        // Its task shader then expands this one task group into ceil(quads / 32) mesh groups.
+        cmds[u_cmd_offset + g] = uvec4((visible && quads > 0u) ? 1u : 0u, 1u, 1u, 0u);
+    } else if (u_mesh_mode == 2) {
+        // NV DrawMeshTasksIndirectCommandNV: taskCount, firstTask. Keep two padding words
+        // so all command types use one 16-byte slot and the same buffer offsets/stride.
+        cmds[u_cmd_offset + g] = uvec4((visible && quads > 0u) ? 1u : 0u, 0u, 0u, 0u);
+    } else {
+        // Classic GL 4.3 path: count, instanceCount, first, baseInstance.
+        cmds[u_cmd_offset + g] = uvec4((visible && quads > 0u) ? quads * 6u : 0u, 1u, range.x * 6u, item.x * 4u + sec);
+    }
 }

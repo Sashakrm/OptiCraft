@@ -29,14 +29,24 @@ bool Window::initialize() {
         return false;
     }
 
-    // GL 4.3 нужен GPU-мешеру (compute-шейдеры): геометрия мира строится только на видеокарте.
-    glfwDefaultWindowHints();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    m_window_ptr = glfwCreateWindow(m_width, m_height, m_title.c_str(), nullptr, nullptr);
+    // Ask for a modern context first so EXT/NV mesh shading can be used when the driver
+    // exposes it. Keep the GL 4.3 fallback because the existing compute mesher needs 4.3,
+    // not 4.6; machines without mesh shaders therefore keep working unchanged.
+    constexpr int requested_versions[][2] = {{4, 6}, {4, 5}, {4, 3}};
+    for (const auto& version : requested_versions) {
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, version[0]);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, version[1]);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        m_window_ptr = glfwCreateWindow(m_width, m_height, m_title.c_str(), nullptr, nullptr);
+        if (m_window_ptr) {
+            LOG_INFO("Created OpenGL context request " + std::to_string(version[0]) + "." +
+                     std::to_string(version[1]));
+            break;
+        }
+    }
     if (!m_window_ptr) {
-        LOG_ERROR("Failed to create GLFW window (OpenGL 4.3 core is required)");
+        LOG_ERROR("Failed to create an OpenGL 4.3+ core context");
         glfwTerminate();
         return false;
     }
@@ -51,6 +61,9 @@ bool Window::initialize() {
         LOG_ERROR("Failed to initialize GLAD");
         return false;
     }
+
+    const auto* gl_version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    LOG_INFO(std::string("OpenGL driver version: ") + (gl_version ? gl_version : "unknown"));
 
     // Настройки OpenGL
     glEnable(GL_DEPTH_TEST);

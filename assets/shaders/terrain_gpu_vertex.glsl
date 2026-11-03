@@ -11,16 +11,20 @@
 layout(location = 0) in uint aSection;
 layout(std430, binding = 2) readonly buffer Quads { uvec4 quads[]; };
 layout(std430, binding = 8) readonly buffer Rects { vec4 rects[]; };
-// Мировой минимальный угол каждого чанка по ручке (xyz); w не используется.
+// Мировой минимальный угол чанка по ручке (xyz); w — время первой GPU-резиденции.
 layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 
 // Готовая projection * view (model здесь всегда единичная): одно умножение на вершину вместо трёх.
 uniform mat4 view_projection;
+uniform float time;
 
 out vec2 Local;
 out float NormalY;
+out vec3 WorldPos;
+out vec3 WorldNormal;
 out float BlockLight;
 out float SkyLight;
+out float Appearance;
 flat out vec4 Rect;
 out float AO;
 
@@ -73,7 +77,8 @@ void main() {
     const int code = flip ? kCornerFlip[variant * 6u + k] : kCorner[variant * 6u + k];
     const float fu = float(code & 1);
     const float fv = float((code >> 1) & 1);
-    const vec3 base = origins[sec >> 2u].xyz + cell;
+    const vec4 chunk_origin = origins[sec >> 2u];
+    const vec3 base = chunk_origin.xyz + cell;
     const float plane = pos ? normal_extent : 0.0;
 
     vec3 p;
@@ -91,8 +96,20 @@ void main() {
     // Повёрнутая текстура (бревно на боку): (a, b) -> (b, 1 - a), как rotate_quarter в Chunk.cpp.
     if (rot) local = vec2(local.y, 1.0 - local.x);
 
+    // Fade/dither is evaluated per block in the fragment shader. Vertex positions
+    // stay exact, so adjacent chunks never open temporary gaps at their shared edges.
+    float appear = clamp((time - chunk_origin.w) / 0.42, 0.0, 1.0);
+    Appearance = appear * appear * (3.0 - 2.0 * appear);
+
+    vec3 world_normal = vec3(0.0);
+    if (axis == 0u) world_normal.x = pos ? 1.0 : -1.0;
+    else if (axis == 1u) world_normal.y = pos ? 1.0 : -1.0;
+    else world_normal.z = pos ? 1.0 : -1.0;
+
     Local = local;
     NormalY = (axis == 1u) ? (pos ? 1.0 : -1.0) : 0.0;
+    WorldPos = p;
+    WorldNormal = world_normal;
     const uint cl = (w2 >> (8u * uint(code))) & 0xFFu;
     SkyLight = float(cl >> 4u);
     BlockLight = float(cl & 15u);

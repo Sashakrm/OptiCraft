@@ -1,0 +1,12 @@
+#version 430 core
+// Copy the captured depth buffer into mip 0 of the max-depth Hi-Z pyramid.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D u_source_depth;
+layout(r32f, binding = 0) writeonly uniform image2D u_destination;
+
+void main() {
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(u_destination);
+    if (any(greaterThanEqual(pixel, size))) return;
+    imageStore(u_destination, pixel, vec4(texelFetch(u_source_depth, pixel, 0).r));
+}

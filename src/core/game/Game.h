@@ -139,6 +139,8 @@ private:
     float m_last_frame_min_ms{0.0f};
     float m_last_frame_avg_ms{0.0f};
     float m_last_frame_max_ms{0.0f};
+    float m_last_update_cpu_ms{0.0f};
+    float m_last_render_cpu_ms{0.0f};
     float m_current_tps{0.0f};
     std::uint64_t m_tps_tick_mark{0};
 
@@ -146,6 +148,7 @@ private:
     bool m_is_shutdown{false};
     float m_delta_time;
     float m_last_frame_time;
+    float m_last_raw_frame_ms{0.0f};
 
     // Когда фоновая запись PNG закончилась — сообщает в чат и освобождает снимок.
     void poll_iso_capture_result();

@@ -724,20 +724,21 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     light.unpack(S.light.data());
     blocks.unpack_meta(S.meta.data());
 
-    // Дальние solid-чанки получают coarse-воксельную копию. Внешняя полоса шириной
-    // lod_stride остаётся точной: границы соседних чанков поэтому совпадают даже при
-    // разных LOD. Для каждой группы выбираем самый частый greedy-блок вместе с его
-    // метаданными (ориентация/активное состояние); сложная геометрия по-прежнему
-    // строится mesh_misc.comp из полноразмерного канала 0.
+    // Дальний LOD уменьшает только горизонтальную детализацию X/Z и сохраняет
+    // вертикальное разрешение Y. Старый вариант сворачивал объём 2x2x2 / 4x4x4
+    // в один блок при заполнении всего 25% объёма; на склонах и под водой это
+    // превращало тонкий слой грунта в массивные вертикальные столбы. Теперь
+    // представитель выбирается отдельно для каждого Y-слоя по X/Z-группе.
+    // Внешняя полоса по X/Z остаётся точной — переход к соседнему чанку не зависит
+    // от LOD соседа. Канава/пещера по вертикали не заполняется искусственно.
     if (lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u) {
         S.lod_blocks.fill(static_cast<Block_ID>(Block_Types::Air));
         S.lod_meta.fill(0);
-        // Сохраняем исходные блоки и метаданные по всему периметру чанка.
+
         for (int y = 0; y < kH; ++y) {
             for (int z = 0; z < kN; ++z) {
                 for (int x = 0; x < kN; ++x) {
                     if (x < lod_stride || x >= kN - lod_stride ||
-                        y < lod_stride || y >= kH - lod_stride ||
                         z < lod_stride || z >= kN - lod_stride) {
                         const size_t index = (static_cast<size_t>(y) * kN + z) * kN + x;
                         S.lod_blocks[index] = S.blocks[index];
@@ -747,48 +748,41 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
             }
         }
 
-        std::array<Block_ID, 64> ids{};
-        std::array<uint8_t, 64> metas{};
-        std::array<uint8_t, 64> counts{};
-        for (int y = lod_stride; y < kH - lod_stride; y += lod_stride) {
+        std::array<Block_ID, 16> ids{};
+        std::array<uint8_t, 16> metas{};
+        std::array<uint8_t, 16> counts{};
+        for (int y = 0; y < kH; ++y) {
             for (int z = lod_stride; z < kN - lod_stride; z += lod_stride) {
                 for (int x = lod_stride; x < kN - lod_stride; x += lod_stride) {
                     ids.fill(static_cast<Block_ID>(Block_Types::Air));
                     metas.fill(0);
                     counts.fill(0);
                     int unique_count = 0;
-                    int greedy_count = 0;
 
-                    for (int dy = 0; dy < lod_stride; ++dy) {
-                        for (int dz = 0; dz < lod_stride; ++dz) {
-                            for (int dx = 0; dx < lod_stride; ++dx) {
-                                const size_t index = (static_cast<size_t>(y + dy) * kN + (z + dz)) * kN + (x + dx);
-                                const Block_ID id = S.blocks[index];
-                                if (id == static_cast<Block_ID>(Block_Types::Air) ||
-                                    (tab.flags[id] & kFlagGreedy) == 0u) continue;
+                    for (int dz = 0; dz < lod_stride; ++dz) {
+                        for (int dx = 0; dx < lod_stride; ++dx) {
+                            const size_t index = (static_cast<size_t>(y) * kN + (z + dz)) * kN + (x + dx);
+                            const Block_ID id = S.blocks[index];
+                            if (id == static_cast<Block_ID>(Block_Types::Air) ||
+                                (tab.flags[id] & kFlagGreedy) == 0u) continue;
 
-                                ++greedy_count;
-                                const uint8_t meta = S.meta[index];
-                                int candidate = 0;
-                                while (candidate < unique_count &&
-                                       (ids[candidate] != id || metas[candidate] != meta)) ++candidate;
-                                if (candidate == unique_count) {
-                                    ids[unique_count] = id;
-                                    metas[unique_count] = meta;
-                                    counts[unique_count] = 0;
-                                    ++unique_count;
-                                }
-                                ++counts[candidate];
+                            const uint8_t meta = S.meta[index];
+                            int candidate = 0;
+                            while (candidate < unique_count &&
+                                   (ids[candidate] != id || metas[candidate] != meta)) ++candidate;
+                            if (candidate == unique_count) {
+                                ids[unique_count] = id;
+                                metas[unique_count] = meta;
+                                counts[unique_count] = 0;
+                                ++unique_count;
                             }
+                            ++counts[candidate];
                         }
                     }
 
                     Block_ID representative = static_cast<Block_ID>(Block_Types::Air);
                     uint8_t representative_meta = 0;
-                    // Небольшие одиночные блоки не должны разрастаться в целый LOD-куб.
-                    // Четверти заполнения достаточно, чтобы сохранить тонкий рельефный слой.
-                    const int minimum_occupancy = (lod_stride * lod_stride * lod_stride) / 4;
-                    if (unique_count > 0 && greedy_count >= minimum_occupancy) {
+                    if (unique_count > 0) {
                         int best = 0;
                         for (int i = 1; i < unique_count; ++i) {
                             if (counts[i] > counts[best]) best = i;
@@ -797,13 +791,12 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
                         representative_meta = metas[best];
                     }
 
-                    for (int dy = 0; dy < lod_stride; ++dy) {
-                        for (int dz = 0; dz < lod_stride; ++dz) {
-                            for (int dx = 0; dx < lod_stride; ++dx) {
-                                const size_t index = (static_cast<size_t>(y + dy) * kN + (z + dz)) * kN + (x + dx);
-                                S.lod_blocks[index] = representative;
-                                S.lod_meta[index] = representative_meta;
-                            }
+                    // Only X/Z are expanded; Y remains exactly one block high.
+                    for (int dz = 0; dz < lod_stride; ++dz) {
+                        for (int dx = 0; dx < lod_stride; ++dx) {
+                            const size_t index = (static_cast<size_t>(y) * kN + (z + dz)) * kN + (x + dx);
+                            S.lod_blocks[index] = representative;
+                            S.lod_meta[index] = representative_meta;
                         }
                     }
                 }

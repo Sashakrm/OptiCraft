@@ -5,6 +5,7 @@
 #ifndef OPTICRAFT_CHUNK_MANAGER_H
 #define OPTICRAFT_CHUNK_MANAGER_H
 
+#include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
 #include <chrono>
@@ -41,7 +42,8 @@ struct Renderable_Chunk {
     glm::ivec3 position; // (chunk_x, chunk_y, chunk_z)
     const Chunk_Meshes* meshes = nullptr;
     uint64_t mesh_version;
-    // Секция рисуется: попадает во фрустум и достижима от камеры через прозрачные клетки (см. get_renderable_chunks).
+    // Секция доступна для GPU-culling: достижима от камеры через прозрачные клетки.
+    // Фрустум проверяется уже GPU compute shader в Renderer.
     std::array<bool, Config::chunk_section_count> section_visible{};
     bool flora_skip_render = false;
 };
@@ -77,6 +79,17 @@ private:
         int priority = 0;
         std::vector<Chunk_Job> chunks;
     };
+
+    // Persistent prioritized backlog for the current streaming window. Without this
+    // cache, every time a few requests completed load_around() rescanned and sorted
+    // the entire render-distance square again (41x41 columns at 20 chunks).
+    std::vector<Chunk_Column_Job> m_column_load_backlog;
+    size_t m_column_load_backlog_cursor = 0;
+    glm::ivec2 m_column_backlog_center{std::numeric_limits<int>::min(),
+                                       std::numeric_limits<int>::min()};
+    int m_column_backlog_radius = -1;
+    int m_column_backlog_vertical_half = -1;
+    uint64_t m_column_backlog_generation = 0;
 
     // После однократной подготовки X/Z-данных уровни колонки распараллеливаются внутри
     // того же пула воркеров. Подготовка immutable и живёт, пока последние уровни не готовы.
@@ -149,6 +162,7 @@ private:
         glm::ivec3 position;
         uint64_t generation_id;
         Chunk_Meshes meshes;
+        int priority = 0;
         uint64_t dirty_epoch = 0;
         uint64_t instance_id = 0;
         uint64_t seq = 0;
@@ -200,6 +214,7 @@ private:
     glm::vec3 m_player_velocity{0.0f};
     glm::vec3 m_last_player_pos{0.0f};
     std::chrono::steady_clock::time_point m_last_pos_time{};
+    std::chrono::steady_clock::time_point m_last_mesh_reprioritize_time{};
     bool m_has_last_pos = false;
     // Полуширина вертикального окна в чанках (оба края включительно): обычно 4 (9 уровней),
     // при быстром вертикальном движении или малой дальности прорисовки — 2 (5 уровней).
@@ -231,7 +246,7 @@ private:
     // Поколение вида: растёт при каждой смене чанка игрока. Кольца загруженных чанков пересчитываются
     // под него; меш ставится с приоритетом по кольцу, а кольца 0–1 без меша уходят сразу.
     uint32_t m_view_generation = 0;
-    // Чанки, чьи секции реально попали в текущий frustum/visibility traversal.
+    // Чанки, чьи секции достижимы от камеры по обходу связности (без GPU frustum-теста).
     // Обновляется get_renderable_chunks на главном потоке и используется как приоритет мешинга.
     mutable Chunk_Coord_Set m_visible_chunks;
     // Плоский список загруженных чанков для обхода кадра: пересобирается только при смене набора
@@ -244,19 +259,25 @@ private:
     uint64_t m_dirty_scan_events = 0;
     uint64_t m_dirty_scan_set_epoch = 0;
     uint8_t view_ring_of(const glm::ivec3& position) const;
-    int desired_lod_stride(int cx, int cz, int current_stride = 1) const;
+    int mesh_job_priority(const glm::ivec3& position, bool first_mesh,
+                          bool lod_transition, bool urgent = false) const;
+    int desired_lod_stride(int cx, int cy, int cz, int current_stride = 1) const;
     void refresh_view_rings();
     Mpmc_Queue<Chunk_Result> m_completed_jobs;
     // Задачи загрузки, которые есть на диске: их читает m_disk_reader пачками (см. Chunk_IO).
     std::deque<Chunk_Job> m_pending_disk_reads;
     std::thread m_disk_reader;
-    // Задачи мешинга: приоритет = кольцо * 2048 + квадрат расстояния (до 2047), то есть до 34816 при
-    // кольце 16. Корзины шириной 16 покрывают весь диапазон (2176 штук); при шаге 1 и 1024 корзинах
-    // все кольца от 1 и дальше попадали в одну последнюю корзину и шли FIFO, без порядка по кольцам.
-    // Сами задачи лежат за unique_ptr: Mesh_Job крупный, а ячейки кольца хранят указатель.
+    // Задачи мешинга: отдельные классы (срочная правка, LOD, первый меш, фоновое обновление)
+    // плюс кольцо * 128 и смещённое по направлению движения расстояние. Корзины шириной 16
+    // сохраняют заметную детализацию порядка. Сами задачи лежат за unique_ptr: Mesh_Job крупный,
+    // а ячейки кольца хранят указатель.
     Priority_Bucket_Queue<std::unique_ptr<Mesh_Job>, 16, 2176, 64> m_pending_mesh_jobs;
     std::atomic<size_t> m_pending_mesh_count{0};
-    Mpmc_Queue<Mesh_Result> m_completed_mesh_jobs;
+    // Готовые меши тоже сохраняют приоритет исходной задачи. Корзины здесь шире,
+    // чем у очереди задач: достаточно 512 уровней, чтобы не сканировать тысячи
+    // пустых очередей при каждом извлечении результата. При смене курса игрока
+    // результаты пересортировываются по актуальной позиции.
+    Priority_Bucket_Queue<std::unique_ptr<Mesh_Result>, 64, 512, 64> m_completed_mesh_jobs;
     // Результаты срочных пересборок (правка блока): применяются раньше обычных и без лимита на кадр.
     Mpmc_Queue<Mesh_Result> m_completed_urgent_mesh_jobs;
     // Чанки, которые игрок правил в этом кадре: пересборка ставится один раз за кадр после всех правок.
@@ -357,6 +378,7 @@ private:
     void reprioritize_pending_jobs();
     // То же для задач мешинга: приоритет пересчитывается по текущему кольцу и расстоянию (задачи не снимаются).
     void reprioritize_pending_meshes();
+    void reprioritize_completed_meshes();
     bool save_chunk_to_disk(const Chunk& chunk) const;
     void enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent = false, int lod_stride = 0);
     bool is_chunk_wanted(const glm::ivec3& position) const;
@@ -383,7 +405,7 @@ private:
     void relight_block_light_box(int x0, int y0, int z0, int x1, int y1, int z1);
     // Инкрементальный пересчёт для только что загруженных чанков (m_chunks_pending_block_light):
     // свет только прибавляется, очистка не нужна.
-    void relight_block_light_new_chunks();
+    void relight_block_light_new_chunks(size_t max_chunks = 8);
     // Локальный пересчёт света неба после правки: вертикальная тень пересчитывается только для
     // колонки правки, горизонтальное растекание — в кубе вокруг неё (см. реализацию).
     void relight_sky_light_near(const glm::ivec3& world_pos);
@@ -510,9 +532,15 @@ public:
         size_t mesh_pending = 0;     // чанки, ждущие пересборки меша
         size_t mesh_requeued = 0;    // пересборки, отложенные до готовности соседей
         size_t loads_requested = 0;  // чанки, запрошенные у генератора/диска, но ещё не пришедшие
+        size_t generation_jobs_queued = 0;
+        size_t mesh_jobs_queued = 0;
+        size_t columns_backlogged = 0;
     };
     Chunk_Work_Stats get_work_stats() const {
-        return {m_pending_mesh_rebuilds.size(), m_mesh_rebuild_requeue.size(), m_requested_chunks.size()};
+        return {m_pending_mesh_rebuilds.size(), m_mesh_rebuild_requeue.size(),
+                m_requested_chunks.size(), m_pending_job_count.load(std::memory_order_relaxed),
+                m_pending_mesh_count.load(std::memory_order_relaxed),
+                m_column_load_backlog.size() - std::min(m_column_load_backlog_cursor, m_column_load_backlog.size())};
     }
 };
 

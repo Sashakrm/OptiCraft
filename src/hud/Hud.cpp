@@ -656,14 +656,23 @@ void Hud::draw_debug_overlay(int window_width, int window_height, const Hud_Debu
         std::snprintf(buffer, sizeof(buffer), "Frame (last s): min %.2f / avg %.2f / max %.2f ms",
                       stats.frame_min_ms, stats.frame_avg_ms, stats.frame_max_ms);
         lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "CPU update %.2f / render %.2f ms",
+                      stats.update_cpu_ms, stats.render_cpu_ms);
+        lines.emplace_back(buffer);
+        std::snprintf(buffer, sizeof(buffer), "GPU chunk pass: %.2f ms (async)", stats.render_gpu_ms);
+        lines.emplace_back(buffer);
         std::snprintf(buffer, sizeof(buffer), "TPS: %.1f (target 20)", stats.tps);
         lines.emplace_back(buffer);
         std::snprintf(buffer, sizeof(buffer), "Mobs alive: hostile %d / passive %d",
                       stats.hostile_count, stats.passive_count);
         lines.emplace_back(buffer);
-        std::snprintf(buffer, sizeof(buffer), "Chunks updating: mesh %d (requeued %d), loading %d",
-                      static_cast<int>(stats.chunk_mesh_pending), static_cast<int>(stats.chunk_mesh_requeued),
-                      static_cast<int>(stats.chunk_loads_requested));
+        std::snprintf(buffer, sizeof(buffer), "Chunks: mesh %d (queued %d / requeued %d), load %d (jobs %d / cols %d)",
+                      static_cast<int>(stats.chunk_mesh_pending),
+                      static_cast<int>(stats.chunk_mesh_jobs_queued),
+                      static_cast<int>(stats.chunk_mesh_requeued),
+                      static_cast<int>(stats.chunk_loads_requested),
+                      static_cast<int>(stats.chunk_generation_jobs_queued),
+                      static_cast<int>(stats.chunk_columns_backlogged));
         lines.emplace_back(buffer);
         lines.emplace_back("");
         for (const auto& target_line : stats.target_lines) {

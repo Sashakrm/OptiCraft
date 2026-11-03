@@ -1,0 +1,241 @@
+#version 430 core
+// GPU-driven frame builder.
+// One invocation handles one resident chunk, performs conservative section-AABB
+// frustum/temporal-HiZ tests, reverses transparent order, and writes all indirect commands.
+layout(local_size_x = 64) in;
+
+// Candidate: x = GPU handle, y = section reachability mask, z = 4 packed kind bytes,
+// w bit 0 = flora disabled by configured distance, bits 8..11 = legacy opaque query mask.
+layout(std430, binding = 0) readonly buffer Candidates { uvec4 candidates[]; };
+layout(std430, binding = 1) readonly buffer SectionBounds { vec4 section_bounds[]; };
+layout(std430, binding = 2) readonly buffer Counts { uint counts[]; };
+layout(std430, binding = 3) readonly buffer Ranges { uvec2 ranges[]; };
+layout(std430, binding = 4) readonly buffer Origins { vec4 origins[]; };
+// Four adjacent candidate lists: solid, shaped, flora, liquid.
+layout(std430, binding = 5) writeonly buffer Order { uvec2 order[]; };
+layout(std430, binding = 7) writeonly buffer Commands { uvec4 commands[]; };
+// 0 rendered chunks, 1 triangles, 2 opaque sections, 3 frustum-culled, 4 HiZ-occluded.
+layout(std430, binding = 8) buffer Stats { uint stats[]; };
+// [0..3] = compact command counts per kind; map[] resolves compact draw IDs back
+// to the original (entry * SECTION_COUNT + section) source for task shaders.
+layout(std430, binding = 6) buffer DrawMetadata {
+    uint draw_counts[4];
+    uint draw_map[];
+};
+
+uniform uint u_candidate_count;
+uniform int u_mesh_mode; // 0 DrawArraysIndirect, 1 EXT task, 2 NV task
+uniform vec4 u_frustum_planes[6];
+uniform mat4 u_view_projection;
+uniform vec2 u_viewport_size;
+uniform int u_use_hiz;
+uniform int u_compact_opaque;
+uniform sampler2D u_hiz;
+
+const uint SECTION_COUNT = 4u;
+const uint KIND_COUNT = 4u;
+const uint STREAMS_PER_CHUNK = 16u;
+const uint KIND_SOLID = 0u;
+const uint KIND_SHAPED = 1u;
+
+bool aabb_in_frustum(vec3 box_min, vec3 box_max) {
+    for (int i = 0; i < 6; ++i) {
+        const vec4 plane = u_frustum_planes[i];
+        const vec3 positive = vec3(
+            plane.x >= 0.0 ? box_max.x : box_min.x,
+            plane.y >= 0.0 ? box_max.y : box_min.y,
+            plane.z >= 0.0 ? box_max.z : box_min.z
+        );
+        if (dot(plane.xyz, positive) + plane.w < 0.0) return false;
+    }
+    return true;
+}
+
+// Hi-Z stores the MAX depth of each tile. With the conventional GL depth range,
+// a tile is a valid occluder only when even its farthest sample is closer than the
+// nearest point of the tested AABB. Clear pixels are 1.0, so holes stay conservative.
+bool aabb_occluded_hiz(vec3 box_min, vec3 box_max) {
+    vec2 uv_min = vec2(1.0);
+    vec2 uv_max = vec2(0.0);
+    float nearest_depth = 1.0;
+
+    for (uint corner = 0u; corner < 8u; ++corner) {
+        const vec3 p = vec3(
+            (corner & 1u) != 0u ? box_max.x : box_min.x,
+            (corner & 2u) != 0u ? box_max.y : box_min.y,
+            (corner & 4u) != 0u ? box_max.z : box_min.z);
+        const vec4 clip = u_view_projection * vec4(p, 1.0);
+        // A box crossing the eye/near plane is never rejected by this test.
+        if (clip.w <= 0.00001) return false;
+        const vec3 ndc = clip.xyz / clip.w;
+        const vec2 uv = ndc.xy * 0.5 + 0.5;
+        uv_min = min(uv_min, uv);
+        uv_max = max(uv_max, uv);
+        nearest_depth = min(nearest_depth, ndc.z * 0.5 + 0.5);
+    }
+
+    // Screen-space bounds touching the viewport edge are clamped; the padded Hi-Z
+    // texture outside the real viewport is initialized to 1.0 (never an occluder).
+    if (uv_max.x < 0.0 || uv_max.y < 0.0 || uv_min.x > 1.0 || uv_min.y > 1.0)
+        return false;
+    // Expand the projected rectangle by two source pixels before selecting a mip.
+    // Rasterization, viewport transforms and depth-buffer precision can otherwise make
+    // an edge pixel fall just outside the mathematically projected AABB. Sampling the
+    // extra ring can only keep an actually-visible section; it cannot create a false cull.
+    const vec2 pixel_guard = vec2(2.0) / max(u_viewport_size, vec2(1.0));
+    uv_min -= pixel_guard;
+    uv_max += pixel_guard;
+    uv_min = clamp(uv_min, vec2(0.0), vec2(1.0));
+    uv_max = clamp(uv_max, vec2(0.0), vec2(1.0));
+    if (any(lessThanEqual(uv_max, uv_min))) return false;
+
+    const ivec2 base_size = textureSize(u_hiz, 0);
+    const vec2 pixel_extent = (uv_max - uv_min) * u_viewport_size;
+    const vec2 texture_scale = u_viewport_size / vec2(base_size);
+    const vec2 texture_uv_min = uv_min * texture_scale;
+    const vec2 texture_uv_max = uv_max * texture_scale;
+    const float max_extent = max(pixel_extent.x, pixel_extent.y);
+    const int level_count = textureQueryLevels(u_hiz);
+    // Pick a mip where the projected rectangle touches at most a small number of texels.
+    const int level = clamp(int(ceil(log2(max(max_extent, 1.0)))) - 1, 0, level_count - 1);
+    const ivec2 mip_size = textureSize(u_hiz, level);
+    const ivec2 p0 = clamp(ivec2(floor(texture_uv_min * vec2(mip_size))), ivec2(0), mip_size - 1);
+    const ivec2 p1 = clamp(ivec2(floor(texture_uv_max * vec2(mip_size))), ivec2(0), mip_size - 1);
+    if (any(greaterThan(p1 - p0, ivec2(3)))) return false;
+
+    float farthest_occluder_depth = 0.0;
+    for (int y = p0.y; y <= p1.y; ++y) {
+        for (int x = p0.x; x <= p1.x; ++x) {
+            farthest_occluder_depth = max(farthest_occluder_depth,
+                texelFetch(u_hiz, ivec2(x, y), level).r);
+        }
+    }
+
+    // Small bias toward visibility avoids precision-related false occlusion.
+    return nearest_depth > farthest_occluder_depth + 0.004;
+}
+
+void main() {
+    const uint candidate_index = gl_GlobalInvocationID.x;
+    if (candidate_index >= u_candidate_count) return;
+
+    const uvec4 candidate = candidates[candidate_index];
+    const uint handle = candidate.x;
+    const uint reachable_mask = candidate.y;
+    const uint packed_kinds = candidate.z;
+    const uint flags = candidate.w;
+    const vec3 origin = origins[handle].xyz;
+
+    uint frustum_visible_mask = 0u;
+    uint hiz_occluded_mask = 0u;
+    uint culled_sections = 0u;
+    uint occluded_sections = 0u;
+    for (uint section = 0u; section < SECTION_COUNT; ++section) {
+        const uint section_bit = 1u << section;
+        const uint section_kinds = (packed_kinds >> (section * 8u)) & 0xFFu;
+        if ((reachable_mask & section_bit) == 0u || section_kinds == 0u) continue;
+
+        const vec4 bounds = section_bounds[candidate_index * SECTION_COUNT + section];
+        const vec3 box_min = vec3(origin.x, bounds.x, origin.z);
+        const vec3 box_max = vec3(origin.x + 32.0, bounds.y, origin.z + 32.0);
+        if (!aabb_in_frustum(box_min, box_max)) {
+            ++culled_sections;
+            continue;
+        }
+
+        frustum_visible_mask |= section_bit;
+        const bool has_opaque = (section_kinds & ((1u << KIND_SOLID) | (1u << KIND_SHAPED))) != 0u;
+        const bool query_occluded = (flags & (1u << (8u + section))) != 0u;
+        if (has_opaque && query_occluded) {
+            ++occluded_sections;
+        } else if (u_use_hiz != 0 && has_opaque && aabb_occluded_hiz(box_min, box_max)) {
+            hiz_occluded_mask |= section_bit;
+            ++occluded_sections;
+        }
+    }
+
+    if (culled_sections != 0u) atomicAdd(stats[3], culled_sections);
+    if (occluded_sections != 0u) atomicAdd(stats[4], occluded_sections);
+
+    bool chunk_rendered = false;
+    uint chunk_triangles = 0u;
+    uint opaque_sections_mask = 0u;
+
+    for (uint kind = 0u; kind < KIND_COUNT; ++kind) {
+        // Opaque lists are near-to-far; transparent lists are far-to-near.
+        const uint destination_entry = (kind >= 2u)
+            ? (u_candidate_count - 1u - candidate_index) : candidate_index;
+        uint kind_visible_mask = frustum_visible_mask;
+        if (kind <= KIND_SHAPED) kind_visible_mask &= ~hiz_occluded_mask;
+        order[kind * u_candidate_count + destination_entry] = uvec2(handle, kind_visible_mask);
+
+        for (uint section = 0u; section < SECTION_COUNT; ++section) {
+            const uint section_bit = 1u << section;
+            const uint section_kinds = (packed_kinds >> (section * 8u)) & 0xFFu;
+            const uint stream = handle * STREAMS_PER_CHUNK + kind * SECTION_COUNT + section;
+            const uvec2 range = ranges[stream];
+            const uint quad_count = min(counts[stream], range.y);
+
+            bool visible = (kind_visible_mask & section_bit) != 0u &&
+                           (section_kinds & (1u << kind)) != 0u && quad_count != 0u;
+            if (kind == 2u && (flags & 1u) != 0u) visible = false;
+            if (kind <= KIND_SHAPED && (flags & (1u << (8u + section))) != 0u) visible = false;
+
+            const uint max_draws_per_kind = u_candidate_count * SECTION_COUNT;
+            const uint fixed_command_index = kind * max_draws_per_kind +
+                                             destination_entry * SECTION_COUNT + section;
+            uint command_index = fixed_command_index;
+            bool write_command = true;
+            if (u_compact_opaque != 0 && kind <= KIND_SHAPED) {
+                // Only opaque lists are compacted. Flora and liquid keep deterministic
+                // back-to-front ordering because alpha blending depends on draw order.
+                if (visible) {
+                    const uint compact_index = atomicAdd(draw_counts[kind], 1u);
+                    command_index = kind * max_draws_per_kind + compact_index;
+                    if (u_mesh_mode != 0) {
+                        draw_map[kind * max_draws_per_kind + compact_index] =
+                            destination_entry * SECTION_COUNT + section;
+                    }
+                } else {
+                    // Do not write a zero command at the old fixed slot: it could overlap
+                    // a valid command another invocation just appended to the compact list.
+                    write_command = false;
+                }
+            } else {
+                // Task shaders need this source mapping; classic vertex-pulling uses baseInstance.
+                if (u_mesh_mode != 0) {
+                    draw_map[kind * max_draws_per_kind + destination_entry * SECTION_COUNT + section] =
+                        destination_entry * SECTION_COUNT + section;
+                }
+            }
+            if (write_command) {
+                if (u_mesh_mode == 1) {
+                    // EXT DrawMeshTasksIndirectCommand: x/y/z group counts.
+                    commands[command_index] = uvec4(visible ? 1u : 0u, 1u, 1u, 0u);
+                } else if (u_mesh_mode == 2) {
+                    // NV DrawMeshTasksIndirectCommandNV: taskCount, firstTask + padding.
+                    commands[command_index] = uvec4(visible ? 1u : 0u, 0u, 0u, 0u);
+                } else {
+                    // DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
+                    commands[command_index] = uvec4(visible ? quad_count * 6u : 0u,
+                                                    1u, range.x * 6u, handle * SECTION_COUNT + section);
+                }
+            }
+
+            if (visible) {
+                chunk_triangles += quad_count * 2u;
+                if (kind <= KIND_SHAPED) {
+                    opaque_sections_mask |= section_bit;
+                    chunk_rendered = true;
+                }
+            }
+        }
+    }
+
+    if (chunk_rendered) atomicAdd(stats[0], 1u);
+    if (chunk_triangles != 0u) atomicAdd(stats[1], chunk_triangles);
+    uint opaque_sections = 0u;
+    for (uint section = 0u; section < SECTION_COUNT; ++section)
+        if ((opaque_sections_mask & (1u << section)) != 0u) ++opaque_sections;
+    if (opaque_sections != 0u) atomicAdd(stats[2], opaque_sections);
+}

@@ -7,6 +7,7 @@
 
 #include <glad/gl.h>
 #include <array>
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include "math/Hash_Utils.h"
 #include "rendering/atlas/Texture_Atlas.h"
 #include "rendering/atlas/Atlas_Registry.h"
+#include "utils/concurrency/Render_Worker_Pool.h"
 
 using Vertex = Chunk_Vertex;
 
@@ -40,6 +42,7 @@ private:
     // Радиус прорисовки флоры в чанках; -1 = рисовать всю загруженную флору.
     // Меняется из меню настроек (см. Game::cycle_flora_distance).
     int m_flora_render_distance_chunks = Config::flora_render_distance_chunks;
+    int m_render_distance_chunks = Config::chunk_load_radius;
 
     // Per-section GPU occlusion-query state. Sized to Config::chunk_section_count so it
     // lines up 1:1 with Chunk_Meshes::sections / Chunk_Section_Range.
@@ -68,24 +71,29 @@ private:
         bool gpu_regrow = false;   // счётчики показали, что ёмкости не хватило: чанк мешится заново
         std::array<bool, kGpuStreams> gpu_capacity_observed{}; // не сжимаем первый allocation каждого потока
         bool gpu_flora_skipped = false; // состав GPU-меша зависит от дистанции прорисовки флоры
+        // Время первого появления текущей GPU-резиденции. Хранится в Origins.w, поэтому
+        // не требует отдельного SSBO и не меняет формат quad/payload.
+        float appearance_start_time = 0.0f;
     };
 
     std::unordered_map<glm::ivec3, Chunk_GL_Resources, Chunk_Key_Hash> m_chunk_gl_cache;
     // Буферы кадра переиспользуются между кадрами (без аллокаций): чанки по расстоянию, их порядок и
     // ресурсы — параллельные массивы (m_frame_res[i] относится к m_frame_order[i]).
-    struct Frame_Sort_Item { float distance_sq; const Renderable_Chunk* chunk; };
+    struct Frame_Sort_Item { float distance_sq; const Renderable_Chunk* chunk; size_t original_order; };
+    // Persistent CPU workers only prepare frame data; all OpenGL commands remain on the context thread.
+    Render_Worker_Pool m_frame_workers;
     std::vector<Frame_Sort_Item> m_frame_sort;
     std::vector<const Renderable_Chunk*> m_frame_order;
     std::vector<Chunk_GL_Resources*> m_frame_res;
 
     void delete_chunk_resources(Chunk_GL_Resources& resources);
 
-    // ---- GPU-мешер: вся геометрия чанков строится видеокартой (OpenGL 4.3, assets/shaders/mesh_*.comp) ----
-    // Блоки, метаданные и свет чанка уходят в видеопамять упакованными каналами; mesh_greedy.comp строит жадные
-    // квады непрозрачных кубов, mesh_misc.comp — блоки формы, флору и жидкость. Квады лежат в одном общем пуле
-    // (по потоку на вид и секцию), а рисуются через glMultiDrawArraysIndirect с vertex pulling.
-    // Ёмкость потока растёт и сжимается по настоящему числу квадов: счётчики приходят обратно через readback,
-    // и чанк, у которого поток переполнился, мешится заново с нужной ёмкостью (никакого отката на CPU).
+    // ---- GPU chunk mesher (OpenGL 4.3 compute + optional EXT/NV mesh shaders) ----
+    // Existing compute shaders build compact quad records in one shared pool. On drivers with
+    // EXT or NV task/mesh shading those records are expanded into triangles by mesh shader stages;
+    // otherwise the classic glMultiDrawArraysIndirect + vertex-pulling path is used.
+    // Per-stream capacity follows the real quad counter readback, so an overflow rebuilds only
+    // that chunk with a larger allocation (there is no CPU meshing fallback).
     bool initialize_gpu_mesher();
     void shutdown_gpu_mesher();
     void grow_gpu_handles(int needed);
@@ -98,9 +106,13 @@ private:
     void poll_gpu_readbacks(bool wait_for_oldest);
     // Загружает батч чанков в GPU и запускает мешеры на видеокарте.
     void submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch);
-    // Дозагрузка чанков кадра (с бюджетом или целиком), списки видимых секций по видам и команды отрисовки.
+    // Дозагрузка чанков кадра и GPU-driven culling: CPU передаёт только кандидатов/AABB,
+    // compute shader на видеокарте строит visibility masks и indirect draw/task-команды.
     void prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opaque_order,
-                           bool spectator, const glm::vec3& camera_position);
+                           bool spectator, const glm::vec3& camera_position,
+                           const glm::mat4& view_projection);
+    void poll_gpu_cull_stats();
+    void build_gpu_hiz(const glm::mat4& view_projection);
     void draw_gpu_kind(int kind);
 
     // Reads back last frame's query (if the result is ready) and updates state.visible.
@@ -126,12 +138,13 @@ private:
     size_t m_last_rendered_section_count = 0;
     size_t m_last_culled_section_count = 0;
     size_t m_last_occluded_section_count = 0;
-    // false — рисовать все секции, попавшие во фрустум, без occlusion-запросов. Нужно для
-    // изометрического снимка: результаты запросов относятся к камере игрока, а не к камере снимка.
-    // По умолчанию выключено: тест секции проверяется по глубине, которую рисуют сами секции,
-    // поэтому набор видимых секций менялся от кадра к кадру при неподвижной камере (мерцание
-    // треугольников у земли). Гистерезис это не закрыл полностью. Включать через
-    // set_occlusion_enabled(true) можно только после переделки теста (см. issue_occlusion_query).
+    struct Gpu_Frame_Timer_Query { GLuint id = 0; bool pending = false; };
+    std::array<Gpu_Frame_Timer_Query, 4> m_gpu_frame_timer_queries{};
+    size_t m_gpu_frame_timer_write = 0;
+    float m_last_gpu_frame_ms = 0.0f;
+    // Legacy GL_ANY_SAMPLES_PASSED path only. GPU temporal Hi-Z culling above is independent
+    // and uses a conservative previous-frame depth pyramid. The query path stays off by default:
+    // its old self-occlusion behavior caused visible flicker and is not needed by GPU Hi-Z.
     bool m_occlusion_enabled = false;
 
     // Параметры GPU-мешера. Единица пула — блок из kGpuBlockQuads квадов (16 байт каждый).
@@ -140,9 +153,10 @@ private:
     static constexpr uint32_t kGpuInitialPoolBlocks = 16384;  // 512 К квадов = 8 МБ, дальше пул растёт
     // Стартовая ёмкость потока по виду (квады); при переполнении увеличивается по точному readback-счётчику.
     static constexpr std::array<uint32_t, kGpuKindCount> kGpuInitialQuads = {1024, 128, 2048, 1024};
-    // Бюджет загрузки за кадр по объёму слов GPU-нагрузки. Ближние чанки грузятся первыми; дальние
-    // ждут следующего кадра. Хотя бы один чанк в кадре грузится всегда, даже если он больше бюджета.
-    static constexpr size_t kGpuFrameBudgetBytes = 16u * 1024u * 1024u;
+    // Hard ceiling for ordinary streaming uploads. Runtime throttling lowers this further
+    // when the previous asynchronous GPU timer shows that the chunk pass is already late.
+    static constexpr size_t kGpuFrameBudgetBytes = 4u * 1024u * 1024u;
+    static constexpr size_t kGpuFrameBudgetChunks = 64u;
     static constexpr int kGpuReadbackRing = 8;
     struct Gpu_Readback {
         unsigned int buffer = 0;
@@ -166,15 +180,61 @@ private:
     bool m_gpu_sync_residency = false;   // true — загрузить всё сразу и дождаться счётчиков (изометрический снимок)
     unsigned int m_gpu_greedy_program = 0;
     unsigned int m_gpu_misc_program = 0;
-    unsigned int m_gpu_finalize_program = 0;
+    unsigned int m_gpu_cull_program = 0;
+    unsigned int m_gpu_hiz_copy_program = 0;
+    unsigned int m_gpu_hiz_reduce_program = 0;
+    // Optional EXT/NV task+mesh pipelines. The GL 4.3 compute/vertex-pulling path remains the fallback.
+    unsigned int m_gpu_mesh_solid_program = 0;
+    unsigned int m_gpu_mesh_misc_program = 0;
+    bool m_gpu_mesh_shader_ready = false;
+    // EXT and NV expose the same indirect entry-point signature; mode selects command layout.
+    using MultiDrawMeshTasksIndirect = void (GLAD_API_PTR *)(GLintptr, GLsizei, GLsizei);
+    using MultiDrawMeshTasksIndirectCount = void (GLAD_API_PTR *)(GLintptr, GLintptr, GLsizei, GLsizei);
+    using MultiDrawArraysIndirectCount = void (GLAD_API_PTR *)(GLenum, GLintptr, GLintptr, GLsizei, GLsizei);
+    MultiDrawMeshTasksIndirect m_gl_multi_draw_mesh_tasks_indirect = nullptr;
+    MultiDrawMeshTasksIndirectCount m_gl_multi_draw_mesh_tasks_indirect_count = nullptr;
+    MultiDrawArraysIndirectCount m_gl_multi_draw_arrays_indirect_count = nullptr;
+    bool m_gpu_compact_opaque_commands = false;
+    int m_gpu_mesh_shader_mode = 0; // 0 classic, 1 EXT, 2 NV
+    GLint m_gpu_loc_cull_candidate_count = -1;
+    GLint m_gpu_loc_cull_mesh_mode = -1;
+    GLint m_gpu_loc_cull_planes = -1;
+    GLint m_gpu_loc_cull_view_projection = -1;
+    GLint m_gpu_loc_cull_viewport_size = -1;
+    GLint m_gpu_loc_cull_use_hiz = -1;
+    GLint m_gpu_loc_cull_compact_opaque = -1;
+    GLint m_gpu_loc_cull_hiz_sampler = -1;
+    GLint m_gpu_loc_hiz_copy_sampler = -1;
+    GLint m_gpu_loc_hiz_reduce_sampler = -1;
+    GLint m_gpu_loc_hiz_reduce_source_level = -1;
+    GLint m_gpu_loc_mesh_order_offset_solid = -1;
+    GLint m_gpu_loc_mesh_order_offset_misc = -1;
+    GLint m_gpu_loc_mesh_draw_map_offset_solid = -1;
+    GLint m_gpu_loc_mesh_draw_map_offset_misc = -1;
+    GLint m_gpu_loc_mesh_kind_solid = -1;
+    GLint m_gpu_loc_mesh_kind_misc = -1;
+    GLint m_gpu_loc_mesh_view_projection_solid = -1;
+    GLint m_gpu_loc_mesh_view_projection_misc = -1;
+    GLint m_gpu_loc_mesh_time_solid = -1;
+    GLint m_gpu_loc_mesh_ambient_solid = -1;
+    GLint m_gpu_loc_mesh_ambient_misc = -1;
+    GLint m_gpu_loc_mesh_max_light_solid = -1;
+    GLint m_gpu_loc_mesh_max_light_misc = -1;
+    GLint m_gpu_loc_mesh_time_misc = -1;
+    GLint m_gpu_loc_mesh_camera_solid = -1;
+    GLint m_gpu_loc_mesh_camera_misc = -1;
+    GLint m_gpu_loc_mesh_fog_color_solid = -1;
+    GLint m_gpu_loc_mesh_fog_color_misc = -1;
+    GLint m_gpu_loc_mesh_fog_range_solid = -1;
+    GLint m_gpu_loc_mesh_fog_range_misc = -1;
+    GLint m_gpu_loc_mesh_sun_direction_solid = -1;
+    GLint m_gpu_loc_mesh_sun_direction_misc = -1;
+    GLint m_gpu_loc_mesh_tile_origin_misc = -1;
+    GLint m_gpu_loc_mesh_tile_size_misc = -1;
     Shader* m_gpu_terrain_shader_ptr = nullptr;   // непрозрачные кубы
     Shader* m_gpu_misc_shader_ptr = nullptr;      // блоки формы, флора, жидкость
     int m_gpu_loc_greedy_chunk_count = -1;
     int m_gpu_loc_misc_chunk_count = -1;
-    int m_gpu_loc_finalize_entries = -1;
-    int m_gpu_loc_finalize_kind = -1;
-    int m_gpu_loc_finalize_order_offset = -1;
-    int m_gpu_loc_finalize_cmd_offset = -1;
     unsigned int m_gpu_section_vao = 0;     // VAO с одним атрибутом: baseInstance = ручка*4 + секция, делитель 1
     unsigned int m_gpu_section_ids_vbo = 0; // тождественные номера 0..4*capacity-1
     unsigned int m_gpu_lut_ssbo = 0;        // rect_lut[(id*6 + грань)*256 + метаданные]
@@ -189,10 +249,44 @@ private:
     unsigned int m_gpu_counts_ssbo = 0;     // число квадов на поток: [ручка * 16 + вид * 4 + секция]
     unsigned int m_gpu_ranges_ssbo = 0;     // место потока в пуле: (первый квад, ёмкость), тот же индекс
     unsigned int m_gpu_origins_ssbo = 0;    // мировой угол чанка на ручку (vec4)
-    unsigned int m_gpu_order_ssbo = 0;      // списки отрисовки кадра (ручка, маска секций)
-    unsigned int m_gpu_cmd_ssbo = 0;        // команды DrawArraysIndirect: по 4 на запись списка
+    unsigned int m_gpu_candidates_ssbo = 0; // (GPU handle, reach mask, packed per-section kinds, flags)
+    unsigned int m_gpu_section_bounds_ssbo = 0; // minY/maxY для каждой секции каждого кандидата
+    unsigned int m_gpu_order_ssbo = 0;      // GPU-generated per-kind lists: (handle, visible section mask)
+    unsigned int m_gpu_cmd_ssbo = 0;        // GPU-generated DrawArrays/MeshTasks indirect commands
+    unsigned int m_gpu_cmd_meta_ssbo = 0;   // per-kind indirect counts + compact-to-source draw map
+    unsigned int m_gpu_cull_stats_ssbo = 0; // GPU counters; async-copied to readback ring
+    size_t m_gpu_candidates_capacity = 0;   // кандидатов
+    size_t m_gpu_bounds_capacity = 0;       // vec4 bounds
     size_t m_gpu_order_capacity = 0;        // записей
     size_t m_gpu_cmd_capacity = 0;          // команд
+    size_t m_gpu_cmd_meta_capacity_bytes = 0;
+    struct Gpu_Cull_Stats_Readback { unsigned int buffer = 0; GLsync fence = nullptr; };
+    std::array<Gpu_Cull_Stats_Readback, 3> m_gpu_cull_stats_readbacks{};
+    size_t m_gpu_cull_stats_write = 0;
+    // Previous-frame hierarchical Z. It is used only while the view, viewport and
+    // resident mesh set remain unchanged; otherwise it is invalidated conservatively.
+    unsigned int m_gpu_hiz_depth_texture = 0;
+    unsigned int m_gpu_hiz_texture = 0;
+    unsigned int m_gpu_hiz_fbo = 0;
+    int m_gpu_hiz_width = 0;          // padded texture width (power of two)
+    int m_gpu_hiz_height = 0;         // padded texture height (power of two)
+    int m_gpu_hiz_viewport_x = 0;
+    int m_gpu_hiz_viewport_y = 0;
+    int m_gpu_hiz_viewport_width = 0;
+    int m_gpu_hiz_viewport_height = 0;
+    int m_gpu_hiz_levels = 0;
+    bool m_gpu_hiz_valid = false;
+    uint64_t m_gpu_hiz_scene_signature = 0;
+    uint64_t m_gpu_hiz_pending_signature = 0;
+    glm::mat4 m_gpu_hiz_view_projection{1.0f};
+    // The max-depth pyramid is expensive at full viewport size. Build it only after
+    // the camera and resident opaque mesh set have remained stable for a short window;
+    // while the camera is moving, use frustum culling alone and skip the useless rebuild.
+    glm::mat4 m_gpu_hiz_candidate_view_projection{1.0f};
+    uint64_t m_gpu_hiz_candidate_signature = 0;
+    int m_gpu_hiz_candidate_viewport[4] = {0, 0, 0, 0};
+    int m_gpu_hiz_stable_frames = 0;
+    bool m_gpu_hiz_candidate_valid = false;
     int m_gpu_handle_capacity = 0;
     int m_gpu_handle_high_water = 0;        // сколько ручек выдано максимум (индекс + 1)
     std::vector<int> m_gpu_free_handles;
@@ -200,7 +294,7 @@ private:
     std::vector<uint32_t> m_gpu_stream_counts;   // последние известные счётчики (статистика и подгонка ёмкости)
     std::vector<glm::uvec4> m_gpu_headers_cpu;
     std::vector<uint32_t> m_gpu_payload_cpu;
-    std::vector<glm::uvec2> m_gpu_order_cpu;
+    std::vector<glm::uvec2> m_gpu_order_cpu; // legacy scratch retained for debug compatibility
     std::array<Gpu_Readback, kGpuReadbackRing> m_gpu_readbacks{};
     int m_gpu_readback_head = 0;
     int m_gpu_readback_count = 0;
@@ -224,6 +318,9 @@ public:
     // настроек; на уже построенные меши не влияет, только на то, какие из них
     // попадают в проход флоры.
     void set_flora_render_distance(int chunks) { m_flora_render_distance_chunks = chunks; }
+    void set_render_distance(int chunks) {
+        m_render_distance_chunks = std::clamp(chunks, Config::render_distance_min, Config::render_distance_max);
+    }
     int get_flora_render_distance() const { return m_flora_render_distance_chunks; }
 
     // Загружает шейдеры, поднимает GPU-мешер (нужен OpenGL 4.3) и берёт из Atlas_Registry атлас с именем
@@ -238,7 +335,11 @@ public:
                        const glm::mat4& projection,
                        float ambient_intensity,
                        bool spectator = false,
-                       const std::function<void()>& before_liquid = {});
+                       const std::function<void()>& before_liquid = {},
+                       glm::vec3 camera_position = glm::vec3(0.0f),
+                       glm::vec3 fog_color = glm::vec3(0.55f, 0.75f, 0.95f),
+                       glm::vec3 sun_direction = glm::vec3(0.35f, 0.85f, 0.25f),
+                       bool enable_fog = true);
 
     // Рисует солнце и луну как billboard-диски в небе (процедурный шейдер, без текстуры —
     // см. assets/shaders/sky_object_*.glsl). Вызывать ДО render_chunks — рисуется без записи
@@ -275,6 +376,7 @@ public:
     size_t get_last_rendered_section_count() const { return m_last_rendered_section_count; }
     size_t get_last_culled_section_count() const { return m_last_culled_section_count; }
     size_t get_last_occluded_section_count() const { return m_last_occluded_section_count; }
+    float get_last_gpu_frame_ms() const { return m_last_gpu_frame_ms; }
     void invalidate_chunk_cache(const glm::ivec3& chunk_pos);
 };
 

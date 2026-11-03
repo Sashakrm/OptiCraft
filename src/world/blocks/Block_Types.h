@@ -386,15 +386,17 @@ private:
     //
     // Зачем это вообще нужно: BFS освещения (Chunk_Manager::recompute_lighting и
     // recompute_sky_lighting) на КАЖДЫЙ воксель спрашивает "он прозрачный?" и "он светится?".
-    // get_properties(id) возвращает ссылку на Block_Properties — а это тяжёлая структура
-    // (std::string name, три glm::vec4 под UV и т.д., далеко за 100 байт), то есть чтобы
-    // прочитать один bool, мы каждый раз тащим в кэш-линии чужие поля, которые BFS вообще
-    // не использует. Плюс сам get_properties(Block_Types) идёт через get_instance() —
-    // Meyer's singleton, а это проверка guard-переменной инициализации на каждый вызов.
-    // Таблицы ниже — 256 байт каждая, гарантированно целиком в L1 на всё время обхода,
-    // и вызывающий код держит на них голый указатель, а не дёргает singleton в цикле.
+    // get_properties(id) возвращает тяжёлую структуру Block_Properties (строка и UV-координаты).
+    // Горячие циклы используют компактные ID-индексированные таблицы вместо обращения к ней.
+    // Указатель берётся один раз перед обходом, без повторного вызова singleton-геттера.
     std::array<bool, k_max_block_types> m_transparent_flat{};
+    // Sky light must pass through liquids even if a data-driven block definition changes
+    // its visual transparency. Liquids attenuate the rendered color, not direct skylight.
+    std::array<bool, k_max_block_types> m_sky_transparent_flat{};
     std::array<uint8_t, k_max_block_types> m_light_emission_flat{};
+    std::array<uint8_t, k_max_block_types> m_is_liquid_flat{};
+    std::array<uint8_t, k_max_block_types> m_fluid_passable_flat{};
+    std::array<uint16_t, k_max_block_types> m_fluid_tick_delay_flat{};
     std::array<float, k_max_block_types> m_blast_resistance_flat{};
     void build_fast_tables();
 
@@ -421,7 +423,13 @@ public:
     // не нужна и не нужен singleton-геттер: вызывающий код один раз берёт указатель на
     // таблицу ДО цикла BFS (get_instance() вызывается один раз, не на каждый воксель).
     const bool* transparent_table() const { return m_transparent_flat.data(); }
+    // Dedicated light-transmission table: all liquid blocks pass sky light regardless of
+    // their render opacity/transparency flags.
+    const bool* sky_transparent_table() const { return m_sky_transparent_flat.data(); }
     const uint8_t* light_emission_table() const { return m_light_emission_flat.data(); }
+    const uint8_t* liquid_table() const { return m_is_liquid_flat.data(); }
+    const uint8_t* fluid_passable_table() const { return m_fluid_passable_flat.data(); }
+    const uint16_t* fluid_tick_delay_table() const { return m_fluid_tick_delay_flat.data(); }
     // Взрывоустойчивость по id блока (см. Block_Properties::blast_resistance).
     const float* blast_resistance_table() const { return m_blast_resistance_flat.data(); }
 

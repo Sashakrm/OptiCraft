@@ -2,10 +2,14 @@
 // Created by noktemor on 11.02.2026.
 //
 #include <cstddef>
+#include <cstdio>
+#include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include "rendering/Renderer.h"
 #include "utils/logging/Logger.h"
 #include "utils/Config.h"
+#include "rendering/Frustum.h"
 
 #include <algorithm>
 #include <fstream>
@@ -64,6 +68,85 @@ namespace {
             char log[4096];
             glGetProgramInfoLog(program, sizeof(log), nullptr, log);
             LOG_ERROR("Compute program link error (" + path + "): " + log);
+            glDeleteProgram(program);
+            return 0;
+        }
+        return program;
+    }
+
+    // EXT/NV mesh shader stages are not part of the project's GLAD 4.3 build.
+    // Khronos assigns the same stage enum values to both extension variants.
+    constexpr GLenum kGlTaskShader = 0x955A;
+    constexpr GLenum kGlMeshShader = 0x9559;
+    constexpr GLenum kGlParameterBufferArb = 0x80EE;
+    constexpr GLbitfield kGpuParameterBufferBarrierBit = 0x00008000;
+
+    bool has_gl_extension(const char* wanted) {
+        GLint count = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+        for (GLint i = 0; i < count; ++i) {
+            const auto* value = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+            if (value && std::strcmp(value, wanted) == 0) return true;
+        }
+        return false;
+    }
+
+    std::string read_shader_source(const std::string& path) {
+        std::ifstream file(path);
+        if (!file) {
+            LOG_ERROR("Cannot open shader: " + path);
+            return {};
+        }
+        std::stringstream stream;
+        stream << file.rdbuf();
+        return stream.str();
+    }
+
+    GLuint compile_stage(GLenum stage, const std::string& path) {
+        const std::string source = read_shader_source(path);
+        if (source.empty()) return 0;
+        const char* source_ptr = source.c_str();
+        const GLuint shader = glCreateShader(stage);
+        glShaderSource(shader, 1, &source_ptr, nullptr);
+        glCompileShader(shader);
+        GLint ok = GL_FALSE;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char log[8192]{};
+            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+            LOG_ERROR("Shader compile error (" + path + "): " + log);
+            glDeleteShader(shader);
+            return 0;
+        }
+        return shader;
+    }
+
+    GLuint compile_mesh_program(const std::string& task_path, const std::string& mesh_path,
+                                const std::string& fragment_path) {
+        const GLuint task = compile_stage(kGlTaskShader, task_path);
+        const GLuint mesh = compile_stage(kGlMeshShader, mesh_path);
+        const GLuint fragment = compile_stage(GL_FRAGMENT_SHADER, fragment_path);
+        if (!task || !mesh || !fragment) {
+            if (task) glDeleteShader(task);
+            if (mesh) glDeleteShader(mesh);
+            if (fragment) glDeleteShader(fragment);
+            return 0;
+        }
+
+        const GLuint program = glCreateProgram();
+        glAttachShader(program, task);
+        glAttachShader(program, mesh);
+        glAttachShader(program, fragment);
+        glLinkProgram(program);
+        glDeleteShader(task);
+        glDeleteShader(mesh);
+        glDeleteShader(fragment);
+        GLint ok = GL_FALSE;
+        glGetProgramiv(program, GL_LINK_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char log[8192]{};
+            glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+            LOG_ERROR("Mesh-shader program link error (" + mesh_path + "): " + log);
             glDeleteProgram(program);
             return 0;
         }
@@ -188,7 +271,8 @@ bool Renderer::initialize(const std::string& blocks_atlas_name) {
         return false;
     }
 
-    LOG_INFO("Renderer initialized");
+    LOG_INFO("Renderer initialized with " + std::to_string(m_frame_workers.worker_count()) +
+             " persistent CPU frame-preparation worker(s)");
     return true;
 }
 
@@ -340,7 +424,11 @@ bool Renderer::initialize_gpu_mesher() {
 
     m_gpu_greedy_program = compile_compute_program("assets/shaders/mesh_greedy.comp");
     m_gpu_misc_program = compile_compute_program("assets/shaders/mesh_misc.comp");
-    m_gpu_finalize_program = compile_compute_program("assets/shaders/mesh_finalize.comp");
+    m_gpu_cull_program = compile_compute_program("assets/shaders/gpu_cull_commands.comp");
+    // Hi-Z is an optional second-stage optimization; the core GPU frustum/command path
+    // remains operational even on drivers where these helper shaders fail to compile.
+    m_gpu_hiz_copy_program = compile_compute_program("assets/shaders/gpu_hiz_copy.comp");
+    m_gpu_hiz_reduce_program = compile_compute_program("assets/shaders/gpu_hiz_reduce.comp");
     m_gpu_terrain_shader_ptr = new Shader("assets/shaders/terrain_gpu_vertex.glsl",
                                           "assets/shaders/terrain_gpu_fragment.glsl");
     m_gpu_misc_shader_ptr = new Shader("assets/shaders/terrain_gpu_misc_vertex.glsl",
@@ -351,7 +439,7 @@ bool Renderer::initialize_gpu_mesher() {
         if (shader && shader->get_id() != 0) glGetProgramiv(shader->get_id(), GL_LINK_STATUS, &ok);
         return ok == GL_TRUE;
     };
-    if (m_gpu_greedy_program == 0 || m_gpu_misc_program == 0 || m_gpu_finalize_program == 0 ||
+    if (m_gpu_greedy_program == 0 || m_gpu_misc_program == 0 || m_gpu_cull_program == 0 ||
         !linked(m_gpu_terrain_shader_ptr) || !linked(m_gpu_misc_shader_ptr)) {
         LOG_ERROR("GPU mesher shader setup failed");
         shutdown_gpu_mesher();
@@ -359,10 +447,133 @@ bool Renderer::initialize_gpu_mesher() {
     }
     m_gpu_loc_greedy_chunk_count = glGetUniformLocation(m_gpu_greedy_program, "u_chunk_count");
     m_gpu_loc_misc_chunk_count = glGetUniformLocation(m_gpu_misc_program, "u_chunk_count");
-    m_gpu_loc_finalize_entries = glGetUniformLocation(m_gpu_finalize_program, "u_entry_count");
-    m_gpu_loc_finalize_kind = glGetUniformLocation(m_gpu_finalize_program, "u_kind");
-    m_gpu_loc_finalize_order_offset = glGetUniformLocation(m_gpu_finalize_program, "u_order_offset");
-    m_gpu_loc_finalize_cmd_offset = glGetUniformLocation(m_gpu_finalize_program, "u_cmd_offset");
+    m_gpu_loc_cull_candidate_count = glGetUniformLocation(m_gpu_cull_program, "u_candidate_count");
+    m_gpu_loc_cull_mesh_mode = glGetUniformLocation(m_gpu_cull_program, "u_mesh_mode");
+    m_gpu_loc_cull_planes = glGetUniformLocation(m_gpu_cull_program, "u_frustum_planes[0]");
+    m_gpu_loc_cull_view_projection = glGetUniformLocation(m_gpu_cull_program, "u_view_projection");
+    m_gpu_loc_cull_viewport_size = glGetUniformLocation(m_gpu_cull_program, "u_viewport_size");
+    m_gpu_loc_cull_use_hiz = glGetUniformLocation(m_gpu_cull_program, "u_use_hiz");
+    m_gpu_loc_cull_compact_opaque = glGetUniformLocation(m_gpu_cull_program, "u_compact_opaque");
+    m_gpu_loc_cull_hiz_sampler = glGetUniformLocation(m_gpu_cull_program, "u_hiz");
+    if (m_gpu_hiz_copy_program != 0)
+        m_gpu_loc_hiz_copy_sampler = glGetUniformLocation(m_gpu_hiz_copy_program, "u_source_depth");
+    if (m_gpu_hiz_reduce_program != 0) {
+        m_gpu_loc_hiz_reduce_sampler = glGetUniformLocation(m_gpu_hiz_reduce_program, "u_source_hiz");
+        m_gpu_loc_hiz_reduce_source_level = glGetUniformLocation(m_gpu_hiz_reduce_program, "u_source_level");
+    }
+    if (m_gpu_hiz_copy_program == 0 || m_gpu_hiz_reduce_program == 0)
+        LOG_WARN("Hi-Z shaders unavailable; GPU frustum culling remains enabled without temporal occlusion");
+
+    // True mesh shading is optional because neither extension is required by GL 4.3.
+    // Prefer the cross-vendor EXT spelling, then try NVIDIA's NV spelling. Both replace
+    // only the final vertex-pulling draw stage; compute meshing and the GL 4.3 fallback stay intact.
+    const bool draw_id_available = has_gl_extension("GL_ARB_shader_draw_parameters");
+    auto try_enable_mesh_pipeline = [&](const char* extension_name,
+                                        const char* indirect_entry_point,
+                                        const char* task_shader,
+                                        const char* solid_mesh_shader,
+                                        const char* misc_mesh_shader,
+                                        int mode,
+                                        const char* label) -> bool {
+        if (!has_gl_extension(extension_name) || !draw_id_available) return false;
+
+        auto draw_tasks = reinterpret_cast<MultiDrawMeshTasksIndirect>(
+            glfwGetProcAddress(indirect_entry_point));
+        if (!draw_tasks) {
+            LOG_WARN(std::string(extension_name) + " is advertised, but " + indirect_entry_point +
+                     " could not be loaded");
+            return false;
+        }
+
+        const GLuint solid_program = compile_mesh_program(
+            task_shader, solid_mesh_shader, "assets/shaders/terrain_gpu_fragment.glsl");
+        const GLuint misc_program = compile_mesh_program(
+            task_shader, misc_mesh_shader, "assets/shaders/terrain_gpu_misc_fragment.glsl");
+        if (!solid_program || !misc_program) {
+            LOG_ERROR(std::string(label) + " mesh-shader setup failed; trying another backend/fallback");
+            if (solid_program) glDeleteProgram(solid_program);
+            if (misc_program) glDeleteProgram(misc_program);
+            return false;
+        }
+
+        m_gpu_mesh_solid_program = solid_program;
+        m_gpu_mesh_misc_program = misc_program;
+        m_gl_multi_draw_mesh_tasks_indirect = draw_tasks;
+        m_gpu_mesh_shader_mode = mode;
+        m_gpu_mesh_shader_ready = true;
+        m_gpu_loc_mesh_order_offset_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "u_order_offset");
+        m_gpu_loc_mesh_order_offset_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "u_order_offset");
+        m_gpu_loc_mesh_draw_map_offset_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "u_draw_map_offset");
+        m_gpu_loc_mesh_draw_map_offset_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "u_draw_map_offset");
+        m_gpu_loc_mesh_kind_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "u_kind");
+        m_gpu_loc_mesh_kind_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "u_kind");
+        m_gpu_loc_mesh_view_projection_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "view_projection");
+        m_gpu_loc_mesh_view_projection_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "view_projection");
+        m_gpu_loc_mesh_time_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "time");
+        m_gpu_loc_mesh_ambient_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "ambient");
+        m_gpu_loc_mesh_ambient_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "ambient");
+        m_gpu_loc_mesh_max_light_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "maxLightLevel");
+        m_gpu_loc_mesh_max_light_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "maxLightLevel");
+        m_gpu_loc_mesh_time_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "time");
+        m_gpu_loc_mesh_camera_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "cameraPosition");
+        m_gpu_loc_mesh_camera_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "cameraPosition");
+        m_gpu_loc_mesh_fog_color_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "fogColor");
+        m_gpu_loc_mesh_fog_color_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "fogColor");
+        m_gpu_loc_mesh_fog_range_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "fogRange");
+        m_gpu_loc_mesh_fog_range_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "fogRange");
+        m_gpu_loc_mesh_sun_direction_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "sunDirection");
+        m_gpu_loc_mesh_sun_direction_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "sunDirection");
+        m_gpu_loc_mesh_tile_origin_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "tile_origin");
+        m_gpu_loc_mesh_tile_size_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "tile_size");
+        LOG_INFO(std::string("OpenGL ") + label + " task + mesh shader pipeline enabled");
+        return true;
+    };
+
+    bool mesh_pipeline_enabled = try_enable_mesh_pipeline(
+        "GL_EXT_mesh_shader", "glMultiDrawMeshTasksIndirectEXT",
+        "assets/shaders/mesh_task.task", "assets/shaders/terrain_mesh.mesh",
+        "assets/shaders/terrain_misc_mesh.mesh", 1, "EXT");
+    if (!mesh_pipeline_enabled) {
+        mesh_pipeline_enabled = try_enable_mesh_pipeline(
+            "GL_NV_mesh_shader", "glMultiDrawMeshTasksIndirectNV",
+            "assets/shaders/mesh_task_nv.task", "assets/shaders/terrain_mesh_nv.mesh",
+            "assets/shaders/terrain_misc_mesh_nv.mesh", 2, "NV");
+    }
+    if (!mesh_pipeline_enabled) {
+        m_gpu_mesh_shader_ready = false;
+        m_gpu_mesh_shader_mode = 0;
+        m_gl_multi_draw_mesh_tasks_indirect = nullptr;
+        LOG_INFO("No usable task/mesh shader extension; using the GL 4.3 indirect vertex-pulling path");
+    }
+
+    // ARB_indirect_parameters lets the GPU provide the number of non-empty draw commands.
+    // That avoids submitting thousands of zero-count commands at large render distances.
+    // Transparent commands are intentionally left on the fixed-count path to preserve
+    // their deterministic back-to-front ordering.
+    const char* gl_version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    int gl_major = 0, gl_minor = 0;
+    if (gl_version) std::sscanf(gl_version, "%d.%d", &gl_major, &gl_minor);
+    const bool indirect_parameters_supported = has_gl_extension("GL_ARB_indirect_parameters") ||
+        gl_major > 4 || (gl_major == 4 && gl_minor >= 6);
+    if (indirect_parameters_supported) {
+        m_gl_multi_draw_arrays_indirect_count = reinterpret_cast<MultiDrawArraysIndirectCount>(
+            glfwGetProcAddress("glMultiDrawArraysIndirectCountARB"));
+        if (m_gpu_mesh_shader_mode == 1) {
+            m_gl_multi_draw_mesh_tasks_indirect_count = reinterpret_cast<MultiDrawMeshTasksIndirectCount>(
+                glfwGetProcAddress("glMultiDrawMeshTasksIndirectCountEXT"));
+        } else if (m_gpu_mesh_shader_mode == 2) {
+            m_gl_multi_draw_mesh_tasks_indirect_count = reinterpret_cast<MultiDrawMeshTasksIndirectCount>(
+                glfwGetProcAddress("glMultiDrawMeshTasksIndirectCountNV"));
+        }
+    }
+    m_gpu_compact_opaque_commands = m_gpu_mesh_shader_ready
+        ? (m_gl_multi_draw_mesh_tasks_indirect_count != nullptr)
+        : (m_gl_multi_draw_arrays_indirect_count != nullptr);
+    if (m_gpu_compact_opaque_commands) {
+        LOG_INFO("GPU indirect-command compaction enabled (opaque draw count stays on GPU)");
+    } else {
+        LOG_INFO("Indirect-count API unavailable; using fixed-count indirect commands");
+    }
 
     // Таблица UV строится теми же resolve_face_uv/get_uv, по которым когда-то мешил CPU, поэтому
     // картинка не зависит от того, что видеокарта "знает" о блоках сама. LUT растёт с реально
@@ -421,6 +632,12 @@ bool Renderer::initialize_gpu_mesher() {
     m_gpu_headers_ssbo = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * kGpuHeaderStride * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
     m_gpu_payload_capacity = size_t{1} << 20;
     m_gpu_payload_ssbo = create_ssbo(m_gpu_payload_capacity, nullptr, GL_STREAM_DRAW);
+    // GPU culling counters are copied into a small asynchronous readback ring. Reading them
+    // directly from the live SSBO would serialize the CPU with the GPU every frame.
+    m_gpu_cull_stats_ssbo = create_ssbo(5u * sizeof(uint32_t), nullptr, GL_DYNAMIC_DRAW);
+    for (Gpu_Cull_Stats_Readback& readback : m_gpu_cull_stats_readbacks) {
+        readback.buffer = create_ssbo(5u * sizeof(uint32_t), nullptr, GL_STREAM_READ);
+    }
     for (Gpu_Readback& rb : m_gpu_readbacks) {
         rb.buffer = create_ssbo(static_cast<size_t>(kGpuBatchChunks) * kGpuStreams * sizeof(uint32_t), nullptr, GL_STREAM_READ);
     }
@@ -432,7 +649,13 @@ bool Renderer::initialize_gpu_mesher() {
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
     m_gpu_ready = true;
-    LOG_INFO("GPU mesher ready (OpenGL 4.3 compute, unified quad pool)");
+    const char* mesh_backend = m_gpu_mesh_shader_mode == 1 ? "EXT task/mesh shading" :
+                               (m_gpu_mesh_shader_mode == 2 ? "NV task/mesh shading" :
+                                                              "vertex-pulling fallback");
+    LOG_INFO(std::string("GPU mesher ready (compute + ") + mesh_backend +
+             (m_gpu_hiz_copy_program && m_gpu_hiz_reduce_program
+                  ? ", GPU frustum/Hi-Z culling, unified quad pool)"
+                  : ", GPU frustum culling, unified quad pool)"));
     return true;
 }
 
@@ -442,10 +665,22 @@ void Renderer::shutdown_gpu_mesher() {
         if (rb.buffer) glDeleteBuffers(1, &rb.buffer);
         rb = Gpu_Readback{};
     }
+    for (Gpu_Cull_Stats_Readback& rb : m_gpu_cull_stats_readbacks) {
+        if (rb.fence) glDeleteSync(rb.fence);
+        if (rb.buffer) glDeleteBuffers(1, &rb.buffer);
+        rb = Gpu_Cull_Stats_Readback{};
+    }
+    for (Gpu_Frame_Timer_Query& timer : m_gpu_frame_timer_queries) {
+        if (timer.id) glDeleteQueries(1, &timer.id);
+        timer = Gpu_Frame_Timer_Query{};
+    }
+    m_gpu_frame_timer_write = 0;
+    m_last_gpu_frame_ms = 0.0f;
     unsigned int buffers[] = {
         m_gpu_lut_ssbo, m_gpu_tables_ssbo, m_gpu_shape_index_ssbo, m_gpu_shape_boxes_ssbo, m_gpu_rects_ssbo,
         m_gpu_headers_ssbo, m_gpu_payload_ssbo, m_gpu_quads_ssbo, m_gpu_counts_ssbo, m_gpu_ranges_ssbo,
-        m_gpu_origins_ssbo, m_gpu_order_ssbo, m_gpu_cmd_ssbo, m_gpu_section_ids_vbo
+        m_gpu_origins_ssbo, m_gpu_candidates_ssbo, m_gpu_section_bounds_ssbo, m_gpu_order_ssbo,
+        m_gpu_cmd_ssbo, m_gpu_cmd_meta_ssbo, m_gpu_cull_stats_ssbo, m_gpu_section_ids_vbo
     };
     for (unsigned int id : buffers) {
         if (id != 0) glDeleteBuffers(1, &id);
@@ -453,21 +688,53 @@ void Renderer::shutdown_gpu_mesher() {
     if (m_gpu_section_vao != 0) glDeleteVertexArrays(1, &m_gpu_section_vao);
     if (m_gpu_greedy_program != 0) glDeleteProgram(m_gpu_greedy_program);
     if (m_gpu_misc_program != 0) glDeleteProgram(m_gpu_misc_program);
-    if (m_gpu_finalize_program != 0) glDeleteProgram(m_gpu_finalize_program);
+    if (m_gpu_cull_program != 0) glDeleteProgram(m_gpu_cull_program);
+    if (m_gpu_hiz_copy_program != 0) glDeleteProgram(m_gpu_hiz_copy_program);
+    if (m_gpu_hiz_reduce_program != 0) glDeleteProgram(m_gpu_hiz_reduce_program);
+    if (m_gpu_hiz_depth_texture != 0) glDeleteTextures(1, &m_gpu_hiz_depth_texture);
+    if (m_gpu_hiz_texture != 0) glDeleteTextures(1, &m_gpu_hiz_texture);
+    if (m_gpu_hiz_fbo != 0) glDeleteFramebuffers(1, &m_gpu_hiz_fbo);
+    if (m_gpu_mesh_solid_program != 0) glDeleteProgram(m_gpu_mesh_solid_program);
+    if (m_gpu_mesh_misc_program != 0) glDeleteProgram(m_gpu_mesh_misc_program);
     delete m_gpu_terrain_shader_ptr;
     delete m_gpu_misc_shader_ptr;
 
     m_gpu_terrain_shader_ptr = nullptr;
     m_gpu_misc_shader_ptr = nullptr;
-    m_gpu_greedy_program = m_gpu_misc_program = m_gpu_finalize_program = 0;
+    m_gpu_greedy_program = m_gpu_misc_program = m_gpu_cull_program = 0;
+    m_gpu_hiz_copy_program = m_gpu_hiz_reduce_program = 0;
+    m_gpu_hiz_depth_texture = m_gpu_hiz_texture = m_gpu_hiz_fbo = 0;
+    m_gpu_hiz_width = m_gpu_hiz_height = m_gpu_hiz_levels = 0;
+    m_gpu_hiz_viewport_x = m_gpu_hiz_viewport_y = 0;
+    m_gpu_hiz_viewport_width = m_gpu_hiz_viewport_height = 0;
+    m_gpu_hiz_valid = false;
+    m_gpu_hiz_scene_signature = m_gpu_hiz_pending_signature = 0;
+    m_gpu_hiz_view_projection = glm::mat4(1.0f);
+    m_gpu_hiz_candidate_view_projection = glm::mat4(1.0f);
+    m_gpu_hiz_candidate_signature = 0;
+    m_gpu_hiz_candidate_viewport[0] = m_gpu_hiz_candidate_viewport[1] = 0;
+    m_gpu_hiz_candidate_viewport[2] = m_gpu_hiz_candidate_viewport[3] = 0;
+    m_gpu_hiz_stable_frames = 0;
+    m_gpu_hiz_candidate_valid = false;
+    m_gpu_mesh_solid_program = m_gpu_mesh_misc_program = 0;
+    m_gpu_mesh_shader_ready = false;
+    m_gpu_mesh_shader_mode = 0;
+    m_gl_multi_draw_mesh_tasks_indirect = nullptr;
+    m_gl_multi_draw_mesh_tasks_indirect_count = nullptr;
+    m_gl_multi_draw_arrays_indirect_count = nullptr;
+    m_gpu_compact_opaque_commands = false;
     m_gpu_section_vao = 0;
     m_gpu_section_ids_vbo = 0;
     m_gpu_lut_ssbo = m_gpu_tables_ssbo = m_gpu_shape_index_ssbo = m_gpu_shape_boxes_ssbo = m_gpu_rects_ssbo = 0;
     m_gpu_headers_ssbo = m_gpu_payload_ssbo = 0;
     m_gpu_quads_ssbo = m_gpu_counts_ssbo = m_gpu_ranges_ssbo = m_gpu_origins_ssbo = 0;
-    m_gpu_order_ssbo = m_gpu_cmd_ssbo = 0;
+    m_gpu_candidates_ssbo = m_gpu_section_bounds_ssbo = 0;
+    m_gpu_order_ssbo = m_gpu_cmd_ssbo = m_gpu_cmd_meta_ssbo = m_gpu_cull_stats_ssbo = 0;
+    m_gpu_cmd_meta_capacity_bytes = 0;
     m_gpu_payload_capacity = 0;
+    m_gpu_candidates_capacity = m_gpu_bounds_capacity = 0;
     m_gpu_order_capacity = m_gpu_cmd_capacity = 0;
+    m_gpu_cull_stats_write = 0;
     m_gpu_handle_capacity = 0;
     m_gpu_handle_high_water = 0;
     m_gpu_free_handles.clear();
@@ -627,6 +894,7 @@ void Renderer::release_gpu_chunk(Chunk_GL_Resources& resources) {
     m_gpu_free_handles.push_back(resources.gpu_handle);
     resources.gpu_handle = -1;
     resources.gpu_version = 0;
+    resources.appearance_start_time = 0.0f;
     resources.gpu_first.fill(0);
     resources.gpu_cap.fill(0);
     resources.gpu_wanted.fill(0);
@@ -716,6 +984,9 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             res.gpu_handle = acquire_gpu_handle();
             res.gpu_first.fill(0);
             res.gpu_cap.fill(0);
+            // Начинаем анимацию только при первой GPU-резиденции. Пересборка меша
+            // (например, после правки блока или смены LOD) не должна перезапускать эффект.
+            res.appearance_start_time = static_cast<float>(glfwGetTime());
         }
         res.gpu_version = chunk.mesh_version;
         res.gpu_flora_skipped = chunk.flora_skip_render;
@@ -767,11 +1038,13 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             header[2 + ch] = glm::uvec4(base + c[0], base + c[1], c[2], 0u);
         }
 
-        // Мировой угол чанка, диапазоны потоков и обнуление счётчиков копятся в списке и уходят в GPU
+        // Мировой угол чанка (w содержит время появления), диапазоны потоков и обнуление счётчиков
+        // копятся в списке и уходят в GPU
         // после цикла одним вызовом на непрерывный участок ручек (раньше — 3 glBufferSubData на чанк).
         const glm::vec4 origin(static_cast<float>(chunk.position.x * Config::chunk_size),
                                static_cast<float>(chunk.position.y * Config::chunk_height),
-                               static_cast<float>(chunk.position.z * Config::chunk_size), 0.0f);
+                               static_cast<float>(chunk.position.z * Config::chunk_size),
+                               res.appearance_start_time);
         uploads.push_back({handle, origin, ranges});
         std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(handle * kGpuStreams), kGpuStreams, 0u);
 
@@ -886,14 +1159,246 @@ bool Renderer::debug_gpu_section_quads(const glm::ivec3& chunk_position, int sec
     return true;
 }
 
-// Подготовка кадра: догружает на GPU чанки без актуальных квадов (с бюджетом по объёму, ближние первыми),
-// собирает для каждого вида список видимых секций и одним финализатором на вид пишет команды отрисовки.
+// Подготовка кадра: загружает обновлённые GPU-меши по бюджету, после чего отправляет на GPU
+// только кандидатов и метаданные секций. GPU выполняет frustum/Hi-Z culling и пишет indirect-команды.
+void Renderer::build_gpu_hiz(const glm::mat4& view_projection) {
+    if (m_gpu_hiz_copy_program == 0 || m_gpu_hiz_reduce_program == 0) {
+        m_gpu_hiz_valid = false;
+        return;
+    }
+
+    GLint viewport[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (viewport[2] <= 0 || viewport[3] <= 0) {
+        m_gpu_hiz_valid = false;
+        m_gpu_hiz_candidate_valid = false;
+        m_gpu_hiz_stable_frames = 0;
+        return;
+    }
+
+    // A temporal Hi-Z pyramid is useful only when it can be reused by the next frame.
+    // Rebuilding a full-resolution pyramid on every camera turn wastes several compute
+    // dispatches while prepare_gpu_frame deliberately rejects that moving-camera pyramid.
+    // Require two consecutive stable frames; during motion, keep only the inexpensive
+    // GPU frustum culling path. Once a pyramid matches the current view and scene, reuse
+    // it instead of copying/reducing the depth buffer again every frame.
+    bool candidate_matches = m_gpu_hiz_candidate_valid &&
+        m_gpu_hiz_candidate_signature == m_gpu_hiz_pending_signature;
+    for (int i = 0; i < 4 && candidate_matches; ++i)
+        candidate_matches = m_gpu_hiz_candidate_viewport[i] == viewport[i];
+    if (candidate_matches) {
+        for (int column = 0; column < 4 && candidate_matches; ++column) {
+            for (int row = 0; row < 4; ++row) {
+                if (std::abs(view_projection[column][row] -
+                             m_gpu_hiz_candidate_view_projection[column][row]) > 1.0e-6f) {
+                    candidate_matches = false;
+                    break;
+                }
+            }
+        }
+    }
+    if (!candidate_matches) {
+        m_gpu_hiz_candidate_valid = true;
+        m_gpu_hiz_candidate_signature = m_gpu_hiz_pending_signature;
+        for (int i = 0; i < 4; ++i) m_gpu_hiz_candidate_viewport[i] = viewport[i];
+        m_gpu_hiz_candidate_view_projection = view_projection;
+        m_gpu_hiz_stable_frames = 0;
+        m_gpu_hiz_valid = false;
+        return;
+    }
+    m_gpu_hiz_stable_frames = std::min(m_gpu_hiz_stable_frames + 1, 2);
+    if (m_gpu_hiz_stable_frames < 2) {
+        m_gpu_hiz_valid = false;
+        return;
+    }
+
+    bool already_built_for_candidate = m_gpu_hiz_valid &&
+        m_gpu_hiz_scene_signature == m_gpu_hiz_pending_signature &&
+        m_gpu_hiz_viewport_x == viewport[0] && m_gpu_hiz_viewport_y == viewport[1] &&
+        m_gpu_hiz_viewport_width == viewport[2] && m_gpu_hiz_viewport_height == viewport[3];
+    for (int column = 0; column < 4 && already_built_for_candidate; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            if (std::abs(view_projection[column][row] - m_gpu_hiz_view_projection[column][row]) > 1.0e-6f) {
+                already_built_for_candidate = false;
+                break;
+            }
+        }
+    }
+    if (already_built_for_candidate) return;
+
+    const auto next_power_of_two = [](int value) {
+        unsigned int result = 1u;
+        while (result < static_cast<unsigned int>(value)) result <<= 1u;
+        return static_cast<int>(result);
+    };
+    const int width = next_power_of_two(viewport[2]);
+    const int height = next_power_of_two(viewport[3]);
+    int levels = 1;
+    for (int w = width, h = height; w > 1 || h > 1; ++levels) {
+        w = std::max(1, w / 2);
+        h = std::max(1, h / 2);
+    }
+
+    GLint original_read_fbo = 0;
+    GLint original_draw_fbo = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &original_read_fbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &original_draw_fbo);
+
+    // Resize lazily. Power-of-two padding is initialized to depth 1.0, so samples
+    // outside the real viewport can never become false occluders in the pyramid.
+    if (width != m_gpu_hiz_width || height != m_gpu_hiz_height || levels != m_gpu_hiz_levels ||
+        m_gpu_hiz_depth_texture == 0 || m_gpu_hiz_texture == 0 || m_gpu_hiz_fbo == 0) {
+        if (m_gpu_hiz_depth_texture) glDeleteTextures(1, &m_gpu_hiz_depth_texture);
+        if (m_gpu_hiz_texture) glDeleteTextures(1, &m_gpu_hiz_texture);
+        if (m_gpu_hiz_fbo) glDeleteFramebuffers(1, &m_gpu_hiz_fbo);
+        m_gpu_hiz_depth_texture = m_gpu_hiz_texture = m_gpu_hiz_fbo = 0;
+
+        glGenTextures(1, &m_gpu_hiz_depth_texture);
+        glBindTexture(GL_TEXTURE_2D, m_gpu_hiz_depth_texture);
+        // The game's default framebuffer and the isometric-capture FBO both use
+        // 24-bit depth. Depth blits require matching source/destination depth formats.
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0,
+                     GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+
+        glGenFramebuffers(1, &m_gpu_hiz_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_gpu_hiz_fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                                m_gpu_hiz_depth_texture, 0);
+        // This FBO is used only as a depth blit destination. Do not touch the read
+        // buffer selection of the application's currently bound default framebuffer.
+        glDrawBuffer(GL_NONE);
+        const GLenum framebuffer_status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+        if (framebuffer_status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_WARN("Could not create Hi-Z depth framebuffer; temporal occlusion disabled");
+            glDeleteFramebuffers(1, &m_gpu_hiz_fbo);
+            glDeleteTextures(1, &m_gpu_hiz_depth_texture);
+            m_gpu_hiz_fbo = m_gpu_hiz_depth_texture = 0;
+            m_gpu_hiz_width = m_gpu_hiz_height = m_gpu_hiz_levels = 0;
+            m_gpu_hiz_viewport_x = m_gpu_hiz_viewport_y = 0;
+            m_gpu_hiz_viewport_width = m_gpu_hiz_viewport_height = 0;
+            m_gpu_hiz_valid = false;
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(original_draw_fbo));
+            return;
+        }
+
+        glGenTextures(1, &m_gpu_hiz_texture);
+        glBindTexture(GL_TEXTURE_2D, m_gpu_hiz_texture);
+        int mip_width = width;
+        int mip_height = height;
+        for (int level = 0; level < levels; ++level) {
+            glTexImage2D(GL_TEXTURE_2D, level, GL_R32F, mip_width, mip_height, 0,
+                         GL_RED, GL_FLOAT, nullptr);
+            mip_width = std::max(1, mip_width / 2);
+            mip_height = std::max(1, mip_height / 2);
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
+
+        m_gpu_hiz_width = width;
+        m_gpu_hiz_height = height;
+        m_gpu_hiz_levels = levels;
+        m_gpu_hiz_valid = false;
+    }
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_gpu_hiz_fbo);
+    // A stale application scissor or a disabled depth write mask must not leave
+    // uninitialized pixels in the padded depth target. Preserve both states exactly.
+    const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean original_depth_mask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &original_depth_mask);
+    glDisable(GL_SCISSOR_TEST);
+    glDepthMask(GL_TRUE);
+    const GLfloat far_depth = 1.0f;
+    glClearBufferfv(GL_DEPTH, 0, &far_depth);
+    glDepthMask(original_depth_mask);
+    if (scissor_was_enabled) glEnable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(original_read_fbo));
+    glBlitFramebuffer(viewport[0], viewport[1], viewport[0] + viewport[2], viewport[1] + viewport[3],
+                      0, 0, viewport[2], viewport[3], GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    // Make the framebuffer blit visible to the following compute texture fetch.
+    glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+
+    constexpr GLint kHiZTextureUnit = 10;
+    glActiveTexture(GL_TEXTURE0 + kHiZTextureUnit);
+    glUseProgram(m_gpu_hiz_copy_program);
+    glBindTexture(GL_TEXTURE_2D, m_gpu_hiz_depth_texture);
+    glUniform1i(m_gpu_loc_hiz_copy_sampler, kHiZTextureUnit);
+    glBindImageTexture(0, m_gpu_hiz_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+    glDispatchCompute(static_cast<GLuint>((width + 7) / 8),
+                      static_cast<GLuint>((height + 7) / 8), 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+
+    glUseProgram(m_gpu_hiz_reduce_program);
+    glUniform1i(m_gpu_loc_hiz_reduce_sampler, kHiZTextureUnit);
+    for (int level = 1; level < levels; ++level) {
+        const int mip_width = std::max(1, width >> level);
+        const int mip_height = std::max(1, height >> level);
+        glBindTexture(GL_TEXTURE_2D, m_gpu_hiz_texture);
+        glUniform1i(m_gpu_loc_hiz_reduce_source_level, level - 1);
+        glBindImageTexture(0, m_gpu_hiz_texture, level, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+        glDispatchCompute(static_cast<GLuint>((mip_width + 7) / 8),
+                          static_cast<GLuint>((mip_height + 7) / 8), 1);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    }
+
+    glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(original_read_fbo));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(original_draw_fbo));
+
+    m_gpu_hiz_viewport_x = viewport[0];
+    m_gpu_hiz_viewport_y = viewport[1];
+    m_gpu_hiz_viewport_width = viewport[2];
+    m_gpu_hiz_viewport_height = viewport[3];
+    m_gpu_hiz_view_projection = view_projection;
+    m_gpu_hiz_scene_signature = m_gpu_hiz_pending_signature;
+    m_gpu_hiz_valid = true;
+}
+
+void Renderer::poll_gpu_cull_stats() {
+    // GPU counters are consumed only after a fence signals. A busy slot is left alone;
+    // this method never waits for the GPU and therefore cannot stall the frame.
+    for (Gpu_Cull_Stats_Readback& readback : m_gpu_cull_stats_readbacks) {
+        if (!readback.fence || !readback.buffer) continue;
+        const GLenum status = glClientWaitSync(readback.fence, 0, 0);
+        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) continue;
+
+        glBindBuffer(GL_COPY_READ_BUFFER, readback.buffer);
+        const auto* values = static_cast<const uint32_t*>(glMapBufferRange(
+            GL_COPY_READ_BUFFER, 0, static_cast<GLsizeiptr>(5u * sizeof(uint32_t)), GL_MAP_READ_BIT));
+        if (values) {
+            m_last_rendered_chunk_count = values[0];
+            m_last_rendered_triangle_count = values[1];
+            m_last_rendered_section_count = values[2];
+            m_last_culled_section_count = values[3];
+            m_last_occluded_section_count = values[4];
+            glUnmapBuffer(GL_COPY_READ_BUFFER);
+        }
+        glDeleteSync(readback.fence);
+        readback.fence = nullptr;
+    }
+}
+
+// Frame preparation is GPU-driven after residency updates:
+// CPU uploads only chunk candidates and immutable section AABBs/reachability. The compute
+// shader performs section frustum culling, optional temporal Hi-Z, transparent-list reversal,
+// and writes every DrawArraysIndirect / DrawMeshTasksIndirect command into the GPU buffer.
 void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opaque_order,
-                                 bool spectator, const glm::vec3& camera_position) {
+                                 bool spectator, const glm::vec3& camera_position,
+                                 const glm::mat4& view_projection) {
+    poll_gpu_cull_stats();
     poll_gpu_readbacks(false);
 
-    // Чанки без геометрии отдают ручку; остальным, у кого нет актуальных квадов или нужна другая ёмкость,
-    // нужна загрузка. opaque_order уже отсортирован от ближних к дальним.
+    // Chunks with stale mesh data are uploaded in near-to-far order. This work still belongs
+    // to the CPU because the world/voxel snapshots are owned by Chunk_Manager; the actual
+    // greedy mesh construction remains on the GPU compute shaders.
     const auto collect_pending = [&]() {
         std::vector<const Renderable_Chunk*> pending;
         for (size_t index = 0; index < opaque_order.size(); ++index) {
@@ -913,148 +1418,294 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
     };
 
     std::vector<const Renderable_Chunk*> pending = collect_pending();
+    // Первое появление чанка важнее фоновой замены уже видимого меша. Внутри обеих
+    // групп сохраняется исходный near-to-far порядок из frame_sort.
+    std::stable_partition(pending.begin(), pending.end(), [&](const Renderable_Chunk* chunk) {
+        const auto it = m_chunk_gl_cache.find(chunk->position);
+        return it == m_chunk_gl_cache.end() || it->second.gpu_handle < 0;
+    });
+    // Rebuilding any resident mesh invalidates the previous depth pyramid: it may contain
+    // an occluder that has since been removed or reshaped.
+    if (!pending.empty()) m_gpu_hiz_valid = false;
     if (m_gpu_sync_residency) {
-        // Снимок должен быть полным: грузим всё, ждём счётчики и, если какому-то потоку не хватило
-        // ёмкости, повторяем (одного повтора достаточно: счётчики настоящие).
         for (int pass = 0; pass < 8 && !pending.empty(); ++pass) {
             for (size_t at = 0; at < pending.size(); at += kGpuBatchChunks) {
                 if (m_gpu_readback_count == kGpuReadbackRing) poll_gpu_readbacks(true);
-                const size_t end = std::min(pending.size(), at + static_cast<size_t>(kGpuBatchChunks));
-                submit_gpu_batch(std::vector<const Renderable_Chunk*>(pending.begin() + static_cast<std::ptrdiff_t>(at),
-                                                                      pending.begin() + static_cast<std::ptrdiff_t>(end)));
+                const size_t finish = std::min(pending.size(), at + static_cast<size_t>(kGpuBatchChunks));
+                submit_gpu_batch(std::vector<const Renderable_Chunk*>(
+                    pending.begin() + static_cast<std::ptrdiff_t>(at),
+                    pending.begin() + static_cast<std::ptrdiff_t>(finish)));
             }
             while (m_gpu_readback_count > 0) poll_gpu_readbacks(true);
             pending = collect_pending();
         }
-    } else if (!pending.empty()) {
-        // Не блокируем render thread из-за заполненного readback ring. Уже готовые меши
-        // продолжают рисоваться; новые чанки просто остаются в pending до освобождения слота.
-        if (m_gpu_readback_count < kGpuReadbackRing) {
-            // Бюджет кадра: pending уже от ближних к дальним, поэтому останавливаемся на первом
-            // чанке, который не влезает. Так дальние не обгоняют ближние.
-            std::vector<const Renderable_Chunk*> batch;
-            size_t bytes = 0;
-            for (const Renderable_Chunk* chunk_ptr : pending) {
-                if (batch.size() == static_cast<size_t>(kGpuBatchChunks)) break;
-                const size_t chunk_bytes = chunk_ptr->meshes->gpu_words.size() * sizeof(uint32_t);
-                if (!batch.empty() && bytes + chunk_bytes > kGpuFrameBudgetBytes) break;
-                batch.push_back(chunk_ptr);
-                bytes += chunk_bytes;
+    } else if (!pending.empty() && m_gpu_readback_count < kGpuReadbackRing) {
+        // Streaming uploads share the GPU with the current frame. When the previous
+        // timer sample is already above frame budget, shrink this frame's upload batch
+        // instead of queueing another large compute dispatch behind an overloaded GPU.
+        size_t byte_budget = kGpuFrameBudgetBytes;
+        size_t chunk_budget = kGpuFrameBudgetChunks;
+        if (m_last_gpu_frame_ms > 28.0f) {
+            byte_budget = 512u * 1024u;
+            chunk_budget = 8u;
+        } else if (m_last_gpu_frame_ms > 20.0f) {
+            byte_budget = 1u * 1024u * 1024u;
+            chunk_budget = 16u;
+        } else if (m_last_gpu_frame_ms > 14.0f) {
+            byte_budget = 2u * 1024u * 1024u;
+            chunk_budget = 32u;
+        }
+
+        std::vector<const Renderable_Chunk*> batch;
+        batch.reserve(std::min(chunk_budget, pending.size()));
+        size_t bytes = 0;
+        for (const Renderable_Chunk* chunk_ptr : pending) {
+            if (batch.size() >= chunk_budget) break;
+            const size_t chunk_bytes = chunk_ptr->meshes->gpu_words.size() * sizeof(uint32_t);
+            if (!batch.empty() && bytes + chunk_bytes > byte_budget) break;
+            batch.push_back(chunk_ptr);
+            bytes += chunk_bytes;
+        }
+        if (!batch.empty()) submit_gpu_batch(batch);
+    }
+
+    // Optional legacy occlusion queries are polled on the context thread. Their result is
+    // only an additional conservative opaque mask; the main camera frustum is never tested
+    // on the CPU anymore.
+    if (m_occlusion_enabled && !spectator) {
+        for (size_t index = 0; index < opaque_order.size(); ++index) {
+            const Renderable_Chunk& chunk = *opaque_order[index];
+            Chunk_GL_Resources& res = *m_frame_res[index];
+            if (res.gpu_handle < 0) continue;
+            for (size_t section_index = 0; section_index < chunk.meshes->sections.size(); ++section_index) {
+                const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
+                const bool opaque = (section.kinds & ((1u << kKindSolid) | (1u << kKindShaped))) != 0;
+                if (section.has_geometry && opaque && chunk.section_visible[section_index])
+                    poll_occlusion_result(res.occlusion[section_index]);
             }
-            submit_gpu_batch(batch);
         }
     }
 
-    // Списки видимых секций по видам. Непрозрачные виды (кубы и формы) подчиняются occlusion-запросам, если
-    // они включены; флора и жидкость — только фрустуму и достижимости. Порядок записей — порядок отрисовки:
-    // непрозрачные — от ближних к дальним, прозрачные — от дальних к ближним.
-    std::array<std::vector<glm::uvec2>, kGpuKindCount> entries;
+    std::vector<glm::uvec4> candidates;
+    std::vector<glm::vec4> section_bounds;
+    candidates.reserve(opaque_order.size());
+    section_bounds.reserve(opaque_order.size() * Config::chunk_section_count);
+
     for (size_t index = 0; index < opaque_order.size(); ++index) {
         const Renderable_Chunk& chunk = *opaque_order[index];
         Chunk_GL_Resources& res = *m_frame_res[index];
-        if (res.gpu_handle < 0) continue;
-        const Chunk_Meshes& meshes = *chunk.meshes;
-        const glm::vec3 footprint_min(static_cast<float>(chunk.position.x * Config::chunk_size), 0.0f,
-                                      static_cast<float>(chunk.position.z * Config::chunk_size));
-        const glm::vec3 footprint_max(footprint_min.x + static_cast<float>(Config::chunk_size), 0.0f,
-                                      footprint_min.z + static_cast<float>(Config::chunk_size));
+        if (res.gpu_handle < 0) continue; // Not resident yet; it will be considered next frame.
 
-        std::array<uint32_t, kGpuKindCount> masks{};
-        bool any_opaque_drawn = false;
-        for (size_t s = 0; s < meshes.sections.size(); ++s) {
-            const Chunk_Section_Range& section = meshes.sections[s];
-            if (!section.has_geometry) continue;
-            const bool opaque_kinds = (section.kinds & ((1u << kKindSolid) | (1u << kKindShaped))) != 0;
-            bool opaque_visible = chunk.section_visible[s];
-            if (opaque_kinds && !chunk.section_visible[s]) ++m_last_culled_section_count;
-            if (opaque_kinds && opaque_visible && m_occlusion_enabled && !spectator) {
-                Section_Occlusion_State& occ = res.occlusion[s];
-                poll_occlusion_result(occ);
-                const glm::vec3 section_min(footprint_min.x, section.min_y, footprint_min.z);
-                const glm::vec3 section_max(footprint_max.x, section.max_y, footprint_max.z);
-                const bool camera_inside =
-                    camera_position.x >= section_min.x && camera_position.x <= section_max.x &&
-                    camera_position.y >= section_min.y && camera_position.y <= section_max.y &&
-                    camera_position.z >= section_min.z && camera_position.z <= section_max.z;
-                if (camera_inside) occ.visible = true;
-                if (!occ.visible) {
-                    opaque_visible = false;
-                    ++m_last_occluded_section_count;
+        uint32_t reach_mask = 0u;
+        uint32_t packed_kinds = 0u;
+        uint32_t opaque_occluded_mask = 0u;
+        for (size_t section_index = 0; section_index < Config::chunk_section_count; ++section_index) {
+            const Chunk_Section_Range& section = chunk.meshes->sections[section_index];
+            if (section.has_geometry && chunk.section_visible[section_index])
+                reach_mask |= 1u << section_index;
+            packed_kinds |= (static_cast<uint32_t>(section.kinds) & 0xFFu) << (section_index * 8u);
+
+            // Section bounds are world-space Y values, matching the uploaded chunk origin.
+            // X/Z extents are reconstructed by the GPU from origins[handle].
+            section_bounds.emplace_back(section.min_y, section.max_y, 0.0f, 0.0f);
+
+            if (m_occlusion_enabled && !spectator && section.has_geometry &&
+                (section.kinds & ((1u << kKindSolid) | (1u << kKindShaped))) != 0) {
+                const glm::vec3 min(static_cast<float>(chunk.position.x * Config::chunk_size),
+                                    section.min_y,
+                                    static_cast<float>(chunk.position.z * Config::chunk_size));
+                const glm::vec3 max(min.x + Config::chunk_size, section.max_y, min.z + Config::chunk_size);
+                const bool camera_inside = camera_position.x >= min.x && camera_position.x <= max.x &&
+                                           camera_position.y >= min.y && camera_position.y <= max.y &&
+                                           camera_position.z >= min.z && camera_position.z <= max.z;
+                if (camera_inside) res.occlusion[section_index].visible = true;
+                if (!res.occlusion[section_index].visible)
+                    opaque_occluded_mask |= 1u << section_index;
+            }
+        }
+
+        if (reach_mask == 0u || packed_kinds == 0u) {
+            // This chunk is deliberately not sent to the GPU: it has no reachable geometry.
+            // Keep the bounds vector aligned by removing its just-appended section records.
+            section_bounds.resize(section_bounds.size() - Config::chunk_section_count);
+            continue;
+        }
+        const uint32_t flags = (chunk.flora_skip_render ? 1u : 0u) | (opaque_occluded_mask << 8u);
+        candidates.emplace_back(static_cast<uint32_t>(res.gpu_handle), reach_mask, packed_kinds, flags);
+    }
+
+    // No GPU candidates this frame. Clear draw counts so stale indirect commands are never replayed.
+    if (candidates.empty()) {
+        for (Gpu_Frame_List& list : m_gpu_lists) list = Gpu_Frame_List{};
+        m_gpu_hiz_pending_signature = 1469598103934665603ull;
+        return;
+    }
+
+    // Stable scene signature: temporal Hi-Z is reused only while candidate handles,
+    // reachability/kind masks and the actual GPU mesh versions stay identical.
+    uint64_t scene_signature = 1469598103934665603ull;
+    const auto hash_word = [&scene_signature](uint64_t value) {
+        scene_signature ^= value;
+        scene_signature *= 1099511628211ull;
+    };
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const glm::uvec4& candidate = candidates[i];
+        hash_word(candidate.x);
+        hash_word(candidate.y);
+        hash_word(candidate.z);
+        hash_word(candidate.w);
+        hash_word(static_cast<uint64_t>(opaque_order.empty() ? 0 : i));
+    }
+    // Include the GPU mesh revision rather than the CPU's pending revision. This keeps
+    // a not-yet-uploaded edit from being mistaken for geometry already present in depth.
+    for (const Renderable_Chunk* chunk : opaque_order) {
+        const auto it = m_chunk_gl_cache.find(chunk->position);
+        if (it != m_chunk_gl_cache.end() && it->second.gpu_handle >= 0) {
+            hash_word(static_cast<uint32_t>(it->second.gpu_handle));
+            hash_word(it->second.gpu_version);
+            hash_word(static_cast<uint32_t>(chunk->position.x));
+            hash_word(static_cast<uint32_t>(chunk->position.y));
+            hash_word(static_cast<uint32_t>(chunk->position.z));
+        }
+    }
+    m_gpu_hiz_pending_signature = scene_signature;
+
+    const size_t candidate_count = candidates.size();
+    const size_t order_records = candidate_count * kGpuKindCount;
+    const size_t command_records = candidate_count * kGpuKindCount * Config::chunk_section_count;
+    const auto ensure_ssbo = [](unsigned int& buffer, size_t& capacity, size_t required,
+                                size_t element_size, GLenum usage) {
+        if (buffer != 0 && required <= capacity) return;
+        const size_t grown = std::max(required, std::max<size_t>(64, capacity * 2));
+        if (buffer != 0) glDeleteBuffers(1, &buffer);
+        buffer = create_ssbo(grown * element_size, nullptr, usage);
+        capacity = grown;
+    };
+
+    ensure_ssbo(m_gpu_candidates_ssbo, m_gpu_candidates_capacity, candidate_count,
+                sizeof(glm::uvec4), GL_STREAM_DRAW);
+    ensure_ssbo(m_gpu_section_bounds_ssbo, m_gpu_bounds_capacity,
+                section_bounds.size(), sizeof(glm::vec4), GL_STREAM_DRAW);
+    ensure_ssbo(m_gpu_order_ssbo, m_gpu_order_capacity, order_records,
+                sizeof(glm::uvec2), GL_STREAM_DRAW);
+    ensure_ssbo(m_gpu_cmd_ssbo, m_gpu_cmd_capacity, command_records,
+                sizeof(glm::uvec4), GL_STREAM_DRAW);
+
+    const size_t draw_map_records = command_records;
+    const size_t draw_meta_required_bytes = 4u * sizeof(uint32_t) + draw_map_records * sizeof(uint32_t);
+    if (m_gpu_cmd_meta_ssbo == 0 || draw_meta_required_bytes > m_gpu_cmd_meta_capacity_bytes) {
+        const size_t grown_bytes = std::max(draw_meta_required_bytes,
+            std::max<size_t>(256u, m_gpu_cmd_meta_capacity_bytes * 2u));
+        if (m_gpu_cmd_meta_ssbo != 0) glDeleteBuffers(1, &m_gpu_cmd_meta_ssbo);
+        m_gpu_cmd_meta_ssbo = create_ssbo(grown_bytes, nullptr, GL_STREAM_DRAW);
+        m_gpu_cmd_meta_capacity_bytes = grown_bytes;
+    }
+    // Orphan the compact map once per frame so a previous frame's task shaders never
+    // serialize this frame's small counter reset with the same storage allocation.
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_cmd_meta_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(m_gpu_cmd_meta_capacity_bytes),
+                 nullptr, GL_STREAM_DRAW);
+    const uint32_t zero_draw_counts[4] = {};
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(zero_draw_counts), zero_draw_counts);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_candidates_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+                 static_cast<GLsizeiptr>(m_gpu_candidates_capacity * sizeof(glm::uvec4)), nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+                    static_cast<GLsizeiptr>(candidates.size() * sizeof(glm::uvec4)), candidates.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_section_bounds_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+                 static_cast<GLsizeiptr>(m_gpu_bounds_capacity * sizeof(glm::vec4)), nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+                    static_cast<GLsizeiptr>(section_bounds.size() * sizeof(glm::vec4)), section_bounds.data());
+
+    // Set per-kind output offsets. Opaque commands keep the CPU's near-to-far candidate order;
+    // the compute shader reverses the two transparent lists on the GPU.
+    for (int kind = 0; kind < kGpuKindCount; ++kind) {
+        Gpu_Frame_List& list = m_gpu_lists[kind];
+        list.order_offset = static_cast<uint32_t>(kind * candidate_count);
+        list.cmd_offset = static_cast<uint32_t>(kind * candidate_count * Config::chunk_section_count);
+        list.entries = static_cast<uint32_t>(candidate_count);
+    }
+
+    const Frustum frustum(view_projection);
+    const auto& planes = frustum.planes();
+    glUseProgram(m_gpu_cull_program);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpu_candidates_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_gpu_section_bounds_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_counts_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_gpu_ranges_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_gpu_origins_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_gpu_order_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_cmd_meta_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_gpu_cmd_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_gpu_cull_stats_ssbo);
+    const uint32_t zero_stats[5] = {};
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_cull_stats_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(zero_stats), nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(zero_stats), zero_stats);
+    GLint current_viewport[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, current_viewport);
+    bool same_view = m_gpu_hiz_valid &&
+                     m_gpu_hiz_viewport_x == current_viewport[0] &&
+                     m_gpu_hiz_viewport_y == current_viewport[1] &&
+                     m_gpu_hiz_viewport_width == current_viewport[2] &&
+                     m_gpu_hiz_viewport_height == current_viewport[3] &&
+                     scene_signature == m_gpu_hiz_scene_signature && !spectator;
+    if (same_view) {
+        for (int column = 0; column < 4 && same_view; ++column) {
+            for (int row = 0; row < 4; ++row) {
+                if (std::abs(view_projection[column][row] - m_gpu_hiz_view_projection[column][row]) > 1.0e-6f) {
+                    same_view = false;
+                    break;
                 }
             }
-            for (int k = 0; k < kGpuKindCount; ++k) {
-                if (!((section.kinds >> k) & 1u)) continue;
-                const bool visible = (k <= kKindShaped) ? opaque_visible : chunk.section_visible[s];
-                if (!visible) continue;
-                if (k == kKindFlora && chunk.flora_skip_render) continue;
-                masks[k] |= 1u << s;
-                // Статистика: число квадов — из последнего readback'а (с задержкой).
-                const int j = k * Config::chunk_section_count + static_cast<int>(s);
-                const uint32_t quads = std::min(m_gpu_stream_counts[static_cast<size_t>(res.gpu_handle) * kGpuStreams + j],
-                                                res.gpu_cap[j]);
-                m_last_rendered_triangle_count += static_cast<size_t>(quads) * 2;
-            }
-            if (opaque_kinds && opaque_visible) {
-                ++m_last_rendered_section_count;
-                any_opaque_drawn = true;
-            }
-        }
-        if (any_opaque_drawn) ++m_last_rendered_chunk_count;
-        for (int k = 0; k < kGpuKindCount; ++k) {
-            if (masks[k] != 0) entries[k].emplace_back(static_cast<uint32_t>(res.gpu_handle), masks[k]);
         }
     }
-    std::reverse(entries[kKindFlora].begin(), entries[kKindFlora].end());
-    std::reverse(entries[kKindLiquid].begin(), entries[kKindLiquid].end());
-
-    m_gpu_order_cpu.clear();
-    uint32_t cmd_total = 0;
-    for (int k = 0; k < kGpuKindCount; ++k) {
-        Gpu_Frame_List& list = m_gpu_lists[k];
-        list.order_offset = static_cast<uint32_t>(m_gpu_order_cpu.size());
-        list.cmd_offset = cmd_total;
-        list.entries = static_cast<uint32_t>(entries[k].size());
-        m_gpu_order_cpu.insert(m_gpu_order_cpu.end(), entries[k].begin(), entries[k].end());
-        cmd_total += list.entries * Config::chunk_section_count;
+    const bool use_hiz = same_view && m_gpu_hiz_texture != 0 && m_gpu_hiz_levels > 0;
+    glUniform1ui(m_gpu_loc_cull_candidate_count, static_cast<GLuint>(candidate_count));
+    glUniform1i(m_gpu_loc_cull_mesh_mode, m_gpu_mesh_shader_ready ? m_gpu_mesh_shader_mode : 0);
+    glUniform4fv(m_gpu_loc_cull_planes, static_cast<GLsizei>(planes.size()), &planes[0].x);
+    glUniformMatrix4fv(m_gpu_loc_cull_view_projection, 1, GL_FALSE, &view_projection[0][0]);
+    glUniform2f(m_gpu_loc_cull_viewport_size, static_cast<float>(current_viewport[2]),
+                static_cast<float>(current_viewport[3]));
+    glUniform1i(m_gpu_loc_cull_use_hiz, use_hiz ? 1 : 0);
+    glUniform1i(m_gpu_loc_cull_compact_opaque, m_gpu_compact_opaque_commands ? 1 : 0);
+    if (use_hiz) {
+        constexpr GLint kHiZTextureUnit = 10;
+        glActiveTexture(GL_TEXTURE0 + kHiZTextureUnit);
+        glBindTexture(GL_TEXTURE_2D, m_gpu_hiz_texture);
+        glUniform1i(m_gpu_loc_cull_hiz_sampler, kHiZTextureUnit);
+        glActiveTexture(GL_TEXTURE0);
     }
-    if (cmd_total == 0) return;
+    glDispatchCompute(static_cast<GLuint>((candidate_count + 63u) / 64u), 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT |
+                    GL_BUFFER_UPDATE_BARRIER_BIT |
+                    (m_gpu_compact_opaque_commands ? kGpuParameterBufferBarrierBit : 0u));
 
-    if (m_gpu_order_cpu.size() > m_gpu_order_capacity) {
-        if (m_gpu_order_ssbo != 0) glDeleteBuffers(1, &m_gpu_order_ssbo);
-        m_gpu_order_capacity = m_gpu_order_cpu.size() * 2;
-        m_gpu_order_ssbo = create_ssbo(m_gpu_order_capacity * sizeof(glm::uvec2), nullptr, GL_STREAM_DRAW);
-    }
-    if (cmd_total > m_gpu_cmd_capacity) {
-        if (m_gpu_cmd_ssbo != 0) glDeleteBuffers(1, &m_gpu_cmd_ssbo);
-        m_gpu_cmd_capacity = static_cast<size_t>(cmd_total) * 2;
-        m_gpu_cmd_ssbo = create_ssbo(m_gpu_cmd_capacity * sizeof(glm::uvec4), nullptr, GL_STREAM_DRAW);
-    }
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_order_ssbo);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(m_gpu_order_cpu.size() * sizeof(glm::uvec2)),
-                    m_gpu_order_cpu.data());
-
-    // Финализация: по одной команде DrawArraysIndirect на (запись списка, секция); count = квады * 6, если секция видна.
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
-    glUseProgram(m_gpu_finalize_program);
+    // Task/mesh and classic vertex-pulling shaders consume the same GPU-produced order list.
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_quads_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_gpu_counts_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_gpu_order_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_gpu_cmd_meta_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_ranges_ssbo);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_gpu_cmd_ssbo);
-    for (int k = 0; k < kGpuKindCount; ++k) {
-        const Gpu_Frame_List& list = m_gpu_lists[k];
-        if (list.entries == 0) continue;
-        glUniform1i(m_gpu_loc_finalize_entries, static_cast<GLint>(list.entries));
-        glUniform1i(m_gpu_loc_finalize_kind, k);
-        glUniform1ui(m_gpu_loc_finalize_order_offset, list.order_offset);
-        glUniform1ui(m_gpu_loc_finalize_cmd_offset, list.cmd_offset);
-        glDispatchCompute((list.entries * Config::chunk_section_count + 63) / 64, 1, 1);
-    }
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-
-    // Вершины разворачиваются из квадов в вершинном шейдере; общие таблицы привязаны на весь кадр.
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpu_quads_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_gpu_rects_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, m_gpu_origins_ssbo);
+
+    // Queue a tiny stats copy into a free ring slot. If all slots are busy, skip this sample
+    // rather than waiting; the visible debug counters may lag a frame but rendering never stalls.
+    for (size_t offset = 0; offset < m_gpu_cull_stats_readbacks.size(); ++offset) {
+        const size_t slot = (m_gpu_cull_stats_write + offset) % m_gpu_cull_stats_readbacks.size();
+        Gpu_Cull_Stats_Readback& readback = m_gpu_cull_stats_readbacks[slot];
+        if (readback.fence || !readback.buffer) continue;
+        glBindBuffer(GL_COPY_READ_BUFFER, m_gpu_cull_stats_ssbo);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, readback.buffer);
+        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0,
+                            static_cast<GLsizeiptr>(5u * sizeof(uint32_t)));
+        readback.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        m_gpu_cull_stats_write = (slot + 1) % m_gpu_cull_stats_readbacks.size();
+        break;
+    }
 }
 
 void Renderer::draw_gpu_kind(int kind) {
@@ -1062,9 +1713,61 @@ void Renderer::draw_gpu_kind(int kind) {
     if (list.entries == 0) return;
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpu_cmd_ssbo);
     glBindVertexArray(m_gpu_section_vao);
-    glMultiDrawArraysIndirect(GL_TRIANGLES,
-                              reinterpret_cast<const void*>(static_cast<uintptr_t>(list.cmd_offset) * sizeof(glm::uvec4)),
-                              static_cast<GLsizei>(list.entries * Config::chunk_section_count), 0);
+    const auto* indirect_offset = reinterpret_cast<const void*>(
+        static_cast<uintptr_t>(list.cmd_offset) * sizeof(glm::uvec4));
+    const GLsizei draw_count = static_cast<GLsizei>(list.entries * Config::chunk_section_count);
+
+    // Opaque lists are compacted by the culling compute shader. The draw count is read
+    // directly from the GPU parameter buffer, so zero-work commands never reach the driver.
+    // Transparent flora/liquid retain their fixed reversed ordering for correct blending.
+    const bool use_indirect_count = m_gpu_compact_opaque_commands && kind <= kKindShaped;
+    if (use_indirect_count) glBindBuffer(kGlParameterBufferArb, m_gpu_cmd_meta_ssbo);
+
+    if (m_gpu_mesh_shader_ready && m_gl_multi_draw_mesh_tasks_indirect) {
+        const bool solid = kind == kKindSolid;
+        const GLint order_location = solid ? m_gpu_loc_mesh_order_offset_solid
+                                           : m_gpu_loc_mesh_order_offset_misc;
+        const GLint draw_map_location = solid ? m_gpu_loc_mesh_draw_map_offset_solid
+                                              : m_gpu_loc_mesh_draw_map_offset_misc;
+        const GLint kind_location = solid ? m_gpu_loc_mesh_kind_solid
+                                          : m_gpu_loc_mesh_kind_misc;
+        const uint32_t map_offset_words = 4u + static_cast<uint32_t>(kind) *
+            list.entries * Config::chunk_section_count;
+        glUniform1ui(order_location, m_gpu_lists[kind].order_offset);
+        glUniform1ui(draw_map_location, map_offset_words);
+        glUniform1i(kind_location, kind);
+        // Both EXT and NV take a byte offset (GLintptr), unlike DrawArraysIndirect's host pointer.
+        // EXT reads {groupCountX, groupCountY, groupCountZ}; NV reads {taskCount, firstTask}.
+        // The fourth word is padding, so both command variants keep a 16-byte stride.
+        const GLintptr mesh_indirect_offset = static_cast<GLintptr>(list.cmd_offset) *
+                                               static_cast<GLintptr>(sizeof(glm::uvec4));
+        if (use_indirect_count && m_gpu_mesh_shader_mode == 1 && m_gl_multi_draw_mesh_tasks_indirect_count) {
+            m_gl_multi_draw_mesh_tasks_indirect_count(mesh_indirect_offset,
+                static_cast<GLintptr>(kind * sizeof(uint32_t)), draw_count,
+                static_cast<GLsizei>(sizeof(glm::uvec4)));
+        } else if (use_indirect_count && m_gpu_mesh_shader_mode == 2 &&
+                   m_gl_multi_draw_mesh_tasks_indirect_count) {
+            m_gl_multi_draw_mesh_tasks_indirect_count(mesh_indirect_offset,
+                static_cast<GLintptr>(kind * sizeof(uint32_t)), draw_count,
+                static_cast<GLsizei>(sizeof(glm::uvec4)));
+        } else {
+            m_gl_multi_draw_mesh_tasks_indirect(mesh_indirect_offset, draw_count,
+                                                static_cast<GLsizei>(sizeof(glm::uvec4)));
+        }
+    } else {
+        if (kind != kKindSolid && m_gpu_misc_shader_ptr)
+            m_gpu_misc_shader_ptr->set_int("u_kind", kind);
+        if (use_indirect_count && m_gl_multi_draw_arrays_indirect_count) {
+            m_gl_multi_draw_arrays_indirect_count(GL_TRIANGLES,
+                static_cast<GLintptr>(list.cmd_offset) * static_cast<GLintptr>(sizeof(glm::uvec4)),
+                static_cast<GLintptr>(kind * sizeof(uint32_t)), draw_count,
+                static_cast<GLsizei>(sizeof(glm::uvec4)));
+        } else {
+            glMultiDrawArraysIndirect(GL_TRIANGLES, indirect_offset, draw_count, 0);
+        }
+    }
+
+    if (use_indirect_count) glBindBuffer(kGlParameterBufferArb, 0);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     glBindVertexArray(0);
 }
@@ -1074,20 +1777,39 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
                             const glm::mat4& projection,
                             float ambient_intensity,
                             bool spectator,
-                            const std::function<void()>& before_liquid) {
-    m_last_rendered_chunk_count = 0;
-    m_last_rendered_triangle_count = 0;
-    m_last_rendered_section_count = 0;
-    m_last_culled_section_count = 0;
-    m_last_occluded_section_count = 0;
+                            const std::function<void()>& before_liquid,
+                            glm::vec3 camera_position,
+                            glm::vec3 fog_color,
+                            glm::vec3 sun_direction,
+                            bool enable_fog) {
+    // Non-blocking GPU timer: consume only query results already available; never stall a frame.
+    for (Gpu_Frame_Timer_Query& timer : m_gpu_frame_timer_queries) {
+        if (!timer.id || !timer.pending) continue;
+        GLint available = GL_FALSE;
+        glGetQueryObjectiv(timer.id, GL_QUERY_RESULT_AVAILABLE, &available);
+        if (available == GL_TRUE) {
+            GLuint64 elapsed_ns = 0;
+            glGetQueryObjectui64v(timer.id, GL_QUERY_RESULT, &elapsed_ns);
+            m_last_gpu_frame_ms = static_cast<float>(static_cast<double>(elapsed_ns) / 1000000.0);
+            timer.pending = false;
+        }
+    }
+    bool gpu_timer_started = false;
+    Gpu_Frame_Timer_Query& timer_slot = m_gpu_frame_timer_queries[m_gpu_frame_timer_write];
+    if (!timer_slot.pending) {
+        if (!timer_slot.id) glGenQueries(1, &timer_slot.id);
+        if (timer_slot.id) {
+            glBeginQuery(GL_TIME_ELAPSED, timer_slot.id);
+            gpu_timer_started = true;
+        }
+    }
+
     for (Gpu_Frame_List& list : m_gpu_lists) list = Gpu_Frame_List{};
 
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-
-    const glm::vec3 camera_position = glm::vec3(glm::inverse(view)[3]);
 
     // Occlusion queries are order-dependent within a single frame: a section can only be
     // detected as hidden by geometry that has already written to the depth buffer. Sorting
@@ -1096,22 +1818,56 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // the query for a deep, sealed-off cave section correctly fails once the mountain in
     // front of it has already been rasterized this same frame. Тот же порядок задаёт и очередь
     // загрузки на GPU: ближние чанки получают геометрию первыми.
-    // Ключ сортировки (квадрат расстояния до центра чанка) считается ОДИН раз на чанк, а не на каждом
-    // сравнении: раньше компаратор заново строил центры и скалярные произведения O(N log N) раз.
-    // Порядок равных ключей сохраняется (stable), как и прежде.
+    // CPU frame preparation is parallel, but deliberately contains no OpenGL calls.
+    // First gather stable references on the render thread, then worker threads compute
+    // squared distances and sort independent runs. A final merge preserves the old stable
+    // ordering for equal distances without forcing every chunk comparison through one core.
     m_frame_sort.clear();
     m_frame_sort.reserve(chunks.size());
-    for (const auto& chunk : chunks) {
-        if (!chunk.meshes) continue;
+    for (size_t index = 0; index < chunks.size(); ++index) {
+        if (!chunks[index].meshes) continue;
+        m_frame_sort.push_back({0.0f, &chunks[index], index});
+    }
+
+    m_frame_workers.parallel_for(m_frame_sort.size(), 96, [&](size_t index) {
+        const Renderable_Chunk& chunk = *m_frame_sort[index].chunk;
         const glm::vec3 center(
             (static_cast<float>(chunk.position.x) + 0.5f) * Config::chunk_size,
             (static_cast<float>(chunk.position.y) + 0.5f) * Config::chunk_height,
             (static_cast<float>(chunk.position.z) + 0.5f) * Config::chunk_size);
         const glm::vec3 offset = center - camera_position;
-        m_frame_sort.push_back({glm::dot(offset, offset), &chunk});
+        m_frame_sort[index].distance_sq = glm::dot(offset, offset);
+    });
+
+    const auto frame_item_less = [](const Frame_Sort_Item& a, const Frame_Sort_Item& b) {
+        if (a.distance_sq != b.distance_sq) return a.distance_sq < b.distance_sq;
+        return a.original_order < b.original_order;
+    };
+    constexpr size_t kParallelSortThreshold = 512;
+    constexpr size_t kItemsPerSortRun = 256;
+    if (m_frame_sort.size() >= kParallelSortThreshold && m_frame_workers.worker_count() > 0) {
+        const size_t run_count = std::min<size_t>(m_frame_workers.worker_count() + 1,
+                                                  m_frame_sort.size() / kItemsPerSortRun);
+        m_frame_workers.parallel_for(run_count, 1, [&](size_t run) {
+            const size_t begin = m_frame_sort.size() * run / run_count;
+            const size_t end = m_frame_sort.size() * (run + 1) / run_count;
+            std::sort(m_frame_sort.begin() + static_cast<std::ptrdiff_t>(begin),
+                      m_frame_sort.begin() + static_cast<std::ptrdiff_t>(end), frame_item_less);
+        });
+        // Merge runs in increasing powers of two. The tie-break by original_order makes
+        // the result equivalent to stable_sort regardless of which worker sorted each run.
+        for (size_t width = 1; width < run_count; width *= 2) {
+            for (size_t first = 0; first + width < run_count; first += width * 2) {
+                const size_t middle = m_frame_sort.size() * (first + width) / run_count;
+                const size_t last = m_frame_sort.size() * std::min(run_count, first + width * 2) / run_count;
+                std::inplace_merge(m_frame_sort.begin() + static_cast<std::ptrdiff_t>(m_frame_sort.size() * first / run_count),
+                                   m_frame_sort.begin() + static_cast<std::ptrdiff_t>(middle),
+                                   m_frame_sort.begin() + static_cast<std::ptrdiff_t>(last), frame_item_less);
+            }
+        }
+    } else {
+        std::sort(m_frame_sort.begin(), m_frame_sort.end(), frame_item_less);
     }
-    std::stable_sort(m_frame_sort.begin(), m_frame_sort.end(),
-                     [](const Frame_Sort_Item& a, const Frame_Sort_Item& b) { return a.distance_sq < b.distance_sq; });
 
     std::vector<const Renderable_Chunk*>& opaque_order = m_frame_order;
     opaque_order.clear();
@@ -1126,37 +1882,94 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         res.mesh_version = item.chunk->mesh_version;
         m_frame_res.push_back(&res);
     }
-    prepare_gpu_frame(opaque_order, spectator, camera_position);
+    prepare_gpu_frame(opaque_order, spectator, camera_position, projection * view);
 
     const float time = static_cast<float>(glfwGetTime());
     const float max_light = static_cast<float>(Config::max_light_level);
+    // Fog begins after the nearby gameplay space, then blends into the same colour as
+    // the weather/day-night sky. Keep it subtle: it hides the hard render-distance edge
+    // without washing out the terrain around the player.
+    const float fog_end = std::min(
+        std::max(96.0f, static_cast<float>(m_render_distance_chunks * Config::chunk_size)),
+        Config::camera_far * 0.90f);
+    const glm::vec2 fog_range = enable_fog
+        ? glm::vec2(fog_end * 0.70f, fog_end)
+        : glm::vec2(100000.0f, 100001.0f);
+    sun_direction = glm::length(sun_direction) > 0.001f
+        ? glm::normalize(sun_direction) : glm::vec3(0.0f, 1.0f, 0.0f);
     m_blocks_atlas_ptr->bind(0);
 
-    // Непрозрачные кубы.
-    m_gpu_terrain_shader_ptr->use();
+    // Непрозрачные кубы. При наличии EXT/NV mesh shading этот draw использует task+mesh
+    // stages; иначе остаётся прежний GL 4.3 vertex-pulling pipeline.
     const glm::mat4 view_projection = projection * view;
-    m_gpu_terrain_shader_ptr->set_mat4("view_projection", view_projection);
-    m_gpu_terrain_shader_ptr->set_int("textureAtlas", 0);
-    m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
-    m_gpu_terrain_shader_ptr->set_float("maxLightLevel", max_light);
+    if (m_gpu_mesh_shader_ready) {
+        glUseProgram(m_gpu_mesh_solid_program);
+        glUniformMatrix4fv(m_gpu_loc_mesh_view_projection_solid, 1, GL_FALSE, &view_projection[0][0]);
+        glUniform1i(glGetUniformLocation(m_gpu_mesh_solid_program, "textureAtlas"), 0);
+        glUniform1f(m_gpu_loc_mesh_time_solid, time);
+        glUniform1f(m_gpu_loc_mesh_ambient_solid, ambient_intensity);
+        glUniform1f(m_gpu_loc_mesh_max_light_solid, max_light);
+        glUniform3fv(m_gpu_loc_mesh_camera_solid, 1, &camera_position[0]);
+        glUniform3fv(m_gpu_loc_mesh_fog_color_solid, 1, &fog_color[0]);
+        glUniform2fv(m_gpu_loc_mesh_fog_range_solid, 1, &fog_range[0]);
+        glUniform3fv(m_gpu_loc_mesh_sun_direction_solid, 1, &sun_direction[0]);
+    } else {
+        m_gpu_terrain_shader_ptr->use();
+        m_gpu_terrain_shader_ptr->set_mat4("view_projection", view_projection);
+        m_gpu_terrain_shader_ptr->set_int("textureAtlas", 0);
+        m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
+        m_gpu_terrain_shader_ptr->set_float("maxLightLevel", max_light);
+        m_gpu_terrain_shader_ptr->set_float("time", time);
+        m_gpu_terrain_shader_ptr->set_vec3("cameraPosition", camera_position);
+        m_gpu_terrain_shader_ptr->set_vec3("fogColor", fog_color);
+        m_gpu_terrain_shader_ptr->set_vec2("fogRange", fog_range);
+        m_gpu_terrain_shader_ptr->set_vec3("sunDirection", sun_direction);
+    }
     draw_gpu_kind(kKindSolid);
 
-    // Остальные виды идут одним шейдером; вид выбирает uniform u_kind.
+    // Остальные виды используют общий shader; u_kind выбирает shaped / flora / liquid.
     const Shader& misc = *m_gpu_misc_shader_ptr;
-    misc.use();
-    misc.set_mat4("view_projection", view_projection);
-    misc.set_int("textureAtlas", 0);
-    misc.set_float("time", time);
-    misc.set_float("ambient", ambient_intensity);
-    misc.set_float("maxLightLevel", max_light);
-    // Спрайт воды в UV атласа: левый-нижний угол и размер (скролл и мерцание не выходят за его кусок).
     const glm::vec4& water_uv = get_block_props(Block_Types::Water).uv_side;
-    misc.set_vec2("tile_origin", glm::vec2(water_uv.x, water_uv.y));
-    misc.set_vec2("tile_size", glm::vec2(water_uv.z - water_uv.x, water_uv.w - water_uv.y));
+    const glm::vec2 water_origin(water_uv.x, water_uv.y);
+    const glm::vec2 water_size(water_uv.z - water_uv.x, water_uv.w - water_uv.y);
+    const auto bind_misc_program = [&]() {
+        if (m_gpu_mesh_shader_ready) {
+            glUseProgram(m_gpu_mesh_misc_program);
+            glUniformMatrix4fv(m_gpu_loc_mesh_view_projection_misc, 1, GL_FALSE, &view_projection[0][0]);
+            glUniform1i(glGetUniformLocation(m_gpu_mesh_misc_program, "textureAtlas"), 0);
+            glUniform1f(m_gpu_loc_mesh_time_misc, time);
+            glUniform1f(m_gpu_loc_mesh_ambient_misc, ambient_intensity);
+            glUniform1f(m_gpu_loc_mesh_max_light_misc, max_light);
+            glUniform3fv(m_gpu_loc_mesh_camera_misc, 1, &camera_position[0]);
+            glUniform3fv(m_gpu_loc_mesh_fog_color_misc, 1, &fog_color[0]);
+            glUniform2fv(m_gpu_loc_mesh_fog_range_misc, 1, &fog_range[0]);
+            glUniform3fv(m_gpu_loc_mesh_sun_direction_misc, 1, &sun_direction[0]);
+            glUniform2f(m_gpu_loc_mesh_tile_origin_misc, water_origin.x, water_origin.y);
+            glUniform2f(m_gpu_loc_mesh_tile_size_misc, water_size.x, water_size.y);
+        } else {
+            misc.use();
+            misc.set_mat4("view_projection", view_projection);
+            misc.set_int("textureAtlas", 0);
+            misc.set_float("time", time);
+            misc.set_float("ambient", ambient_intensity);
+            misc.set_float("maxLightLevel", max_light);
+            misc.set_vec3("cameraPosition", camera_position);
+            misc.set_vec3("fogColor", fog_color);
+            misc.set_vec2("fogRange", fog_range);
+            misc.set_vec3("sunDirection", sun_direction);
+            misc.set_vec2("tile_origin", water_origin);
+            misc.set_vec2("tile_size", water_size);
+        }
+    };
+    bind_misc_program();
 
     // Блоки формы (ступеньки, плиты): непрозрачные, рисуются вместе с кубами.
-    misc.set_int("u_kind", 1);
     draw_gpu_kind(kKindShaped);
+
+    // Capture the opaque depth and build a max-reduced Hi-Z pyramid on the GPU.
+    // It is consumed next frame only if the camera and resident geometry are unchanged.
+    build_gpu_hiz(view_projection);
+    bind_misc_program();
 
     // Second pass: now that this frame's opaque draw has written real occluder depth,
     // test every section selected by Chunk_Manager against it. This is what
@@ -1234,7 +2047,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glDisable(GL_POLYGON_OFFSET_FILL);
         glEnable(GL_CULL_FACE);
-        misc.use();
+        bind_misc_program();
     }
 
     glEnable(GL_BLEND);
@@ -1250,7 +2063,6 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     // не страдает: фрагментный шейдер смотрит только на NormalY, одинаковый для обеих сторон.
     // Дальность прорисовки флоры (flora_skip_render) учтена при построении списка: трава и цветы — самая мелкая
     // и самая многочисленная геометрия в мире, вдалеке она вырождается в шум из отдельных пикселей.
-    misc.set_int("u_kind", 2);
     glDisable(GL_CULL_FACE);
     draw_gpu_kind(kKindFlora);
 
@@ -1270,9 +2082,8 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
 
     // Жидкость: волна на верхней грани и мерцание/скролл течения на фрагментах (см. terrain_gpu_misc_*.glsl).
     // Шейдер и ресурсы вернуть после before_liquid: колбэк мог сменить программу и атлас.
-    misc.use();
+    bind_misc_program();
     m_blocks_atlas_ptr->bind(0);
-    misc.set_int("u_kind", 3);
 
     // Liquid is alpha-blended and sorted back-to-front. It must NOT write depth: a far
     // water surface drawn first would otherwise stamp its depth into the buffer and make
@@ -1288,6 +2099,12 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
     glDisable(GL_BLEND);
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
+
+    if (gpu_timer_started) {
+        glEndQuery(GL_TIME_ELAPSED);
+        timer_slot.pending = true;
+        m_gpu_frame_timer_write = (m_gpu_frame_timer_write + 1) % m_gpu_frame_timer_queries.size();
+    }
 }
 
 void Renderer::draw_sky(const glm::vec3& camera_position,

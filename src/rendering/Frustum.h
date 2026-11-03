@@ -28,6 +28,8 @@ public:
         set_plane(5, row3 - row2); // far
     }
 
+    const std::array<glm::vec4, 6>& planes() const { return m_planes; }
+
     bool intersects_aabb(const glm::vec3& min, const glm::vec3& max) const {
         for (const glm::vec4& plane : m_planes) {
             const glm::vec3 positive(

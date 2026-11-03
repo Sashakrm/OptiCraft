@@ -41,12 +41,18 @@ struct Hud_Debug_Stats {
     float frame_min_ms = 0.0f;   // время кадра за последнюю полную секунду
     float frame_avg_ms = 0.0f;
     float frame_max_ms = 0.0f;
+    float update_cpu_ms = 0.0f;  // input + gameplay/state update, без render
+    float render_cpu_ms = 0.0f;  // CPU time spent issuing the frame and swapping buffers
+    float render_gpu_ms = 0.0f;  // async GL_TIME_ELAPSED result for chunk rendering
     float tps = 0.0f;            // тиков симуляции в секунду (цель — 20)
     int hostile_count = 0;       // живые враги
     int passive_count = 0;       // живые мирные: свиньи, коровы, овцы, лошади
     size_t chunk_mesh_pending = 0;
     size_t chunk_mesh_requeued = 0;
     size_t chunk_loads_requested = 0;
+    size_t chunk_generation_jobs_queued = 0;
+    size_t chunk_mesh_jobs_queued = 0;
+    size_t chunk_columns_backlogged = 0;
     std::vector<std::string> target_lines; // подробности о цели прицела
 };
 

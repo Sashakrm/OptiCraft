@@ -156,11 +156,27 @@ void Block_Registry::build_fast_tables() {
                                                                        : props.hardness * 5.0f;
         }
         m_blast_resistance_flat[id] = props.blast_resistance;
-        m_transparent_flat[id] = m_properties[id].is_transparent;
+        m_transparent_flat[id] = props.is_transparent;
+        const bool is_liquid = props.state == Block_State::Liquid;
+        m_sky_transparent_flat[id] = props.is_transparent || is_liquid;
+        m_is_liquid_flat[id] = is_liquid ? 1u : 0u;
+        m_fluid_passable_flat[id] = (!props.is_solid && !is_liquid) ? 1u : 0u;
+        m_fluid_tick_delay_flat[id] = static_cast<uint16_t>(std::clamp(props.fluid_tick_delay, 1, 65535));
         // light_emission в Block_Properties — int (0..max_light_level), а таблица — uint8_t,
         // чтобы обе плоские таблицы весили ровно 256 байт и лежали в кэше одинаково дёшево;
         // диапазон освещения никогда не подойдёт к 255, так что сужение безопасно.
         m_light_emission_flat[id] = static_cast<uint8_t>(m_properties[id].light_emission);
+    }
+
+    // Chunk data may contain an unknown ID from a modded/older save. get_properties(id)
+    // treats IDs beyond the registry capacity as Air, so the fast fluid tables must do the same.
+    const Block_Properties& air = m_properties[static_cast<size_t>(Block_Types::Air)];
+    const bool air_liquid = air.state == Block_State::Liquid;
+    const bool air_fluid_passable = !air.is_solid && !air_liquid;
+    for (size_t id = m_properties.size(); id < k_max_block_types; ++id) {
+        m_sky_transparent_flat[id] = air.is_transparent || air_liquid;
+        m_fluid_passable_flat[id] = air_fluid_passable ? 1u : 0u;
+        m_fluid_tick_delay_flat[id] = static_cast<uint16_t>(std::clamp(air.fluid_tick_delay, 1, 65535));
     }
 }
 

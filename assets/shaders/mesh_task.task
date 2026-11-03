@@ -1,0 +1,46 @@
+#version 450 core
+#extension GL_EXT_mesh_shader : require
+#extension GL_ARB_shader_draw_parameters : require
+
+// One indirect task workgroup corresponds to one (chunk, section) command.
+// It resolves that section's quad range and amplifies the work into mesh groups.
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 3) readonly buffer Counts { uint counts[]; };
+layout(std430, binding = 4) readonly buffer Order { uvec2 order[]; };
+layout(std430, binding = 6) readonly buffer Ranges { uvec2 ranges[]; };
+layout(std430, binding = 5) readonly buffer DrawMetadata { uint draw_counts[4]; uint draw_map[]; };
+
+struct TaskPayload {
+    uint first_quad;
+    uint quad_count;
+    uint chunk_handle;
+    uint section;
+    uint kind;
+};
+taskPayloadSharedEXT TaskPayload payload;
+
+uniform uint u_order_offset;
+uniform uint u_draw_map_offset;
+uniform int u_kind;
+
+void main() {
+    const uint draw_index = uint(gl_DrawIDARB);
+    const uint source_draw = draw_map[u_draw_map_offset + draw_index];
+    const uint entry_index = source_draw / 4u;
+    const uint section = source_draw & 3u;
+    const uvec2 item = order[u_order_offset + entry_index];
+    const uint stream = item.x * 16u + uint(u_kind) * 4u + section;
+    const uvec2 range = ranges[stream];
+    const uint quad_count = min(counts[stream], range.y);
+
+    payload.first_quad = range.x;
+    payload.quad_count = quad_count;
+    payload.chunk_handle = item.x;
+    payload.section = section;
+    payload.kind = uint(u_kind);
+
+    // One mesh workgroup emits up to 32 quads (128 vertices / 64 triangles).
+    // EmitMeshTasksEXT also makes the task payload visible to all spawned mesh groups.
+    EmitMeshTasksEXT((quad_count + 31u) / 32u, 1u, 1u);
+}

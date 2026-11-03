@@ -1,0 +1,152 @@
+#version 450 core
+#extension GL_EXT_mesh_shader : require
+#extension GL_ARB_shader_draw_parameters : require
+
+// Mesh-shader replacement for terrain_gpu_misc_vertex.glsl. It preserves the packed
+// record layouts produced by mesh_misc.comp for shaped blocks, crossed flora and liquids.
+layout(local_size_x = 32) in;
+layout(triangles, max_vertices = 128, max_primitives = 64) out;
+
+struct TaskPayload {
+    uint first_quad;
+    uint quad_count;
+    uint chunk_handle;
+    uint section;
+    uint kind;
+};
+taskPayloadSharedEXT TaskPayload payload;
+
+layout(std430, binding = 2) readonly buffer Quads { uvec4 quads[]; };
+layout(std430, binding = 8) readonly buffer Rects { vec4 rects[]; };
+layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
+
+uniform mat4 view_projection;
+uniform float time;
+uniform int u_kind; // 1 shaped, 2 flora, 3 liquid
+
+out vec2 Local[];
+out vec2 TexCoord[];
+out float NormalY[];
+out vec3 FragPos[];
+out vec3 WorldNormal[];
+out float BlockLight[];
+out float SkyLight[];
+out float Appearance[];
+flat out vec4 Rect[];
+
+// The old vertex shader used these same corner sequences for winding and diagonal choice.
+const int kOrder[6] = int[6](0,1,3, 0,3,2);
+const int kOrderFlip[6] = int[6](0,3,1, 0,2,3);
+
+void main() {
+    const uint quad_base = gl_WorkGroupID.x * 32u;
+    const uint quad_count = min(32u, payload.quad_count - min(quad_base, payload.quad_count));
+    SetMeshOutputsEXT(quad_count * 4u, quad_count * 2u);
+
+    const uint lane = gl_LocalInvocationIndex;
+    if (lane >= quad_count) return;
+
+    const uvec4 rec = quads[payload.first_quad + quad_base + lane];
+    const uint w0 = rec.x;
+    const uint face = (w0 >> 15u) & 7u;
+    const uint packed_light = (w0 >> 18u) & 0xFFu;
+    const vec4 rect = rects[rec.y & 0x7FFFu];
+    const vec3 cell = vec3(float(w0 & 31u), float((w0 >> 5u) & 31u), float((w0 >> 10u) & 31u));
+    const vec4 chunk_origin = origins[payload.chunk_handle];
+    const vec3 base = chunk_origin.xyz + cell;
+    const uint vertex_base = lane * 4u;
+    const uint primitive_base = lane * 2u;
+
+    const bool flip = face == 0u || face == 2u || face == 5u;
+    const int c0 = flip ? kOrderFlip[0] : kOrder[0];
+    const int c1 = flip ? kOrderFlip[1] : kOrder[1];
+    const int c2 = flip ? kOrderFlip[2] : kOrder[2];
+    const int c3 = flip ? kOrderFlip[3] : kOrder[3];
+    const int c4 = flip ? kOrderFlip[4] : kOrder[4];
+    const int c5 = flip ? kOrderFlip[5] : kOrder[5];
+    gl_PrimitiveTriangleIndicesEXT[primitive_base + 0u] =
+        uvec3(vertex_base + uint(c0), vertex_base + uint(c1), vertex_base + uint(c2));
+    gl_PrimitiveTriangleIndicesEXT[primitive_base + 1u] =
+        uvec3(vertex_base + uint(c3), vertex_base + uint(c4), vertex_base + uint(c5));
+
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        const float fu = float(corner & 1u);
+        const float fv = float(corner >> 1u);
+        vec3 p = base;
+        vec2 tc_param = vec2(fu, fv);
+        vec2 local = vec2(fu, fv);
+        float normal_y = 1.0;
+        vec3 world_normal = vec3(0.0, 1.0, 0.0);
+
+        if (u_kind == 2) {
+            // Flora is represented by the two crossed planes (face values 6 and 7).
+            const float px = face == 7u ? (1.0 - fu) : fu;
+            p += vec3(px, fv, fu);
+            if (fv > 0.5) {
+                const vec2 anchor = floor(p.xz);
+                const float phase = anchor.x * 1.7 + anchor.y * 1.3;
+                const float sway = sin(time * 1.8 + phase) * 0.09;
+                p.x += sway;
+                p.z += sway * 0.6;
+            }
+            normal_y = 1.0;
+        } else {
+            const bool pos = (face & 1u) == 0u;
+            const uint axis = face >> 1u;
+            world_normal = vec3(0.0);
+            if (axis == 0u) world_normal.x = pos ? 1.0 : -1.0;
+            else if (axis == 1u) world_normal.y = pos ? 1.0 : -1.0;
+            else world_normal.z = pos ? 1.0 : -1.0;
+            if (u_kind == 1) {
+                // Shape boxes use 1/64-cell integer coordinates packed across rec.z/rec.w.
+                const vec3 lo = vec3(float(rec.z & 127u), float((rec.z >> 7u) & 127u),
+                                     float((rec.z >> 14u) & 127u)) / 64.0;
+                const vec3 hi = vec3(float((rec.z >> 21u) & 127u), float(rec.w & 127u),
+                                     float((rec.w >> 7u) & 127u)) / 64.0;
+                const float plane = pos ? 1.0 : 0.0;
+                vec3 r;
+                if (axis == 0u) r = vec3(plane, fv, fu);
+                else if (axis == 1u) r = vec3(fu, plane, fv);
+                else r = vec3(fu, fv, plane);
+                p += mix(lo, hi, r);
+                normal_y = axis == 1u ? (pos ? 1.0 : -1.0) : 0.0;
+            } else {
+                // Liquid corner heights are packed as four 16-bit values in rec.z/rec.w.
+                const uint c = corner;
+                const uint height_word = c < 2u ? rec.z : rec.w;
+                const float h = float((height_word >> ((c & 1u) * 16u)) & 0xFFFFu) / 65535.0;
+                const float plane = pos ? 1.0 : 0.0;
+                if (axis == 0u) {
+                    p += vec3(plane, fv * h, fu);
+                    tc_param = vec2(fu, fv * h);
+                } else if (axis == 1u) {
+                    p += vec3(fu, plane * h, fv);
+                    tc_param = vec2(fu, 1.0 - fv);
+                } else {
+                    p += vec3(fu, fv * h, plane);
+                    tc_param = vec2(fu, fv * h);
+                }
+                normal_y = axis == 1u ? (pos ? 1.0 : -1.0) : 0.0;
+                if (face == 2u) {
+                    p.y += sin(p.x * 0.7 + time * 1.3) * 0.035 +
+                           cos(p.z * 0.6 + time * 1.7) * 0.035;
+                }
+            }
+        }
+
+        float appear = clamp((time - chunk_origin.w) / 0.42, 0.0, 1.0);
+        appear = appear * appear * (3.0 - 2.0 * appear);
+
+        const uint out_vertex = vertex_base + corner;
+        gl_MeshVerticesEXT[out_vertex].gl_Position = view_projection * vec4(p, 1.0);
+        Appearance[out_vertex] = appear;
+        Local[out_vertex] = local;
+        TexCoord[out_vertex] = mix(rect.xy, rect.zw, tc_param);
+        NormalY[out_vertex] = normal_y;
+        FragPos[out_vertex] = p;
+        WorldNormal[out_vertex] = world_normal;
+        BlockLight[out_vertex] = float(packed_light & 15u);
+        SkyLight[out_vertex] = float(packed_light >> 4u);
+        Rect[out_vertex] = rect;
+    }
+}
