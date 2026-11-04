@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include "world/generation/World_Generator.h"
@@ -632,13 +633,29 @@ namespace {
 
         bool in_game() const { return m_application.is_playing_below_top(); }
 
-        // Индексы виджетов: 0 дальность, 1 трава, 2 чувствительность, 3 масштаб, 4 язык,
-        // [5 генерация, 6 режим] — только внутри мира, последний — «Готово».
-        static constexpr int k_idx_gui_scale = 3;
-        static constexpr int k_idx_language = 4;
-        static constexpr int k_idx_generation = 5;
-        static constexpr int k_idx_mode = 6;
-        int done_index() const { return in_game() ? 7 : 5; }
+        // Порядок виджетов: пары строк в две колонки, «Готово» — последней на всю ширину.
+        // Дальность по Y: позиция 0 — «Авто», позиции 1..N — полуширина окна 2..12 чанков.
+        static constexpr int k_idx_render = 0;
+        static constexpr int k_idx_vertical = 1;
+        static constexpr int k_idx_flora = 2;
+        static constexpr int k_idx_fade = 3;
+        static constexpr int k_idx_sensitivity = 4;
+        static constexpr int k_idx_aa = 5;
+        static constexpr int k_idx_grain = 6;
+        static constexpr int k_idx_vignette = 7;
+        static constexpr int k_idx_gui_scale = 8;
+        static constexpr int k_idx_language = 9;
+        static constexpr int k_idx_generation = 10;   // только внутри мира
+        static constexpr int k_idx_mode = 11;         // только внутри мира
+        int done_index() const { return in_game() ? 12 : 10; }
+
+        static constexpr int k_vertical_positions = Config::vertical_render_max - Config::vertical_render_min + 2;
+
+        static std::string format_fixed(float value, int decimals) {
+            char buffer[32];
+            std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, static_cast<double>(value));
+            return buffer;
+        }
 
         Hud_Screen build() const {
             Game& game = m_application.get_game();
@@ -652,13 +669,38 @@ namespace {
             screen.widgets.push_back(Hud_Widget::slider(tr("options.render_distance"), std::to_string(rd),
                 static_cast<float>(rd - Config::render_distance_min) /
                 static_cast<float>(Config::render_distance_max - Config::render_distance_min)));
+
+            const int vs = game.get_vertical_distance_setting();
+            const int vertical_pos = vs <= 0 ? 0 : vs - Config::vertical_render_min + 1;
+            const std::string vertical_text = vs <= 0
+                ? tr("options.vertical_auto", {std::to_string(game.get_effective_vertical_distance())})
+                : std::to_string(vs);
+            screen.widgets.push_back(Hud_Widget::slider(tr("options.vertical_distance"), vertical_text,
+                static_cast<float>(vertical_pos) / static_cast<float>(k_vertical_positions - 1)));
+
             const int fd = game.get_flora_distance();
             screen.widgets.push_back(Hud_Widget::slider(tr("options.flora_distance"), std::to_string(fd),
                 static_cast<float>(fd - 2) / static_cast<float>(Config::flora_render_distance_max - 2)));
+
+            const float fade = game.get_chunk_fade_seconds();
+            screen.widgets.push_back(Hud_Widget::slider(tr("options.fade"),
+                tr("options.seconds", {format_fixed(fade, 2)}),
+                (fade - Config::chunk_fade_seconds_min) / (Config::chunk_fade_seconds_max - Config::chunk_fade_seconds_min)));
+
             const float sens = game.get_mouse_sensitivity();
             screen.widgets.push_back(Hud_Widget::slider(tr("options.sensitivity"),
                 std::to_string(static_cast<int>(std::lround(sens / Config::mouse_sensitivity * 100.0f))) + "%",
                 (sens - k_sens_min) / (k_sens_max - k_sens_min)));
+
+            const int aa = game.get_aa_mode();
+            screen.widgets.push_back(Hud_Widget::button(tr("options.aa", {aa_name(aa)})));
+
+            const float grain = game.get_film_grain();
+            screen.widgets.push_back(Hud_Widget::slider(tr("options.grain"),
+                std::to_string(static_cast<int>(std::lround(grain * 100.0f))) + "%", grain));
+
+            screen.widgets.push_back(Hud_Widget::button(tr("options.vignette", {vignette_name(game.get_vignette_level())})));
+
             const int gs = game.get_gui_scale_setting();
             screen.widgets.push_back(Hud_Widget::button(
                 tr("options.gui_scale", {gs == 0 ? tr("options.gui_scale_auto") : std::to_string(gs) + "x"})));
@@ -673,21 +715,49 @@ namespace {
             return screen;
         }
 
+        static std::string aa_name(int mode) {
+            return mode == 1 ? std::string("FXAA") : tr("options.off");
+        }
+
+        static std::string vignette_name(int level) {
+            switch (level) {
+                case 1: return tr("options.level_low");
+                case 2: return tr("options.level_mid");
+                case 3: return tr("options.level_high");
+                default: return tr("options.off");
+            }
+        }
+
         static constexpr float k_sens_min = 0.05f;
         static constexpr float k_sens_max = 0.7f;
 
         void apply_slider(int index, float t) {
             Game& game = m_application.get_game();
             switch (index) {
-                case 0:
+                case k_idx_render:
                     game.set_render_distance(Config::render_distance_min +
                         static_cast<int>(std::lround(t * (Config::render_distance_max - Config::render_distance_min))));
                     break;
-                case 1:
+                case k_idx_vertical: {
+                    const int pos = static_cast<int>(std::lround(t * static_cast<float>(k_vertical_positions - 1)));
+                    game.set_vertical_distance_setting(pos <= 0 ? 0 : pos + Config::vertical_render_min - 1);
+                    break;
+                }
+                case k_idx_flora:
                     game.set_flora_distance(2 + static_cast<int>(std::lround(t * (Config::flora_render_distance_max - 2))));
                     break;
-                case 2:
+                case k_idx_fade: {
+                    // Шаг 0.01 с: ползунок не даёт дробных значений, которые неудобно читать.
+                    const float seconds = Config::chunk_fade_seconds_min +
+                        t * (Config::chunk_fade_seconds_max - Config::chunk_fade_seconds_min);
+                    game.set_chunk_fade_seconds(std::round(seconds * 100.0f) / 100.0f);
+                    break;
+                }
+                case k_idx_sensitivity:
                     game.set_mouse_sensitivity(k_sens_min + t * (k_sens_max - k_sens_min));
+                    break;
+                case k_idx_grain:
+                    game.set_film_grain(t);
                     break;
                 default: break;
             }
@@ -697,6 +767,10 @@ namespace {
             Game& game = m_application.get_game();
             if (index == k_idx_gui_scale) {
                 game.set_gui_scale_setting((game.get_gui_scale_setting() + 1) % 5);
+            } else if (index == k_idx_aa) {
+                game.set_aa_mode((game.get_aa_mode() + 1) % Config::antialiasing_mode_count);
+            } else if (index == k_idx_vignette) {
+                game.set_vignette_level((game.get_vignette_level() + 1) % Config::vignette_level_count);
             } else if (index == k_idx_language) {
                 game.cycle_language();
             } else if (in_game() && index == k_idx_generation) {

@@ -124,6 +124,14 @@ private:
     // и меняется из меню настроек.
     int m_render_distance{Config::chunk_load_radius};
     int m_flora_distance{Config::flora_render_distance_chunks};
+    // Графика (меню настроек, options.txt). Значения по умолчанию совпадают с прежним видом игры.
+    int m_vertical_distance_setting{0};
+    float m_chunk_fade_seconds{Config::chunk_fade_seconds_default};
+    int m_aa_mode{0};
+    float m_film_grain{0.0f};
+    int m_vignette_level{Config::vignette_level_default};
+    void apply_vertical_distance();   // отдаёт эффективную высоту окна менеджеру чанков
+    void apply_graphics_settings();   // отдаёт постобработку, виньетку и появление чанков рендереру/HUD
 
     float m_fps_update_timer{0.0f};
     int m_fps_frame_count{0};
@@ -256,6 +264,18 @@ public:
     // --- Настройки (меню) ------------------------------------------------------
     int get_render_distance() const { return m_render_distance; }
     void set_render_distance(int chunks);
+    // Дальность по высоте: 0 = «Авто» (считается от горизонтальной), иначе полуширина в чанках.
+    int get_vertical_distance_setting() const { return m_vertical_distance_setting; }
+    void set_vertical_distance_setting(int value);
+    int get_effective_vertical_distance() const;
+    float get_chunk_fade_seconds() const { return m_chunk_fade_seconds; }
+    void set_chunk_fade_seconds(float seconds);
+    int get_aa_mode() const { return m_aa_mode; }
+    void set_aa_mode(int mode);
+    float get_film_grain() const { return m_film_grain; }
+    void set_film_grain(float value);
+    int get_vignette_level() const { return m_vignette_level; }
+    void set_vignette_level(int level);
     int get_flora_distance() const { return m_flora_distance; }
     void set_flora_distance(int chunks);
     float get_mouse_sensitivity() const { return m_input_ptr->get_mouse_sensitivity(); }

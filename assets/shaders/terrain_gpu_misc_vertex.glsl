@@ -13,6 +13,8 @@ layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 // Готовая projection * view (model здесь всегда единичная): одно умножение на вершину вместо трёх.
 uniform mat4 view_projection;
 uniform float time;
+// Длительность появления чанка (сек), задаётся из настроек игры.
+uniform float appearDuration;
 uniform int u_kind;   // 1 shaped, 2 flora, 3 liquid
 
 out vec2 Local;       // shaped: 0..1 по грани бокса
@@ -116,7 +118,7 @@ void main() {
     }
 
     // Block-space reveal keeps the exact positions shared by neighboring chunks.
-    float appear = clamp((time - chunk_origin.w) / 0.42, 0.0, 1.0);
+    float appear = clamp((time - chunk_origin.w) / max(appearDuration, 0.05), 0.0, 1.0);
     Appearance = appear * appear * (3.0 - 2.0 * appear);
 
     Local = tc_param;

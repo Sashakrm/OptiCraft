@@ -20,8 +20,9 @@
 
 namespace {
     constexpr size_t max_mesh_jobs_enqueued_per_frame = 16;
-    // Вертикальное окно: 8 слоёв обычно, 4 при быстром движении по Y или малой дальности.
-    constexpr int kVerticalHalfNormal = 4;
+    // Вертикальное окно: обычно m_vertical_normal слоёв вверх и вниз (настройка «Дальность по Y»,
+    // по умолчанию 4), при быстром движении по Y — уменьшенное (не меньше kVerticalHalfReduced),
+    // при малой горизонтальной дальности — всегда kVerticalHalfReduced.
     constexpr int kVerticalHalfReduced = 2;
     constexpr float kFastVerticalSpeed = 6.0f;   // блоков/с: выше — окно сжимается
     constexpr float kSlowVerticalSpeed = 3.0f;   // блоков/с: ниже — окно возвращается (гистерезис)
@@ -122,7 +123,7 @@ Chunk_Manager::Chunk_Manager(int load_radius)
     constexpr size_t kPoolHeadroom = 2048;
     const int radius = std::max(load_radius, Config::render_distance_max);
     const size_t side = static_cast<size_t>(2 * radius + 1);
-    const size_t capacity = side * side * static_cast<size_t>(2 * (kVerticalHalfNormal + 1) + 1) + kPoolHeadroom;
+    const size_t capacity = side * side * static_cast<size_t>(2 * (Config::vertical_render_max + 1) + 1) + kPoolHeadroom;
     m_chunk_pool = std::make_unique<Chunk_Slot_Pool>(capacity);
     m_chunk_io = std::make_unique<Chunk_IO>();
 
@@ -1109,14 +1110,26 @@ bool Chunk_Manager::update_vertical_window() {
     const float vy = std::abs(m_player_velocity.y);
     const bool small_radius = m_load_radius <= kSmallRenderRadius;
     const int before = m_vertical_half;
+    const int normal = m_vertical_normal;
+    const int reduced = std::max(kVerticalHalfReduced, normal / 2);
     if (small_radius) {
         m_vertical_half = kVerticalHalfReduced;
-    } else if (m_vertical_half == kVerticalHalfNormal) {
-        if (vy > kFastVerticalSpeed) m_vertical_half = kVerticalHalfReduced;
+    } else if (m_vertical_half >= normal) {
+        if (vy > kFastVerticalSpeed) m_vertical_half = reduced;
     } else if (vy < kSlowVerticalSpeed) {
-        m_vertical_half = kVerticalHalfNormal;
+        m_vertical_half = normal;
     }
     return m_vertical_half != before;
+}
+
+void Chunk_Manager::set_vertical_radius(int half) {
+    const int clamped = std::clamp(half, Config::vertical_render_min, Config::vertical_render_max);
+    if (clamped == m_vertical_normal) return;
+    m_vertical_normal = clamped;
+    m_vertical_half = clamped;
+    // Как и при смене горизонтальной дальности: заставляем update_player_position пересчитать
+    // загрузку и выгрузку под новое окно по высоте.
+    m_player_chunk = {std::numeric_limits<int>::min(), std::numeric_limits<int>::min()};
 }
 
 uint8_t Chunk_Manager::view_ring_of(const glm::ivec3& position) const {
@@ -1604,7 +1617,7 @@ void Chunk_Manager::unload_distant(int center_cx, int center_cz, int max_distanc
     // Выгрузка плавная: по высоте держим на один слой больше окна загрузки (сужение окна при быстром
     // полёте ничего не выгружает), а лишнее убираем порциями от самых далёких. Раньше при смене высоты
     // целый слой уходил за один кадр и потом заново генерировался.
-    const int keep_half = std::max(m_vertical_half, kVerticalHalfNormal) + 1;
+    const int keep_half = std::max(m_vertical_half, m_vertical_normal) + 1;
     struct Far { glm::ivec3 key; int ring; };
     std::vector<Far> to_unload;
 

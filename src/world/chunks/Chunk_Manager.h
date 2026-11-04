@@ -216,8 +216,10 @@ private:
     std::chrono::steady_clock::time_point m_last_pos_time{};
     std::chrono::steady_clock::time_point m_last_mesh_reprioritize_time{};
     bool m_has_last_pos = false;
-    // Полуширина вертикального окна в чанках (оба края включительно): обычно 4 (9 уровней),
-    // при быстром вертикальном движении или малой дальности прорисовки — 2 (5 уровней).
+    // Полуширина вертикального окна в чанках (оба края включительно). Обычная величина задаётся
+    // настройкой (m_vertical_normal, по умолчанию 4 → 9 уровней); при быстром вертикальном движении
+    // окно сжимается до половины, а при малой горизонтальной дальности — до 2 (5 уровней).
+    int m_vertical_normal = 4;
     int m_vertical_half = 4;
     // Остались ли в окне незапрошенные чанки (load_around упёрся в лимит очереди). Тогда
     // update_player_position доливает их по мере освобождения очереди.
@@ -442,6 +444,9 @@ public:
     // ставятся в очередь генерации.
     void set_load_radius(int radius);
     int get_load_radius() const { return m_load_radius; }
+    // Полуширина окна по высоте в чанках (Config::vertical_render_min..max). Меняется из настроек.
+    void set_vertical_radius(int half);
+    int get_vertical_radius() const { return m_vertical_normal; }
 
     void load_around(int player_cx, int player_cz);
     void unload_distant(int center_cx, int center_cz, int max_distance);

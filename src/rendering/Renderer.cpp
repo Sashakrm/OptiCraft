@@ -171,6 +171,8 @@ Renderer::~Renderer() {
     }
     shutdown_gpu_mesher();
 
+    destroy_scene_targets();
+    delete m_post_shader_ptr;
     delete m_sky_shader_ptr;
     delete m_occlusion_shader_ptr;
     delete m_mob_shader_ptr;
@@ -206,6 +208,15 @@ bool Renderer::initialize(const std::string& blocks_atlas_name) {
     if (m_mob_shader_ptr->get_id() == 0) {
         LOG_ERROR("Failed to create mob shader program");
         return false;
+    }
+
+    // Постобработка (FXAA, зерно). Полноэкранный квад — тот же vignette_vertex.glsl. Если шейдер не собрался,
+    // игра работает без постобработки: мир рисуется прямо в кадр.
+    m_post_shader_ptr = new Shader("assets/shaders/vignette_vertex.glsl", "assets/shaders/post_fragment.glsl");
+    if (m_post_shader_ptr->get_id() == 0) {
+        LOG_ERROR("Failed to create post-processing shader program; FXAA and film grain are disabled");
+        delete m_post_shader_ptr;
+        m_post_shader_ptr = nullptr;
     }
 
     // Выпавшие предметы — основной вершинный шейдер + свой фрагментный с alpha-отсечением.
@@ -274,6 +285,99 @@ bool Renderer::initialize(const std::string& blocks_atlas_name) {
     LOG_INFO("Renderer initialized with " + std::to_string(m_frame_workers.worker_count()) +
              " persistent CPU frame-preparation worker(s)");
     return true;
+}
+
+void Renderer::destroy_scene_targets() {
+    if (m_scene_fbo) glDeleteFramebuffers(1, &m_scene_fbo);
+    if (m_scene_color) glDeleteTextures(1, &m_scene_color);
+    if (m_scene_depth) glDeleteRenderbuffers(1, &m_scene_depth);
+    m_scene_fbo = m_scene_color = m_scene_depth = 0;
+    m_scene_width = m_scene_height = 0;
+}
+
+// Пересоздаёт промежуточный буфер при смене размера окна. Привязку кадра не меняет: вызывающий
+// сам сохраняет и восстанавливает её.
+void Renderer::ensure_scene_targets(int width, int height) {
+    if (m_scene_fbo && width == m_scene_width && height == m_scene_height) return;
+    destroy_scene_targets();
+
+    GLint previous_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_fbo);
+
+    glGenTextures(1, &m_scene_color);
+    glBindTexture(GL_TEXTURE_2D, m_scene_color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenRenderbuffers(1, &m_scene_depth);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_scene_depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+
+    glGenFramebuffers(1, &m_scene_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_scene_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_scene_color, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_scene_depth);
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_fbo));
+    if (!complete) {
+        LOG_ERROR("Scene framebuffer is incomplete; post-processing is disabled");
+        destroy_scene_targets();
+        return;
+    }
+    m_scene_width = width;
+    m_scene_height = height;
+}
+
+bool Renderer::begin_scene(int width, int height) {
+    if (m_aa_mode == 0 && m_film_grain <= 0.0f) return false;
+    if (!m_post_shader_ptr || width <= 0 || height <= 0) return false;
+    ensure_scene_targets(width, height);
+    if (!m_scene_fbo) return false;
+
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &m_saved_framebuffer);
+    glGetIntegerv(GL_VIEWPORT, m_saved_viewport);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_scene_fbo);
+    glViewport(0, 0, width, height);
+    m_scene_active = true;
+    return true;
+}
+
+void Renderer::end_scene_and_post() {
+    if (!m_scene_active) return;
+    m_scene_active = false;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(m_saved_framebuffer));
+    glViewport(m_saved_viewport[0], m_saved_viewport[1], m_saved_viewport[2], m_saved_viewport[3]);
+
+    // Полноэкранный проход: без глубины, отсечения, наложения и обрезки ножницами.
+    const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+
+    m_post_shader_ptr->use();
+    m_post_shader_ptr->set_int("scene", 0);
+    m_post_shader_ptr->set_vec2("texel", glm::vec2(1.0f / static_cast<float>(m_scene_width),
+                                                   1.0f / static_cast<float>(m_scene_height)));
+    m_post_shader_ptr->set_int("useFxaa", m_aa_mode == 1 ? 1 : 0);
+    m_post_shader_ptr->set_float("grain", m_film_grain * Config::film_grain_max_amplitude);
+    m_post_shader_ptr->set_float("time", static_cast<float>(glfwGetTime()));
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_scene_color);
+    glBindVertexArray(m_sky_quad_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (scissor_was_enabled) glEnable(GL_SCISSOR_TEST);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void Renderer::clear_screen(float r, float g, float b, float a) {
@@ -510,6 +614,8 @@ bool Renderer::initialize_gpu_mesher() {
         m_gpu_loc_mesh_view_projection_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "view_projection");
         m_gpu_loc_mesh_view_projection_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "view_projection");
         m_gpu_loc_mesh_time_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "time");
+        m_gpu_loc_mesh_appear_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "appearDuration");
+        m_gpu_loc_mesh_appear_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "appearDuration");
         m_gpu_loc_mesh_ambient_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "ambient");
         m_gpu_loc_mesh_ambient_misc = glGetUniformLocation(m_gpu_mesh_misc_program, "ambient");
         m_gpu_loc_mesh_max_light_solid = glGetUniformLocation(m_gpu_mesh_solid_program, "maxLightLevel");
@@ -1907,6 +2013,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         glUniformMatrix4fv(m_gpu_loc_mesh_view_projection_solid, 1, GL_FALSE, &view_projection[0][0]);
         glUniform1i(glGetUniformLocation(m_gpu_mesh_solid_program, "textureAtlas"), 0);
         glUniform1f(m_gpu_loc_mesh_time_solid, time);
+        glUniform1f(m_gpu_loc_mesh_appear_solid, m_chunk_fade_seconds);
         glUniform1f(m_gpu_loc_mesh_ambient_solid, ambient_intensity);
         glUniform1f(m_gpu_loc_mesh_max_light_solid, max_light);
         glUniform3fv(m_gpu_loc_mesh_camera_solid, 1, &camera_position[0]);
@@ -1920,6 +2027,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         m_gpu_terrain_shader_ptr->set_float("ambient", ambient_intensity);
         m_gpu_terrain_shader_ptr->set_float("maxLightLevel", max_light);
         m_gpu_terrain_shader_ptr->set_float("time", time);
+        m_gpu_terrain_shader_ptr->set_float("appearDuration", m_chunk_fade_seconds);
         m_gpu_terrain_shader_ptr->set_vec3("cameraPosition", camera_position);
         m_gpu_terrain_shader_ptr->set_vec3("fogColor", fog_color);
         m_gpu_terrain_shader_ptr->set_vec2("fogRange", fog_range);
@@ -1938,6 +2046,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
             glUniformMatrix4fv(m_gpu_loc_mesh_view_projection_misc, 1, GL_FALSE, &view_projection[0][0]);
             glUniform1i(glGetUniformLocation(m_gpu_mesh_misc_program, "textureAtlas"), 0);
             glUniform1f(m_gpu_loc_mesh_time_misc, time);
+            glUniform1f(m_gpu_loc_mesh_appear_misc, m_chunk_fade_seconds);
             glUniform1f(m_gpu_loc_mesh_ambient_misc, ambient_intensity);
             glUniform1f(m_gpu_loc_mesh_max_light_misc, max_light);
             glUniform3fv(m_gpu_loc_mesh_camera_misc, 1, &camera_position[0]);
@@ -1951,6 +2060,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
             misc.set_mat4("view_projection", view_projection);
             misc.set_int("textureAtlas", 0);
             misc.set_float("time", time);
+            misc.set_float("appearDuration", m_chunk_fade_seconds);
             misc.set_float("ambient", ambient_intensity);
             misc.set_float("maxLightLevel", max_light);
             misc.set_vec3("cameraPosition", camera_position);

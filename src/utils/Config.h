@@ -5,6 +5,7 @@
 #ifndef OPTICRAFT_CONFIG_H
 #define OPTICRAFT_CONFIG_H
 
+#include <algorithm>
 #include <cstdint>
 
 namespace Config {
@@ -45,6 +46,31 @@ namespace Config {
     // её радиус задаётся отдельно от общей дальности. -1 = без ограничения.
     constexpr int flora_render_distance_chunks = 4;
     constexpr int flora_render_distance_max = 12;
+
+    // Дальность по высоте: полуширина вертикального окна загрузки и прорисовки в чанках (слоёв
+    // над и под игроком = значение; всего уровней = 2 * значение + 1). В настройках 0 = «Авто»:
+    // значение считается от горизонтальной дальности (см. auto_vertical_render_distance).
+    constexpr int vertical_render_min = 2;
+    constexpr int vertical_render_max = 12;
+    // Прежнее поведение окна по высоте (4 слоя вверх и вниз) сохраняется на малой и средней дальности.
+    constexpr int vertical_render_auto_min = 4;
+    // round(horizontal / 3), но не меньше vertical_render_auto_min: дальность 20 → по высоте 7.
+    constexpr int auto_vertical_render_distance(int horizontal) {
+        return std::clamp((2 * horizontal + 3) / 6, vertical_render_auto_min, vertical_render_max);
+    }
+
+    // Настройки графики по умолчанию (игрок меняет их в меню «Настройки»).
+    // Длительность появления чанка, сек: диапазон для ползунка и значение по умолчанию.
+    constexpr float chunk_fade_seconds_min = 0.10f;
+    constexpr float chunk_fade_seconds_max = 0.50f;
+    constexpr float chunk_fade_seconds_default = 0.42f;
+    // Виньетка: уровни 0 (выкл), 1 (слабая), 2 (средняя, как раньше), 3 (сильная).
+    constexpr int vignette_level_count = 4;
+    constexpr int vignette_level_default = 2;
+    // Сглаживание: 0 — выкл, 1 — FXAA.
+    constexpr int antialiasing_mode_count = 2;
+    // Зерно: доля от 0 до 1 на ползунке; амплитуда на экране = доля × film_grain_max_amplitude.
+    constexpr float film_grain_max_amplitude = 0.08f;
 
     // Максимальный уровень света от блока (Sun Stone и т.п.), 0 = нет света. Свет затухает
     // на 1 за каждый блок пути через прозрачные соседние клетки (см. Chunk_Manager::propagate_light).

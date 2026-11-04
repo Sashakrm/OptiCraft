@@ -88,6 +88,22 @@ private:
 
     void delete_chunk_resources(Chunk_GL_Resources& resources);
 
+    // ---- Постобработка: промежуточный буфер сцены, FXAA и зерно (см. post_fragment.glsl) ----
+    float m_chunk_fade_seconds = Config::chunk_fade_seconds_default;
+    int m_aa_mode = 0;
+    float m_film_grain = 0.0f;
+    Shader* m_post_shader_ptr = nullptr;
+    unsigned int m_scene_fbo = 0;
+    unsigned int m_scene_color = 0;
+    unsigned int m_scene_depth = 0;
+    int m_scene_width = 0;
+    int m_scene_height = 0;
+    bool m_scene_active = false;
+    int m_saved_framebuffer = 0;
+    int m_saved_viewport[4] = {0, 0, 0, 0};
+    void ensure_scene_targets(int width, int height);
+    void destroy_scene_targets();
+
     // ---- GPU chunk mesher (OpenGL 4.3 compute + optional EXT/NV mesh shaders) ----
     // Existing compute shaders build compact quad records in one shared pool. On drivers with
     // EXT or NV task/mesh shading those records are expanded into triangles by mesh shader stages;
@@ -216,6 +232,8 @@ private:
     GLint m_gpu_loc_mesh_view_projection_solid = -1;
     GLint m_gpu_loc_mesh_view_projection_misc = -1;
     GLint m_gpu_loc_mesh_time_solid = -1;
+    GLint m_gpu_loc_mesh_appear_solid = -1;   // appearDuration: длительность появления чанка
+    GLint m_gpu_loc_mesh_appear_misc = -1;
     GLint m_gpu_loc_mesh_ambient_solid = -1;
     GLint m_gpu_loc_mesh_ambient_misc = -1;
     GLint m_gpu_loc_mesh_max_light_solid = -1;
@@ -322,6 +340,25 @@ public:
         m_render_distance_chunks = std::clamp(chunks, Config::render_distance_min, Config::render_distance_max);
     }
     int get_flora_render_distance() const { return m_flora_render_distance_chunks; }
+
+    // Длительность появления чанка в секундах (блоки проявляются за это время). Из настроек.
+    void set_chunk_fade_seconds(float seconds) {
+        m_chunk_fade_seconds = std::clamp(seconds, Config::chunk_fade_seconds_min, Config::chunk_fade_seconds_max);
+    }
+    float get_chunk_fade_seconds() const { return m_chunk_fade_seconds; }
+
+    // Постобработка кадра мира: aa_mode 0 — выкл, 1 — FXAA; grain — доля 0..1 (амплитуда — см. Config).
+    // При aa_mode = 0 и grain = 0 мир рисуется прямо в кадр, без лишнего прохода.
+    void set_post_processing(int aa_mode, float grain) {
+        m_aa_mode = std::clamp(aa_mode, 0, Config::antialiasing_mode_count - 1);
+        m_film_grain = std::clamp(grain, 0.0f, 1.0f);
+    }
+    int get_aa_mode() const { return m_aa_mode; }
+    float get_film_grain() const { return m_film_grain; }
+    // Между begin_scene и end_scene_and_post мир рисуется в промежуточный буфер. begin_scene возвращает
+    // false, если постобработка выключена (тогда end_scene_and_post ничего не делает).
+    bool begin_scene(int width, int height);
+    void end_scene_and_post();
 
     // Загружает шейдеры, поднимает GPU-мешер (нужен OpenGL 4.3) и берёт из Atlas_Registry атлас с именем
     // blocks_atlas_name (по умолчанию "blocks_main") для рендера мировых блоков — Atlas_Registry::load_all()

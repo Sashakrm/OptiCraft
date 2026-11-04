@@ -22,6 +22,8 @@ layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 
 uniform mat4 view_projection;
 uniform float time;
+// Длительность появления чанка (сек), задаётся из настроек игры.
+uniform float appearDuration;
 uniform int u_kind; // 1 shaped, 2 flora, 3 liquid
 
 out vec2 Local[];
@@ -134,7 +136,7 @@ void main() {
             }
         }
 
-        float appear = clamp((time - chunk_origin.w) / 0.42, 0.0, 1.0);
+        float appear = clamp((time - chunk_origin.w) / max(appearDuration, 0.05), 0.0, 1.0);
         appear = appear * appear * (3.0 - 2.0 * appear);
 
         const uint out_vertex = vertex_base + corner;

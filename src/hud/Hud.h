@@ -244,6 +244,9 @@ public:
                             const glm::mat4& view,
                             const glm::mat4& projection);
     void draw_vignette(int window_width, int window_height);
+    // Сила виньетки 0..1 (0 — выключена). Задаётся уровнем из настроек.
+    void set_vignette_strength(float strength) { m_vignette_strength = strength < 0.0f ? 0.0f : (strength > 1.0f ? 1.0f : strength); }
+    float get_vignette_strength() const { return m_vignette_strength; }
     void draw_underwater_overlay(int window_width, int window_height);
     void draw_debug_overlay(int window_width, int window_height, const Hud_Debug_Stats& stats);
     void draw_chat_overlay(int window_width, int window_height,
@@ -297,6 +300,7 @@ private:
 
     Shader* m_line_shader = nullptr;
     Shader* m_vignette_shader = nullptr;
+    float m_vignette_strength = 0.3f;
     Shader* m_ui_shader = nullptr;
     const Texture_Atlas* m_ui_atlas = nullptr;
     unsigned int m_highlight_vao = 0;

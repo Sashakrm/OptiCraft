@@ -438,12 +438,22 @@ void Game::load_options() {
             else if (key == "mouse_sensitivity") m_input_ptr->set_mouse_sensitivity(std::clamp(std::stof(value), 0.05f, 1.0f));
             else if (key == "render_distance") m_render_distance = std::clamp(std::stoi(value), Config::render_distance_min, Config::render_distance_max);
             else if (key == "flora_distance") m_flora_distance = std::clamp(std::stoi(value), 2, Config::flora_render_distance_max);
+            else if (key == "vertical_distance") {
+                // 0 — авто; иначе не меньше минимума (значение 1 из старых файлов даёт минимум).
+                const int v = std::stoi(value);
+                m_vertical_distance_setting = v <= 0 ? 0 : std::clamp(v, Config::vertical_render_min, Config::vertical_render_max);
+            }
+            else if (key == "chunk_fade") m_chunk_fade_seconds = std::clamp(std::stof(value), Config::chunk_fade_seconds_min, Config::chunk_fade_seconds_max);
+            else if (key == "antialiasing") m_aa_mode = std::clamp(std::stoi(value), 0, Config::antialiasing_mode_count - 1);
+            else if (key == "film_grain") m_film_grain = std::clamp(std::stof(value), 0.0f, 1.0f);
+            else if (key == "vignette") m_vignette_level = std::clamp(std::stoi(value), 0, Config::vignette_level_count - 1);
             else if (key == "language") Localization::get().set_language(value);
         } catch (...) {}
     }
     Hud::set_gui_scale_setting(m_gui_scale_setting);
     m_renderer_ptr->set_flora_render_distance(m_flora_distance);
     m_renderer_ptr->set_render_distance(m_render_distance);
+    apply_graphics_settings();
 }
 
 void Game::save_options() const {
@@ -453,13 +463,66 @@ void Game::save_options() const {
          << "mouse_sensitivity=" << m_input_ptr->get_mouse_sensitivity() << "\n"
          << "render_distance=" << m_render_distance << "\n"
          << "flora_distance=" << m_flora_distance << "\n"
+         << "vertical_distance=" << m_vertical_distance_setting << "\n"
+         << "chunk_fade=" << m_chunk_fade_seconds << "\n"
+         << "antialiasing=" << m_aa_mode << "\n"
+         << "film_grain=" << m_film_grain << "\n"
+         << "vignette=" << m_vignette_level << "\n"
          << "language=" << Localization::get().get_language() << "\n";
+}
+
+int Game::get_effective_vertical_distance() const {
+    if (m_vertical_distance_setting > 0) return m_vertical_distance_setting;
+    return Config::auto_vertical_render_distance(m_render_distance);
+}
+
+void Game::apply_vertical_distance() {
+    if (m_chunk_manager_ptr) m_chunk_manager_ptr->set_vertical_radius(get_effective_vertical_distance());
+}
+
+void Game::apply_graphics_settings() {
+    if (m_renderer_ptr) {
+        m_renderer_ptr->set_chunk_fade_seconds(m_chunk_fade_seconds);
+        m_renderer_ptr->set_post_processing(m_aa_mode, m_film_grain);
+    }
+    if (m_hud_ptr) {
+        const float strengths[Config::vignette_level_count] = {0.0f, 0.15f, 0.3f, 0.5f};
+        m_hud_ptr->set_vignette_strength(strengths[std::clamp(m_vignette_level, 0, Config::vignette_level_count - 1)]);
+    }
+    apply_vertical_distance();
+}
+
+void Game::set_vertical_distance_setting(int value) {
+    m_vertical_distance_setting = value <= 0 ? 0 : std::clamp(value, Config::vertical_render_min, Config::vertical_render_max);
+    apply_vertical_distance();
+}
+
+void Game::set_chunk_fade_seconds(float seconds) {
+    m_chunk_fade_seconds = std::clamp(seconds, Config::chunk_fade_seconds_min, Config::chunk_fade_seconds_max);
+    if (m_renderer_ptr) m_renderer_ptr->set_chunk_fade_seconds(m_chunk_fade_seconds);
+}
+
+void Game::set_aa_mode(int mode) {
+    m_aa_mode = std::clamp(mode, 0, Config::antialiasing_mode_count - 1);
+    if (m_renderer_ptr) m_renderer_ptr->set_post_processing(m_aa_mode, m_film_grain);
+}
+
+void Game::set_film_grain(float value) {
+    m_film_grain = std::clamp(value, 0.0f, 1.0f);
+    if (m_renderer_ptr) m_renderer_ptr->set_post_processing(m_aa_mode, m_film_grain);
+}
+
+void Game::set_vignette_level(int level) {
+    m_vignette_level = std::clamp(level, 0, Config::vignette_level_count - 1);
+    apply_graphics_settings();
 }
 
 void Game::set_render_distance(int chunks) {
     m_render_distance = std::clamp(chunks, Config::render_distance_min, Config::render_distance_max);
     if (m_chunk_manager_ptr) m_chunk_manager_ptr->set_load_radius(m_render_distance);
     if (m_renderer_ptr) m_renderer_ptr->set_render_distance(m_render_distance);
+    // В режиме «Авто» высота зависит от горизонтальной дальности.
+    apply_vertical_distance();
 }
 
 void Game::set_flora_distance(int chunks) {
@@ -636,6 +699,7 @@ bool Game::load_world(const std::string& dir) {
 
 void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_chunk_manager_ptr = std::make_unique<Chunk_Manager>(m_render_distance);
+    apply_vertical_distance();
     m_world_generator = std::make_unique<World_Generator>(m_generation_folder, m_world_settings.seed,
                                                         dimension_from_name(m_world_settings.dimension));
     m_world_generator->set_biome(biome_from_name(m_world_settings.biome));
@@ -1058,6 +1122,7 @@ void Game::reload_world(const std::string& generation_folder) {
     // по умолчанию — иначе выбранная в настройках дальность терялась при смене
     // пресета генерации (F6).
     m_chunk_manager_ptr->set_load_radius(m_render_distance);
+    apply_vertical_distance();
     m_chunk_manager_ptr->set_world_generator(*m_world_generator);
     m_chunk_manager_ptr->set_texture_atlas(m_renderer_ptr->get_texture_atlas());
     m_chunk_manager_ptr->set_world_storage(m_world_file, m_world_generator->get_storage_key());
@@ -1393,6 +1458,10 @@ void Game::render_gameplay(bool show_gameplay_hud) {
     if (m_window_ptr->get_width() <= 0 || m_window_ptr->get_height() <= 0) {
         return;
     }
+    // Если включено сглаживание или зерно, мир рисуется в промежуточный буфер; до хотбара (он — поверх
+    // постобработки) буфер сворачивается в кадр.
+    const bool scene_is_post_processed = m_renderer_ptr->begin_scene(m_window_ptr->get_width(),
+                                                                     m_window_ptr->get_height());
 
     const glm::vec3 sky_color = m_weather.apply_to_sky(m_day_night_cycle.get_sky_color());
     m_renderer_ptr->clear_screen(sky_color.r, sky_color.g, sky_color.b);
@@ -1462,6 +1531,8 @@ void Game::render_gameplay(bool show_gameplay_hud) {
             );
         }
     }
+
+    if (scene_is_post_processed) m_renderer_ptr->end_scene_and_post();
 
     // Хотбар всегда на экране во время игры (как в Minecraft — виден и на паузе/инвентаре),
     // а не только когда show_gameplay_hud (это относится к прицелу/подсветке блока).

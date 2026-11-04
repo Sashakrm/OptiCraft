@@ -552,7 +552,7 @@ void Hud::draw_hotbar(int window_width, int window_height,
 }
 
 void Hud::draw_vignette(int window_width, int window_height) {
-    if (window_width <= 0 || window_height <= 0) return;
+    if (window_width <= 0 || window_height <= 0 || m_vignette_strength <= 0.0f) return;
     m_window_width = window_width;
     m_window_height = window_height;
 
@@ -565,7 +565,7 @@ void Hud::draw_vignette(int window_width, int window_height) {
     m_vignette_shader->set_float("aspect", static_cast<float>(window_width) / static_cast<float>(window_height));
     m_vignette_shader->set_float("radius", 0.45f);
     m_vignette_shader->set_float("softness", 0.55f);
-    m_vignette_shader->set_float("strength", 0.3f);
+    m_vignette_shader->set_float("strength", m_vignette_strength);
 
     glBindVertexArray(m_fullscreen_vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);

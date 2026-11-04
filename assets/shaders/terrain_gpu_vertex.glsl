@@ -17,6 +17,8 @@ layout(std430, binding = 9) readonly buffer Origins { vec4 origins[]; };
 // Готовая projection * view (model здесь всегда единичная): одно умножение на вершину вместо трёх.
 uniform mat4 view_projection;
 uniform float time;
+// Длительность появления чанка (сек), задаётся из настроек игры.
+uniform float appearDuration;
 
 out vec2 Local;
 out float NormalY;
@@ -98,7 +100,7 @@ void main() {
 
     // Fade/dither is evaluated per block in the fragment shader. Vertex positions
     // stay exact, so adjacent chunks never open temporary gaps at their shared edges.
-    float appear = clamp((time - chunk_origin.w) / 0.42, 0.0, 1.0);
+    float appear = clamp((time - chunk_origin.w) / max(appearDuration, 0.05), 0.0, 1.0);
     Appearance = appear * appear * (3.0 - 2.0 * appear);
 
     vec3 world_normal = vec3(0.0);
