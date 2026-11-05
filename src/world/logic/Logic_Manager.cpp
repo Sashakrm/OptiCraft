@@ -1,3 +1,4 @@
+#include "utils/profiling/Profiler.h"
 #include "world/logic/Logic_Manager.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "utils/Config.h"
@@ -257,6 +258,7 @@ void Logic_Manager::discover(const World_Access& world, glm::ivec3 center, int r
 }
 
 void Logic_Manager::update(const World_Access& world, float dt) {
+    OC_ZONE("Logic::update");
     m_accumulator += dt;
     int guard = 0;   // не больше 10 тиков за кадр, чтобы не уйти в спираль после паузы
     while (m_accumulator >= k_redstone_tick_seconds && guard++ < 10) {

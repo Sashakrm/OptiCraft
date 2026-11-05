@@ -2,6 +2,7 @@
 // Created by noktemor on 11.02.2026.
 //
 
+#include "utils/profiling/Profiler.h"
 #include "core/game/Game.h"
 #include "world/structures/Dungeon_Layout.h"
 #include "core/app/Application.h"
@@ -142,6 +143,7 @@ void Game::run() {
     LOG_INFO("Starting game loop...");
 
     while (m_is_running && !m_window_ptr->should_close()) {
+        OC_ZONE("Frame");
         const float current_time = static_cast<float>(glfwGetTime());
         const float raw_frame_delta = std::max(0.0f, current_time - m_last_frame_time);
         const float raw_frame_ms = raw_frame_delta * 1000.0f;
@@ -231,8 +233,15 @@ void Game::run() {
             }
         }
 
-        m_window_ptr->swap_buffers();
-        m_window_ptr->poll_events();
+        {
+            OC_ZONE("Frame tail: GPU present (swap)");
+            m_window_ptr->swap_buffers();
+        }
+        {
+            OC_ZONE("Frame tail: window events (poll)");
+            m_window_ptr->poll_events();
+        }
+        OC_FRAME_MARK;
     }
 
     shutdown();
@@ -1281,6 +1290,7 @@ void Game::apply_mob_result(const Mob_Result& result) {
 }
 
 void Game::update_gameplay(float delta_time, bool simulation_active, bool player_actions) {
+    OC_ZONE("Game::update_gameplay");
     poll_iso_capture_result();
 
     if (!simulation_active) {
@@ -1455,6 +1465,7 @@ void Game::handle_tool_impulse(float delta_time) {
 }
 
 void Game::render_gameplay(bool show_gameplay_hud) {
+    OC_ZONE("Game::render_gameplay");
     if (m_window_ptr->get_width() <= 0 || m_window_ptr->get_height() <= 0) {
         return;
     }

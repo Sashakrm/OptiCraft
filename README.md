@@ -19,4 +19,5 @@ cmake --build cmake-build-debug -j 4
 - [`documentation/TECHNICAL_DOCUMENTATION.md`](documentation/TECHNICAL_DOCUMENTATION.md) — общая техническая документация проекта.
 - [`documentation/RENDERING_PIPELINE.md`](documentation/RENDERING_PIPELINE.md) — устройство конвейера рендеринга.
 - [`documentation/WORLDGEN_PERFORMANCE.md`](documentation/WORLDGEN_PERFORMANCE.md) — генерация мира и её производительность.
+- [`documentation/PROFILING.md`](documentation/PROFILING.md) — профилирование Tracy: подключение, разметка, как снять профиль и результаты замеров.
 - [`documentation/KNIGHT_AI.md`](documentation/KNIGHT_AI.md) — документация ИИ босса-рыцаря.

@@ -1,3 +1,4 @@
+#include "utils/profiling/Profiler.h"
 #include "world/generation/World_Generator.h"
 
 #include "world/chunks/Chunk.h"
@@ -1155,6 +1156,7 @@ void World_Generator::generate_chunk(Chunk_Block_Grid& blocks,
 }
 
 void World_Generator::generate_chunk_column(const std::vector<Chunk*>& chunks) const {
+    OC_ZONE("Gen::generate_chunk_column");
     if (chunks.empty() || !chunks.front()) return;
     const int chunk_x = chunks.front()->get_chunk_x();
     const int chunk_z = chunks.front()->get_chunk_z();
@@ -1195,6 +1197,7 @@ struct World_Generator::Prepared_Column {
 
 void World_Generator::generate_chunks(Chunk_Block_Grid* const* outputs, const int* chunk_ys,
                                       size_t count, int chunk_x, int chunk_z) const {
+    OC_ZONE("Gen::generate_chunks");
     if (!outputs || !chunk_ys || count == 0) return;
     std::vector<int> ys(chunk_ys, chunk_ys + count);
     auto prepared = prepare_chunk_column(chunk_x, chunk_z, ys);
@@ -1290,6 +1293,7 @@ void World_Generator::generate_prepared_chunk(
 void World_Generator::generate_prepared_chunk_impl(
     const std::shared_ptr<Prepared_Column>& prepared, size_t index,
     Chunk_Block_Grid& output, Chunk* owner) const {
+    OC_ZONE("Gen::generate_prepared_chunk_impl");
     if (!prepared || index >= prepared->chunk_ys.size()) return;
     constexpr int N = Config::chunk_size;
     constexpr int H = Config::chunk_height;

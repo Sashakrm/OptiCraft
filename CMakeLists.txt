@@ -224,6 +224,50 @@ target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/entities/hostile/Hostile_Mob.h
 )
 
+# =============== Профайлер Tracy (клиент) ===============
+# Исходники Tracy лежат в external/tracy и НЕ хранятся в git (см. .gitignore).
+# Без этой папки проект собирается как обычно, макросы OC_ZONE/OC_FRAME_MARK становятся пустыми.
+# Отключить вручную: -DOPTICRAFT_TRACY=OFF.
+option(OPTICRAFT_TRACY "Собрать клиент Tracy (нужна папка external/tracy)" ON)
+set(OPTICRAFT_TRACY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/tracy" CACHE PATH
+        "Каталог исходников Tracy; можно указать установленную локальную копию")
+if(OPTICRAFT_TRACY AND EXISTS ${OPTICRAFT_TRACY_DIR}/public/TracyClient.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE ${OPTICRAFT_TRACY_DIR}/public/TracyClient.cpp)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${OPTICRAFT_TRACY_DIR}/public)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE TRACY_ENABLE)
+    message(STATUS "Tracy: клиент включён (${OPTICRAFT_TRACY_DIR})")
+elseif(OPTICRAFT_TRACY)
+    message(WARNING "Tracy: external/tracy не найден — сборка без профайлера")
+endif()
+
+# =============== Профайлер Tracy (GUI, цель tracy-profiler) ===============
+# Отдельная цель, которая НЕ входит в обычную сборку (EXCLUDE_FROM_ALL): собирается,
+# только когда её запускают (CLion: run-конфигурация tracy-profiler или cmake --build . --target tracy-profiler).
+# Linux: X11-бэкенд (LEGACY), без диалога выбора файлов — меньше системных зависимостей.
+# Нужны пакеты: libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libzstd-dev libcapstone-dev (Debian/Ubuntu).
+# Выключить при необходимости: -DOPTICRAFT_TRACY_PROFILER=OFF.
+option(OPTICRAFT_TRACY_PROFILER "Добавить цель tracy-profiler (GUI), собирается по запросу" OFF)
+if(OPTICRAFT_TRACY_PROFILER AND EXISTS ${OPTICRAFT_TRACY_DIR}/profiler/CMakeLists.txt)
+    if(UNIX AND NOT APPLE)
+        # Системные зависимости профайлера на Linux: glfw3 (pkg-config) и X11.
+        # Если их нет — не валим конфигурацию всего проекта, а только предупреждаем.
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(OC_TRACY_GLFW QUIET glfw3)
+        endif()
+        find_package(X11 QUIET)
+        if(OC_TRACY_GLFW_FOUND AND X11_FOUND)
+            set(LEGACY ON)
+            set(NO_FILESELECTOR ON)
+            add_subdirectory(${OPTICRAFT_TRACY_DIR}/profiler ${CMAKE_BINARY_DIR}/tracy-profiler EXCLUDE_FROM_ALL)
+        else()
+            message(WARNING "tracy-profiler пропущен: нужны libglfw3-dev и libx11-dev (sudo apt install libglfw3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libcapstone-dev)")
+        endif()
+    else()
+        add_subdirectory(${OPTICRAFT_TRACY_DIR}/profiler ${CMAKE_BINARY_DIR}/tracy-profiler EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # =============== Флаги оптимизации ===============
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:/O2 /fp:fast>)

@@ -2,6 +2,7 @@
 // Created by noktemor on 28.03.2026.
 //
 
+#include "utils/profiling/Profiler.h"
 #include "input/Input_Manager.h"
 #include "utils/Config.h"
 
@@ -23,6 +24,7 @@ Input_Manager::Input_Manager(GLFWwindow* window_ptr)
 {}
 
 void Input_Manager::update() {
+    OC_ZONE("Input_Manager::update");
     m_scroll_frame = m_scroll_accum;
     m_scroll_accum = 0.0f;
     m_key_previous = m_key_current;

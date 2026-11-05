@@ -4,6 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="BackendCodeEditorMiscSettings">
+    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="13" type="long" />
     <option name="/Default/Housekeeping/FeatureSuggestion/FeatureSuggestionManager/DisabledSuggesters/=SwitchToGoToActionSuggester/@EntryIndexedValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/RefactoringsMru/CppRenameRefactoring/DoRenameRelatedFiles/@EntryValue" value="false" type="bool" />
     <option name="/Default/Housekeeping/RefactoringsMru/RenameRefactoring/DoQuickRename/@EntryValue" value="true" type="bool" />
@@ -19,40 +20,220 @@
   </component>
   <component name="CMakeRunConfigurationManager">
     <generated>
+      <config projectName="OptiCraft" targetName="curl-example-http2-download" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-single" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-list" />
+      <config projectName="OptiCraft" targetName="test-event" />
+      <config projectName="OptiCraft" targetName="tests" />
+      <config projectName="OptiCraft" targetName="base64" />
+      <config projectName="OptiCraft" targetName="unzstd.1" />
+      <config projectName="OptiCraft" targetName="TracyServer" />
+      <config projectName="OptiCraft" targetName="libcurl_static" />
+      <config projectName="OptiCraft" targetName="curl-generate-curl-config.1" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpuploadresume" />
+      <config projectName="OptiCraft" targetName="curl-example-fileupload" />
+      <config projectName="OptiCraft" targetName="uninstall" />
+      <config projectName="OptiCraft" targetName="test-torture" />
+      <config projectName="OptiCraft" targetName="zstdcat" />
+      <config projectName="OptiCraft" targetName="curl-example-httpcustomheader" />
+      <config projectName="OptiCraft" targetName="curl-example-address-scope" />
+      <config projectName="OptiCraft" targetName="curl-pytest" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-multi" />
+      <config projectName="OptiCraft" targetName="curl-example-threaded" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-ssl" />
+      <config projectName="OptiCraft" targetName="curl-example-http-post" />
+      <config projectName="OptiCraft" targetName="curl-example-post-callback" />
+      <config projectName="OptiCraft" targetName="capstone" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpsget" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-stat" />
+      <config projectName="OptiCraft" targetName="zstdcat.1" />
+      <config projectName="OptiCraft" targetName="curl-example-cacertinmem" />
+      <config projectName="OptiCraft" targetName="curl-examples" />
+      <config projectName="OptiCraft" targetName="units" />
+      <config projectName="OptiCraft" targetName="tracy-profiler" />
+      <config projectName="OptiCraft" targetName="curl-optiontable" />
+      <config projectName="OptiCraft" targetName="curlu-unitprotos" />
+      <config projectName="OptiCraft" targetName="curl-example-sslbackend" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-tls" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-search" />
+      <config projectName="OptiCraft" targetName="curl-example-range" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpget" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-ssl" />
+      <config projectName="OptiCraft" targetName="curl-example-interface" />
+      <config projectName="OptiCraft" targetName="test-quiet" />
+      <config projectName="OptiCraft" targetName="curl-example-ftp-delete" />
+      <config projectName="OptiCraft" targetName="curl-example-cookie_interface" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-vrfy" />
+      <config projectName="OptiCraft" targetName="curl-example-keepalive" />
+      <config projectName="OptiCraft" targetName="TracyGetOpt" />
+      <config projectName="OptiCraft" targetName="md2html" />
+      <config projectName="OptiCraft" targetName="build-certs" />
+      <config projectName="OptiCraft" targetName="curl-example-http2-pushinmemory" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-tls" />
+      <config projectName="OptiCraft" targetName="curl" />
+      <config projectName="OptiCraft" targetName="test-am" />
+      <config projectName="OptiCraft" targetName="curl-example-protofeats" />
+      <config projectName="OptiCraft" targetName="curl-example-usercertinmem" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-noop" />
+      <config projectName="OptiCraft" targetName="md4c-html" />
+      <config projectName="OptiCraft" targetName="test-ci" />
+      <config projectName="OptiCraft" targetName="tidy-static" />
+      <config projectName="OptiCraft" targetName="curl-example-http3-present" />
+      <config projectName="OptiCraft" targetName="curl-example-altsvc" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-examine" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-legacy" />
+      <config projectName="OptiCraft" targetName="curl-example-progressfunc" />
+      <config projectName="OptiCraft" targetName="curl-example-httpput-postfields" />
+      <config projectName="OptiCraft" targetName="curl-example-parseurl" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-store" />
+      <config projectName="OptiCraft" targetName="curl-example-postinmemory" />
+      <config projectName="OptiCraft" targetName="curl-example-sftpuploadresume" />
+      <config projectName="OptiCraft" targetName="tunits" />
+      <config projectName="OptiCraft" targetName="curl-example-http-options" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-authzid" />
+      <config projectName="OptiCraft" targetName="curl-example-websocket-updown" />
+      <config projectName="OptiCraft" targetName="capstone_static" />
+      <config projectName="OptiCraft" targetName="curl-example-sepheaders" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-expn" />
+      <config projectName="OptiCraft" targetName="curl-example-urlapi" />
+      <config projectName="OptiCraft" targetName="tidy" />
+      <config projectName="OptiCraft" targetName="zstd.1" />
+      <config projectName="OptiCraft" targetName="clean-certs" />
       <config projectName="OptiCraft" targetName="json2bin" />
+      <config projectName="OptiCraft" targetName="libzstd_static" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-uidl" />
+      <config projectName="OptiCraft" targetName="curl-example-chkspeed" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-lsub" />
+      <config projectName="OptiCraft" targetName="curl-example-url2file" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-copy" />
+      <config projectName="OptiCraft" targetName="curl-example-localport" />
+      <config projectName="OptiCraft" targetName="tidy-share" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-double" />
+      <config projectName="OptiCraft" targetName="curl-example-shared-connection-cache" />
+      <config projectName="OptiCraft" targetName="curl-example-unixsocket" />
+      <config projectName="OptiCraft" targetName="curl-example-synctime" />
+      <config projectName="OptiCraft" targetName="curl_uninstall" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-append" />
+      <config projectName="OptiCraft" targetName="curl-example-simplessl" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-app" />
+      <config projectName="OptiCraft" targetName="zstd" />
+      <config projectName="OptiCraft" targetName="curl-ca-bundle" />
+      <config projectName="OptiCraft" targetName="curl-example-externalsocket" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpgetinfo" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-multi" />
+      <config projectName="OptiCraft" targetName="clean-all" />
+      <config projectName="OptiCraft" targetName="curl-example-getinfo" />
+      <config projectName="OptiCraft" targetName="curl-example-getinmemory" />
+      <config projectName="OptiCraft" targetName="curl-example-maxconnects" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-ssl" />
+      <config projectName="OptiCraft" targetName="curlu" />
+      <config projectName="OptiCraft" targetName="curl-generate-mk-ca-bundle.1" />
+      <config projectName="OptiCraft" targetName="curl-example-debug" />
+      <config projectName="OptiCraft" targetName="curl-example-ipv6" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-delete" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-dele" />
+      <config projectName="OptiCraft" targetName="curl-example-headerapi" />
+      <config projectName="OptiCraft" targetName="test-full" />
+      <config projectName="OptiCraft" targetName="test-nonflaky" />
+      <config projectName="OptiCraft" targetName="curl-listhelp" />
+      <config projectName="OptiCraft" targetName="TracyImGui" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-noop" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-tls" />
+      <config projectName="OptiCraft" targetName="curl-example-https" />
+      <config projectName="OptiCraft" targetName="curl-ca-firefox" />
+      <config projectName="OptiCraft" targetName="curl-example-httpput" />
+      <config projectName="OptiCraft" targetName="curl-man" />
+      <config projectName="OptiCraft" targetName="pugixml-static" />
+      <config projectName="OptiCraft" targetName="libtests" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-list" />
+      <config projectName="OptiCraft" targetName="testdeps" />
+      <config projectName="OptiCraft" targetName="zstdless.1" />
+      <config projectName="OptiCraft" targetName="curl-example-websocket-cb" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-top" />
+      <config projectName="OptiCraft" targetName="embed" folderName="ExternalProjectTargets/embed" />
+      <config projectName="OptiCraft" targetName="curl-example-10-at-a-time" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-fetch" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-authzid" />
+      <config projectName="OptiCraft" targetName="generate-curl.1" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-formadd" />
+      <config projectName="OptiCraft" targetName="curl-listcats" />
+      <config projectName="OptiCraft" targetName="zstdgrep.1" />
+      <config projectName="OptiCraft" targetName="curl-example-sendrecv" />
+      <config projectName="OptiCraft" targetName="curl-example-simple" />
+      <config projectName="OptiCraft" targetName="curl-examples-build" />
+      <config projectName="OptiCraft" targetName="curl-example-certinfo" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpupload" />
+      <config projectName="OptiCraft" targetName="zstdmt" />
+      <config projectName="OptiCraft" targetName="curl-example-anyauthput" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-create" />
+      <config projectName="OptiCraft" targetName="curl-example-http2-upload" />
+      <config projectName="OptiCraft" targetName="curl-pytest-ci" />
+      <config projectName="OptiCraft" targetName="md4c" />
+      <config projectName="OptiCraft" targetName="curl-example-getredirect" />
+      <config projectName="OptiCraft" targetName="curl-example-netrc" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-mail" />
+      <config projectName="OptiCraft" targetName="curl-example-pop3-retr" />
+      <config projectName="OptiCraft" targetName="curl-example-default-scheme" />
+      <config projectName="OptiCraft" targetName="curlinfo" />
+      <config projectName="OptiCraft" targetName="curl-example-sftpget" />
+      <config projectName="OptiCraft" targetName="curl-lint" />
+      <config projectName="OptiCraft" targetName="curl-example-hsts-preload" />
+      <config projectName="OptiCraft" targetName="curl-example-rtsp-options" />
+      <config projectName="OptiCraft" targetName="curl-example-connect-to" />
+      <config projectName="OptiCraft" targetName="curl-example-ftp-wildcard" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpuploadfrommem" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-debugcallback" />
+      <config projectName="OptiCraft" targetName="curltool" />
+      <config projectName="OptiCraft" targetName="curl-example-persistent" />
+      <config projectName="OptiCraft" targetName="curl-opts-man" />
+      <config projectName="OptiCraft" targetName="curl-example-http3" />
+      <config projectName="OptiCraft" targetName="servers" />
+      <config projectName="OptiCraft" targetName="curl-example-simplepost" />
+      <config projectName="OptiCraft" targetName="curl-example-ftpgetresp" />
+      <config projectName="OptiCraft" targetName="tt" />
+      <config projectName="OptiCraft" targetName="curl-example-http2-serverpush" />
+      <config projectName="OptiCraft" targetName="curl-example-block_ip" />
+      <config projectName="OptiCraft" targetName="fuzz_disasm" />
+      <config projectName="OptiCraft" targetName="curl-example-log_failed_transfers" />
+      <config projectName="OptiCraft" targetName="curl-example-websocket" />
+      <config projectName="OptiCraft" targetName="unzstd" />
+      <config projectName="OptiCraft" targetName="curl-example-postit2" />
+      <config projectName="OptiCraft" targetName="zstd-frugal" />
+      <config projectName="OptiCraft" targetName="curl-example-all" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-multi" />
+      <config projectName="OptiCraft" targetName="curl-example-postit2-formadd" />
+      <config projectName="OptiCraft" targetName="curl-example-resolve" />
       <config projectName="OptiCraft" targetName="OptiCraft" />
+      <config projectName="OptiCraft" targetName="curl-example-getreferrer" />
+      <config projectName="OptiCraft" targetName="curl-generate-wcurl.1" />
+      <config projectName="OptiCraft" targetName="curl-example-imap-authzid" />
+      <config projectName="OptiCraft" targetName="curl-example-smtp-mime" />
+      <config projectName="OptiCraft" targetName="git-ref" />
+      <config projectName="OptiCraft" targetName="curl-example-multi-post" />
     </generated>
   </component>
   <component name="CMakeSettings">
     <configurations>
       <configuration PROFILE_NAME="Debug" ENABLED="true" CONFIG_NAME="Debug" />
+      <configuration PROFILE_NAME="Debug-event-trace" ENABLED="true" CONFIG_NAME="Debug" GENERATION_OPTIONS="--profiling-format=google-trace --profiling-output=CMakeFiles/clion-event-trace.json" />
     </configurations>
   </component>
   <component name="ChangeListManager">
     <list default="true" id="86fc7975-7bbf-4ee9-ba8c-e9e24bdf05d8" name="Changes" comment="хот патч">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/editor.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/editor.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/lang/en.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/lang/en.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/lang/en.ocb" beforeDir="false" afterPath="$PROJECT_DIR$/assets/lang/en.ocb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/lang/ru.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/lang/ru.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/lang/ru.ocb" beforeDir="false" afterPath="$PROJECT_DIR$/assets/lang/ru.ocb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_gpu_misc_vertex.glsl" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_gpu_misc_vertex.glsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_gpu_vertex.glsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_mesh.mesh" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_mesh.mesh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_mesh_nv.mesh" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_mesh_nv.mesh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_misc_mesh.mesh" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_misc_mesh.mesh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/assets/shaders/terrain_misc_mesh_nv.mesh" beforeDir="false" afterPath="$PROJECT_DIR$/assets/shaders/terrain_misc_mesh_nv.mesh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/documentation/history_version.md" beforeDir="false" afterPath="$PROJECT_DIR$/documentation/history_version.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/app/Application.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/app/Application.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/game/Game.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/game/Game.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/game/Game.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/hud/Hud.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/hud/Hud.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/hud/Hud.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/hud/Hud.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/input/Input_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/input/Input_Manager.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/mobs/Mobs_Update.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/mobs/Mobs_Update.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rendering/Renderer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/rendering/Renderer.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/Config.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/Config.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/chunks/Chunk_Manager.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/fluids/Fluid_Simulator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/fluids/Fluid_Simulator.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/generation/World_Generator.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/world/logic/Logic_Manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/world/logic/Logic_Manager.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -96,23 +277,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0000000011715007" />
-      <entry key="MS500" value="1.02934983604596" />
-      <entry key="S2" value="2.1382284832020524" />
-      <entry key="S5" value="3.6897071480169887" />
-      <entry key="S10" value="4.6483289355602455" />
-      <entry key="S30" value="5.496031436320635" />
-      <entry key="S60" value="5.7406109926521625" />
-      <entry key="M2" value="5.868394443141251" />
-      <entry key="M5" value="5.947047840211375" />
-      <entry key="M10" value="6.125335613188339" />
-      <entry key="M15" value="7.883988003091451" />
-      <entry key="M30" value="44.758557711007384" />
-      <entry key="H1" value="289.653418084574" />
-      <entry key="H2" value="1011.191624267973" />
-      <entry key="H4" value="2155.078300433893" />
-      <entry key="D1" value="4550.878394678957" />
-      <entry key="W1" value="5249.068526254917" />
+      <entry key="MS100" value="1.0000000064372574" />
+      <entry key="MS500" value="1.0326126459162752" />
+      <entry key="S2" value="1.7431406264207678" />
+      <entry key="S5" value="2.7655167120636595" />
+      <entry key="S10" value="3.7367502652157567" />
+      <entry key="S30" value="5.000398758380417" />
+      <entry key="S60" value="5.595532280582291" />
+      <entry key="M2" value="7.493200216823385" />
+      <entry key="M5" value="14.819389923133157" />
+      <entry key="M10" value="26.098452070293465" />
+      <entry key="M15" value="37.510352335775714" />
+      <entry key="M30" value="74.69163024216111" />
+      <entry key="H1" value="243.3959112144263" />
+      <entry key="H2" value="849.741942555026" />
+      <entry key="H4" value="1965.3444991415222" />
+      <entry key="D1" value="4559.052150095389" />
+      <entry key="W1" value="5352.988669988614" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -120,37 +301,37 @@
       <entry key="S2" value="0.0" />
       <entry key="S5" value="0.0" />
       <entry key="S10" value="0.0" />
-      <entry key="S30" value="8.252236398155775E-251" />
-      <entry key="S60" value="9.084182075539617E-126" />
-      <entry key="M2" value="3.013997690035491E-63" />
-      <entry key="M5" value="9.809732527556613E-26" />
-      <entry key="M10" value="3.132063390631399E-13" />
-      <entry key="M15" value="4.613707009761074E-9" />
-      <entry key="M30" value="7.014358287577961E-5" />
-      <entry key="H1" value="0.010810420854448654" />
-      <entry key="H2" value="0.17841507965359177" />
-      <entry key="H4" value="0.8137963461898984" />
-      <entry key="D1" value="3.0533137386825246" />
-      <entry key="W1" value="3.8482076237306715" />
+      <entry key="S30" value="3.273172020851946E-282" />
+      <entry key="S60" value="1.8091909851786898E-141" />
+      <entry key="M2" value="4.253458575299173E-71" />
+      <entry key="M5" value="7.103900714354963E-29" />
+      <entry key="M10" value="8.428502146515857E-15" />
+      <entry key="M15" value="4.1431429425479794E-10" />
+      <entry key="M30" value="2.1019767033400672E-5" />
+      <entry key="H1" value="0.005917831265001207" />
+      <entry key="H2" value="0.1320053540908112" />
+      <entry key="H4" value="0.6999962762476956" />
+      <entry key="D1" value="2.977611941894959" />
+      <entry key="W1" value="3.834430552746207" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.7631296045686516" />
-      <entry key="MS500" value="0.9686926110045514" />
-      <entry key="S2" value="2.0659804833300273" />
-      <entry key="S5" value="3.636656681711695" />
-      <entry key="S10" value="4.615303116005408" />
-      <entry key="S30" value="5.483233880608726" />
-      <entry key="S60" value="5.733963045222589" />
-      <entry key="M2" value="5.86500608500099" />
-      <entry key="M5" value="5.945676763021693" />
-      <entry key="M10" value="6.124644529083558" />
-      <entry key="M15" value="7.883507222473706" />
-      <entry key="M30" value="44.758230902513205" />
-      <entry key="H1" value="289.6635522388734" />
-      <entry key="H2" value="1011.3688062406128" />
-      <entry key="H4" value="2155.890480083497" />
-      <entry key="D1" value="4553.930971405553" />
-      <entry key="W1" value="5252.916606520875" />
+      <entry key="MS100" value="0.9659363351004402" />
+      <entry key="MS500" value="1.0254483095119353" />
+      <entry key="S2" value="1.7399875155764277" />
+      <entry key="S5" value="2.763490492664311" />
+      <entry key="S10" value="3.7353658108833065" />
+      <entry key="S30" value="4.999770998849152" />
+      <entry key="S60" value="5.595178797754843" />
+      <entry key="M2" value="7.49296141315547" />
+      <entry key="M5" value="14.81919519618358" />
+      <entry key="M10" value="26.098228047131457" />
+      <entry key="M15" value="37.51007027127898" />
+      <entry key="M30" value="74.69127091094849" />
+      <entry key="H1" value="243.40125098939373" />
+      <entry key="H2" value="849.872902657945" />
+      <entry key="H4" value="1966.0430294297544" />
+      <entry key="D1" value="4562.029029328226" />
+      <entry key="W1" value="5356.822971606902" />
     </decayedShown>
   </component>
   <component name="ProjectApplicationVersion">
@@ -172,6 +353,7 @@
   &quot;keyToString&quot;: {
     &quot;CMake Application.OptiCraft.executor&quot;: &quot;Run&quot;,
     &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
+    &quot;CidrDebugProfileConversion262&quot;: &quot;true&quot;,
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.RadMigrateCodeStyle&quot;: &quot;true&quot;,
@@ -180,6 +362,7 @@
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;Shell Script.OptiCraft + Tracy.executor&quot;: &quot;Run&quot;,
     &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
     &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
     &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
@@ -202,7 +385,767 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
-    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
+    <configuration name="TracyGetOpt" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="TracyGetOpt" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="TracyImGui" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="TracyImGui" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="TracyServer" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="TracyServer" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="base64" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="base64" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="build-certs" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="build-certs" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="capstone" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="capstone" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="capstone_static" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="capstone_static" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="clean-all" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="clean-all" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="clean-certs" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="clean-certs" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-ca-bundle" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-ca-bundle" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-ca-firefox" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-ca-firefox" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-10-at-a-time" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-10-at-a-time" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-10-at-a-time">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-address-scope" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-address-scope" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-address-scope">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-all" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-all" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-altsvc" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-altsvc" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-altsvc">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-anyauthput" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-anyauthput" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-anyauthput">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-block_ip" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-block_ip" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-block_ip">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-cacertinmem" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-cacertinmem" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-cacertinmem">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-certinfo" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-certinfo" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-certinfo">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-chkspeed" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-chkspeed" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-chkspeed">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-connect-to" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-connect-to" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-connect-to">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-cookie_interface" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-cookie_interface" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-cookie_interface">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-debug" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-debug" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-default-scheme" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-default-scheme" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-default-scheme">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-externalsocket" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-externalsocket" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-externalsocket">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-fileupload" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-fileupload" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-fileupload">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftp-delete" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftp-delete" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftp-delete">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftp-wildcard" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftp-wildcard" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftp-wildcard">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpget" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpget" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpget">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpgetinfo" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpgetinfo" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpgetinfo">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpgetresp" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpgetresp" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpgetresp">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpsget" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpsget" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpsget">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpupload" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpupload" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpupload">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpuploadfrommem" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpuploadfrommem" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpuploadfrommem">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ftpuploadresume" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ftpuploadresume" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ftpuploadresume">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-getinfo" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-getinfo" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-getinfo">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-getinmemory" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-getinmemory" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-getinmemory">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-getredirect" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-getredirect" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-getredirect">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-getreferrer" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-getreferrer" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-getreferrer">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-headerapi" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-headerapi" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-headerapi">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-hsts-preload" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-hsts-preload" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-hsts-preload">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http-options" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http-options" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http-options">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http-post" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http-post" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http-post">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http2-download" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http2-download" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http2-download">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http2-pushinmemory" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http2-pushinmemory" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http2-pushinmemory">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http2-serverpush" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http2-serverpush" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http2-serverpush">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http2-upload" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http2-upload" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http2-upload">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http3-present" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http3-present" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http3-present">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-http3" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-http3" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-http3">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-httpcustomheader" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-httpcustomheader" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-httpcustomheader">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-httpput-postfields" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-httpput-postfields" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-httpput-postfields">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-httpput" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-httpput" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-httpput">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-https" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-https" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-https">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-append" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-append" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-append">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-authzid" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-authzid" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-authzid">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-copy" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-copy" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-copy">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-create" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-create" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-create">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-delete" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-delete" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-delete">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-examine" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-examine" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-examine">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-fetch" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-fetch" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-fetch">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-list" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-list" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-list">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-lsub" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-lsub" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-lsub">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-multi" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-multi" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-multi">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-noop" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-noop" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-noop">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-search" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-search" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-search">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-ssl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-ssl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-ssl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-store" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-store" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-store">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-imap-tls" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-imap-tls" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-imap-tls">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-interface" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-interface" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-interface">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-ipv6" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-ipv6" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-ipv6">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-keepalive" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-keepalive" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-keepalive">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-localport" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-localport" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-localport">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-log_failed_transfers" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-log_failed_transfers" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-log_failed_transfers">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-maxconnects" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-maxconnects" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-maxconnects">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-app" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-app" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-app">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-debugcallback" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-debugcallback" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-debugcallback">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-double" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-double" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-double">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-formadd" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-formadd" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-formadd">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-legacy" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-legacy" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-legacy">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-post" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-post" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-post">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-multi-single" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-multi-single" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-multi-single">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-netrc" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-netrc" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-netrc">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-parseurl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-parseurl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-parseurl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-persistent" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-persistent" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-persistent">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-authzid" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-authzid" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-authzid">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-dele" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-dele" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-dele">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-list" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-list" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-list">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-multi" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-multi" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-multi">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-noop" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-noop" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-noop">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-retr" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-retr" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-retr">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-ssl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-ssl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-ssl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-stat" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-stat" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-stat">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-tls" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-tls" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-tls">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-top" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-top" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-top">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-pop3-uidl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-pop3-uidl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-pop3-uidl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-post-callback" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-post-callback" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-post-callback">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-postinmemory" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-postinmemory" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-postinmemory">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-postit2-formadd" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-postit2-formadd" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-postit2-formadd">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-postit2" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-postit2" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-postit2">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-progressfunc" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-progressfunc" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-progressfunc">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-protofeats" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-protofeats" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-protofeats">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-range" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-range" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-range">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-resolve" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-resolve" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-resolve">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-rtsp-options" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-rtsp-options" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-rtsp-options">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-sendrecv" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-sendrecv" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-sendrecv">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-sepheaders" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-sepheaders" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-sepheaders">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-sftpget" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-sftpget" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-sftpget">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-sftpuploadresume" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-sftpuploadresume" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-sftpuploadresume">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-shared-connection-cache" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-shared-connection-cache" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-shared-connection-cache">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-simple" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-simple" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-simple">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-simplepost" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-simplepost" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-simplepost">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-simplessl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-simplessl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-simplessl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-authzid" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-authzid" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-authzid">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-expn" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-expn" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-expn">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-mail" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-mail" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-mail">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-mime" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-mime" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-mime">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-multi" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-multi" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-multi">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-ssl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-ssl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-ssl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-tls" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-tls" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-tls">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-smtp-vrfy" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-smtp-vrfy" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-smtp-vrfy">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-sslbackend" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-sslbackend" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-sslbackend">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-synctime" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-synctime" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-synctime">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-threaded" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-threaded" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-threaded">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-unixsocket" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-unixsocket" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-unixsocket">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-url2file" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-url2file" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-url2file">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-urlapi" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-urlapi" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-urlapi">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-usercertinmem" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-usercertinmem" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-usercertinmem">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-websocket-cb" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-websocket-cb" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-websocket-cb">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-websocket-updown" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-websocket-updown" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-websocket-updown">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-example-websocket" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-example-websocket" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl-example-websocket">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-examples-build" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-examples-build" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-examples" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-examples" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-generate-curl-config.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-generate-curl-config.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-generate-mk-ca-bundle.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-generate-mk-ca-bundle.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-generate-wcurl.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-generate-wcurl.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-lint" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-lint" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-listcats" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-listcats" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-listhelp" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-listhelp" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-man" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-man" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-optiontable" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-optiontable" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-opts-man" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-opts-man" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-pytest-ci" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-pytest-ci" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl-pytest" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl-pytest" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curl">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curl_uninstall" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curl_uninstall" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curlinfo" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curlinfo" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="curlinfo">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curltool" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curltool" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curlu-unitprotos" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curlu-unitprotos" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="curlu" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="curlu" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="embed" type="CMakeRunConfiguration" factoryName="Application" folderName="ExternalProjectTargets/embed" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="embed" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="fuzz_disasm" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="fuzz_disasm" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="fuzz_disasm">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="generate-curl.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="generate-curl.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="git-ref" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="git-ref" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -212,13 +1155,391 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
+    <configuration name="libcurl_static" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="libcurl_static" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="libtests" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="libtests" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="libtests">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="libzstd_static" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="libzstd_static" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="md2html" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="md2html" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="md2html">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="md4c-html" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="md4c-html" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="md4c" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="md4c" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="pugixml-static" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="pugixml-static" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="servers" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="servers" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="servers">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-am" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-am" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-ci" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-ci" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-event" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-event" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-full" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-full" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-nonflaky" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-nonflaky" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-quiet" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-quiet" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="test-torture" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="test-torture" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="testdeps" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="testdeps" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tests" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tests" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tidy-share" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tidy-share" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tidy-static" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tidy-static" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tidy" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tidy" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="tidy">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tracy-profiler" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tracy-profiler" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="tracy-profiler">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tt" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tt" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="tunits" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="tunits" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="tunits">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="uninstall" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="uninstall" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="units" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="units" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="units">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="unzstd" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="unzstd" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="unzstd.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="unzstd.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstd-frugal" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstd-frugal" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="zstd-frugal">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstd" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstd" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="OptiCraft" RUN_TARGET_NAME="zstd">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstd.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstd.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstdcat" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstdcat" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstdcat.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstdcat.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstdgrep.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstdgrep.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstdless.1" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstdless.1" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="zstdmt" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="OptiCraft" TARGET_NAME="zstdmt" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
     <list>
+      <item itemvalue="CMake Application.embed" />
       <item itemvalue="CMake Application.OptiCraft" />
+      <item itemvalue="CMake Application.base64" />
+      <item itemvalue="CMake Application.capstone" />
+      <item itemvalue="CMake Application.capstone_static" />
+      <item itemvalue="CMake Application.fuzz_disasm" />
+      <item itemvalue="CMake Application.curl-ca-bundle" />
+      <item itemvalue="CMake Application.curl-ca-firefox" />
+      <item itemvalue="CMake Application.curl-lint" />
+      <item itemvalue="CMake Application.curl_uninstall" />
+      <item itemvalue="CMake Application.curl-generate-curl-config.1" />
+      <item itemvalue="CMake Application.curl-generate-mk-ca-bundle.1" />
+      <item itemvalue="CMake Application.curl-generate-wcurl.1" />
+      <item itemvalue="CMake Application.curl-listcats" />
+      <item itemvalue="CMake Application.curl-listhelp" />
+      <item itemvalue="CMake Application.generate-curl.1" />
+      <item itemvalue="CMake Application.curl-example-10-at-a-time" />
+      <item itemvalue="CMake Application.curl-example-address-scope" />
+      <item itemvalue="CMake Application.curl-example-all" />
+      <item itemvalue="CMake Application.curl-example-altsvc" />
+      <item itemvalue="CMake Application.curl-example-anyauthput" />
+      <item itemvalue="CMake Application.curl-example-block_ip" />
+      <item itemvalue="CMake Application.curl-example-cacertinmem" />
+      <item itemvalue="CMake Application.curl-example-certinfo" />
+      <item itemvalue="CMake Application.curl-example-chkspeed" />
+      <item itemvalue="CMake Application.curl-example-connect-to" />
+      <item itemvalue="CMake Application.curl-example-cookie_interface" />
+      <item itemvalue="CMake Application.curl-example-debug" />
+      <item itemvalue="CMake Application.curl-example-default-scheme" />
+      <item itemvalue="CMake Application.curl-example-externalsocket" />
+      <item itemvalue="CMake Application.curl-example-fileupload" />
+      <item itemvalue="CMake Application.curl-example-ftp-delete" />
+      <item itemvalue="CMake Application.curl-example-ftp-wildcard" />
+      <item itemvalue="CMake Application.curl-example-ftpget" />
+      <item itemvalue="CMake Application.curl-example-ftpgetinfo" />
+      <item itemvalue="CMake Application.curl-example-ftpgetresp" />
+      <item itemvalue="CMake Application.curl-example-ftpsget" />
+      <item itemvalue="CMake Application.curl-example-ftpupload" />
+      <item itemvalue="CMake Application.curl-example-ftpuploadfrommem" />
+      <item itemvalue="CMake Application.curl-example-ftpuploadresume" />
+      <item itemvalue="CMake Application.curl-example-getinfo" />
+      <item itemvalue="CMake Application.curl-example-getinmemory" />
+      <item itemvalue="CMake Application.curl-example-getredirect" />
+      <item itemvalue="CMake Application.curl-example-getreferrer" />
+      <item itemvalue="CMake Application.curl-example-headerapi" />
+      <item itemvalue="CMake Application.curl-example-hsts-preload" />
+      <item itemvalue="CMake Application.curl-example-http-options" />
+      <item itemvalue="CMake Application.curl-example-http-post" />
+      <item itemvalue="CMake Application.curl-example-http2-download" />
+      <item itemvalue="CMake Application.curl-example-http2-pushinmemory" />
+      <item itemvalue="CMake Application.curl-example-http2-serverpush" />
+      <item itemvalue="CMake Application.curl-example-http2-upload" />
+      <item itemvalue="CMake Application.curl-example-http3" />
+      <item itemvalue="CMake Application.curl-example-http3-present" />
+      <item itemvalue="CMake Application.curl-example-httpcustomheader" />
+      <item itemvalue="CMake Application.curl-example-httpput" />
+      <item itemvalue="CMake Application.curl-example-httpput-postfields" />
+      <item itemvalue="CMake Application.curl-example-https" />
+      <item itemvalue="CMake Application.curl-example-imap-append" />
+      <item itemvalue="CMake Application.curl-example-imap-authzid" />
+      <item itemvalue="CMake Application.curl-example-imap-copy" />
+      <item itemvalue="CMake Application.curl-example-imap-create" />
+      <item itemvalue="CMake Application.curl-example-imap-delete" />
+      <item itemvalue="CMake Application.curl-example-imap-examine" />
+      <item itemvalue="CMake Application.curl-example-imap-fetch" />
+      <item itemvalue="CMake Application.curl-example-imap-list" />
+      <item itemvalue="CMake Application.curl-example-imap-lsub" />
+      <item itemvalue="CMake Application.curl-example-imap-multi" />
+      <item itemvalue="CMake Application.curl-example-imap-noop" />
+      <item itemvalue="CMake Application.curl-example-imap-search" />
+      <item itemvalue="CMake Application.curl-example-imap-ssl" />
+      <item itemvalue="CMake Application.curl-example-imap-store" />
+      <item itemvalue="CMake Application.curl-example-imap-tls" />
+      <item itemvalue="CMake Application.curl-example-interface" />
+      <item itemvalue="CMake Application.curl-example-ipv6" />
+      <item itemvalue="CMake Application.curl-example-keepalive" />
+      <item itemvalue="CMake Application.curl-example-localport" />
+      <item itemvalue="CMake Application.curl-example-log_failed_transfers" />
+      <item itemvalue="CMake Application.curl-example-maxconnects" />
+      <item itemvalue="CMake Application.curl-example-multi-app" />
+      <item itemvalue="CMake Application.curl-example-multi-debugcallback" />
+      <item itemvalue="CMake Application.curl-example-multi-double" />
+      <item itemvalue="CMake Application.curl-example-multi-formadd" />
+      <item itemvalue="CMake Application.curl-example-multi-legacy" />
+      <item itemvalue="CMake Application.curl-example-multi-post" />
+      <item itemvalue="CMake Application.curl-example-multi-single" />
+      <item itemvalue="CMake Application.curl-example-netrc" />
+      <item itemvalue="CMake Application.curl-example-parseurl" />
+      <item itemvalue="CMake Application.curl-example-persistent" />
+      <item itemvalue="CMake Application.curl-example-pop3-authzid" />
+      <item itemvalue="CMake Application.curl-example-pop3-dele" />
+      <item itemvalue="CMake Application.curl-example-pop3-list" />
+      <item itemvalue="CMake Application.curl-example-pop3-multi" />
+      <item itemvalue="CMake Application.curl-example-pop3-noop" />
+      <item itemvalue="CMake Application.curl-example-pop3-retr" />
+      <item itemvalue="CMake Application.curl-example-pop3-ssl" />
+      <item itemvalue="CMake Application.curl-example-pop3-stat" />
+      <item itemvalue="CMake Application.curl-example-pop3-tls" />
+      <item itemvalue="CMake Application.curl-example-pop3-top" />
+      <item itemvalue="CMake Application.curl-example-pop3-uidl" />
+      <item itemvalue="CMake Application.curl-example-post-callback" />
+      <item itemvalue="CMake Application.curl-example-postinmemory" />
+      <item itemvalue="CMake Application.curl-example-postit2" />
+      <item itemvalue="CMake Application.curl-example-postit2-formadd" />
+      <item itemvalue="CMake Application.curl-example-progressfunc" />
+      <item itemvalue="CMake Application.curl-example-protofeats" />
+      <item itemvalue="CMake Application.curl-example-range" />
+      <item itemvalue="CMake Application.curl-example-resolve" />
+      <item itemvalue="CMake Application.curl-example-rtsp-options" />
+      <item itemvalue="CMake Application.curl-example-sendrecv" />
+      <item itemvalue="CMake Application.curl-example-sepheaders" />
+      <item itemvalue="CMake Application.curl-example-sftpget" />
+      <item itemvalue="CMake Application.curl-example-sftpuploadresume" />
+      <item itemvalue="CMake Application.curl-example-shared-connection-cache" />
+      <item itemvalue="CMake Application.curl-example-simple" />
+      <item itemvalue="CMake Application.curl-example-simplepost" />
+      <item itemvalue="CMake Application.curl-example-simplessl" />
+      <item itemvalue="CMake Application.curl-example-smtp-authzid" />
+      <item itemvalue="CMake Application.curl-example-smtp-expn" />
+      <item itemvalue="CMake Application.curl-example-smtp-mail" />
+      <item itemvalue="CMake Application.curl-example-smtp-mime" />
+      <item itemvalue="CMake Application.curl-example-smtp-multi" />
+      <item itemvalue="CMake Application.curl-example-smtp-ssl" />
+      <item itemvalue="CMake Application.curl-example-smtp-tls" />
+      <item itemvalue="CMake Application.curl-example-smtp-vrfy" />
+      <item itemvalue="CMake Application.curl-example-sslbackend" />
+      <item itemvalue="CMake Application.curl-example-synctime" />
+      <item itemvalue="CMake Application.curl-example-threaded" />
+      <item itemvalue="CMake Application.curl-example-unixsocket" />
+      <item itemvalue="CMake Application.curl-example-url2file" />
+      <item itemvalue="CMake Application.curl-example-urlapi" />
+      <item itemvalue="CMake Application.curl-example-usercertinmem" />
+      <item itemvalue="CMake Application.curl-example-websocket" />
+      <item itemvalue="CMake Application.curl-example-websocket-cb" />
+      <item itemvalue="CMake Application.curl-example-websocket-updown" />
+      <item itemvalue="CMake Application.curl-examples" />
+      <item itemvalue="CMake Application.curl-examples-build" />
+      <item itemvalue="CMake Application.curl-man" />
+      <item itemvalue="CMake Application.curl-opts-man" />
+      <item itemvalue="CMake Application.curl-optiontable" />
+      <item itemvalue="CMake Application.curlu" />
+      <item itemvalue="CMake Application.curlu-unitprotos" />
+      <item itemvalue="CMake Application.libcurl_static" />
+      <item itemvalue="CMake Application.curl" />
+      <item itemvalue="CMake Application.curlinfo" />
+      <item itemvalue="CMake Application.curltool" />
+      <item itemvalue="CMake Application.curl-pytest" />
+      <item itemvalue="CMake Application.curl-pytest-ci" />
+      <item itemvalue="CMake Application.test-am" />
+      <item itemvalue="CMake Application.test-ci" />
+      <item itemvalue="CMake Application.test-event" />
+      <item itemvalue="CMake Application.test-full" />
+      <item itemvalue="CMake Application.test-nonflaky" />
+      <item itemvalue="CMake Application.test-quiet" />
+      <item itemvalue="CMake Application.test-torture" />
+      <item itemvalue="CMake Application.testdeps" />
+      <item itemvalue="CMake Application.tests" />
+      <item itemvalue="CMake Application.tt" />
+      <item itemvalue="CMake Application.build-certs" />
+      <item itemvalue="CMake Application.clean-certs" />
+      <item itemvalue="CMake Application.libtests" />
+      <item itemvalue="CMake Application.servers" />
+      <item itemvalue="CMake Application.tunits" />
+      <item itemvalue="CMake Application.units" />
+      <item itemvalue="CMake Application.md2html" />
+      <item itemvalue="CMake Application.md4c" />
+      <item itemvalue="CMake Application.md4c-html" />
+      <item itemvalue="CMake Application.pugixml-static" />
+      <item itemvalue="CMake Application.tidy" />
+      <item itemvalue="CMake Application.tidy-share" />
+      <item itemvalue="CMake Application.tidy-static" />
+      <item itemvalue="CMake Application.clean-all" />
+      <item itemvalue="CMake Application.libzstd_static" />
+      <item itemvalue="CMake Application.uninstall" />
+      <item itemvalue="CMake Application.unzstd" />
+      <item itemvalue="CMake Application.unzstd.1" />
+      <item itemvalue="CMake Application.zstd" />
+      <item itemvalue="CMake Application.zstd-frugal" />
+      <item itemvalue="CMake Application.zstd.1" />
+      <item itemvalue="CMake Application.zstdcat" />
+      <item itemvalue="CMake Application.zstdcat.1" />
+      <item itemvalue="CMake Application.zstdgrep.1" />
+      <item itemvalue="CMake Application.zstdless.1" />
+      <item itemvalue="CMake Application.zstdmt" />
+      <item itemvalue="CMake Application.git-ref" />
+      <item itemvalue="CMake Application.TracyServer" />
+      <item itemvalue="CMake Application.TracyGetOpt" />
+      <item itemvalue="CMake Application.TracyImGui" />
+      <item itemvalue="CMake Application.tracy-profiler" />
       <item itemvalue="CMake Application.json2bin" />
+      <item itemvalue="Shell Script.OptiCraft + Tracy" />
+      <item itemvalue="Shell Script.OptiCraft session + report" />
     </list>
   </component>
   <component name="SelectedDebugProfileService">{
   &quot;profileIdByStamp&quot;: [
+    {
+      &quot;first&quot;: {
+        &quot;##RUN_CONFIGURATION##&quot;: &quot;Shell Script.OptiCraft + Tracy&quot;
+      },
+      &quot;second&quot;: &quot;60d91498-5adc-4d2b-8faf-05c41025995f&quot;
+    },
+    {
+      &quot;first&quot;: {
+        &quot;##RUN_CONFIGURATION##&quot;: &quot;CMake Application.OptiCraft&quot;,
+        &quot;cmake&quot;: null
+      },
+      &quot;second&quot;: &quot;60d91498-5adc-4d2b-8faf-05c41025995f&quot;
+    },
     {
       &quot;first&quot;: {
         &quot;##RUN_CONFIGURATION##&quot;: &quot;CMake Application.OptiCraft&quot;,
@@ -227,7 +1548,7 @@
       &quot;second&quot;: &quot;60d91498-5adc-4d2b-8faf-05c41025995f&quot;
     }
   ],
-  &quot;modificationCount&quot;: 27
+  &quot;modificationCount&quot;: 35
 }</component>
   <component name="TaskManager">
     <task active="true" id="Default" summary="Default task">

@@ -1,3 +1,4 @@
+#include "utils/profiling/Profiler.h"
 #include "world/fluids/Fluid_Simulator.h"
 
 #include "utils/Config.h"
@@ -264,6 +265,7 @@ void Fluid_Simulator::notify_changed(Chunk_Manager& chunks, const glm::ivec3& po
 }
 
 void Fluid_Simulator::update(Chunk_Manager& chunks, float delta_time) {
+    OC_ZONE("Fluid::update");
     reset_chunk_cache();
     if (m_scheduled.empty()) {
         m_accumulator = 0.0f;   // без работы время не копим: иначе после паузы был бы всплеск тиков

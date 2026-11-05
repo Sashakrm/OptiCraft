@@ -1,6 +1,7 @@
 //
 // Created by noktemor on 11.02.2026.
 //
+#include "utils/profiling/Profiler.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -444,6 +445,7 @@ void Renderer::delete_chunk_resources(Chunk_GL_Resources& resources) {
 }
 
 void Renderer::poll_occlusion_result(Section_Occlusion_State& state) {
+    OC_ZONE("Renderer::poll_occlusion_result");
     if (!state.query_in_flight) return;
 
     GLuint available = 0;
@@ -462,6 +464,7 @@ void Renderer::poll_occlusion_result(Section_Occlusion_State& state) {
 
 void Renderer::issue_occlusion_query(Section_Occlusion_State& state, const glm::mat4& view,
                                      const glm::mat4& projection, const glm::vec3& min, const glm::vec3& max) {
+    OC_ZONE("Renderer::issue_occlusion_query");
     if (state.query == 0) {
         glGenQueries(1, &state.query);
     }
@@ -857,6 +860,7 @@ void Renderer::shutdown_gpu_mesher() {
 // Пул квадов растёт без потери содержимого: новый буфер получает копию старого, а добавленные блоки
 // уходят в список свободных (сливаясь с последним свободным участком, если он упирался в конец).
 void Renderer::grow_gpu_pool(uint32_t extra_blocks) {
+    OC_ZONE("Renderer::grow_gpu_pool");
     const uint32_t old_total = m_gpu_pool.total_blocks;
     const uint32_t new_total = old_total + std::max(extra_blocks, old_total / 2);
     const size_t block_bytes = static_cast<size_t>(kGpuBlockQuads) * sizeof(glm::uvec4);
@@ -923,6 +927,7 @@ void Renderer::free_quads(uint32_t first, uint32_t quads) {
 
 // Таблицы по ручкам чанка: счётчики, диапазоны потоков, мировые углы. Растут вдвое с переносом содержимого.
 void Renderer::grow_gpu_handles(int needed) {
+    OC_ZONE("Renderer::grow_gpu_handles");
     if (needed <= m_gpu_handle_capacity) return;
     const int new_capacity = std::max(needed, std::max(256, m_gpu_handle_capacity * 2));
     const size_t capacity = static_cast<size_t>(new_capacity);
@@ -1013,6 +1018,7 @@ void Renderer::release_gpu_chunk(Chunk_GL_Resources& resources) {
 // настоящий (квады сверх ёмкости не пишутся, но считаются), поэтому новая ёмкость выбирается точно: чанк
 // с переполненным потоком мешится ещё раз и больше не переполняется. Сильно раздутые потоки сжимаются так же.
 void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
+    OC_ZONE("Renderer::poll_gpu_readbacks (GPU to CPU readback; may wait)");
     while (m_gpu_readback_count > 0) {
         Gpu_Readback& rb = m_gpu_readbacks[m_gpu_readback_head];
         // Ждём только самый старый и только по запросу; остальные проверяем без блокировки.
@@ -1069,6 +1075,7 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
 }
 
 void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch) {
+    OC_ZONE("Renderer::submit_gpu_batch");
     const size_t n = batch.size();
     m_gpu_headers_cpu.assign(n * kGpuHeaderStride, glm::uvec4(0u));
     m_gpu_payload_cpu.clear();
@@ -1082,6 +1089,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     std::vector<Chunk_Upload> uploads;
     uploads.reserve(n);
 
+    { OC_ZONE("submit: prep chunk headers (CPU)");
     for (size_t i = 0; i < n; ++i) {
         const Renderable_Chunk& chunk = *batch[i];
         const Chunk_Meshes& meshes = *chunk.meshes;
@@ -1158,8 +1166,10 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         rb.versions.push_back(chunk.mesh_version);
         rb.handles.push_back(res.gpu_handle);
     }
+    }
 
     // Непрерывные участки ручек: origin / диапазоны / нули счётчиков — по одному вызову на участок.
+    { OC_ZONE("submit: origin/range SSBO uploads");
     std::stable_sort(uploads.begin(), uploads.end(),
               [](const Chunk_Upload& a, const Chunk_Upload& b) { return a.handle < b.handle; });
     {
@@ -1191,9 +1201,11 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             a = b;
         }
     }
+    }
 
     // Header/payload используются только текущим compute batch. Orphaning даёт драйверу
     // новый backing store вместо ожидания, пока GPU закончит читать предыдущий кадр.
+    { OC_ZONE("submit: header+payload SSBO upload");
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_headers_ssbo);
     glBufferData(GL_SHADER_STORAGE_BUFFER,
                  static_cast<GLsizeiptr>(static_cast<size_t>(kGpuBatchChunks) * kGpuHeaderStride * sizeof(glm::uvec4)),
@@ -1207,6 +1219,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_payload_ssbo);
     glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(m_gpu_payload_capacity), nullptr, GL_STREAM_DRAW);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(payload_bytes), m_gpu_payload_cpu.data());
+    }
 
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpu_headers_ssbo);
@@ -1217,6 +1230,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_gpu_tables_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_gpu_ranges_ssbo);
     // Кубы: 576 работ на чанк (72 среза x 2 знака x 4 секции), по 64 в группе = 9 групп на чанк.
+    { OC_ZONE("submit: GPU mesher dispatch (greedy+misc)");
     glUseProgram(m_gpu_greedy_program);
     glUniform1i(m_gpu_loc_greedy_chunk_count, static_cast<GLint>(n));
     glDispatchCompute(static_cast<GLuint>(n) * 9u, 1, 1);
@@ -1226,8 +1240,10 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
     glUseProgram(m_gpu_misc_program);
     glUniform1i(m_gpu_loc_misc_chunk_count, static_cast<GLint>(n));
     glDispatchCompute(static_cast<GLuint>(n) * 16u, 1, 1);
+    }
 
     // Счётчики квадов уходят в readback: по ним подгоняется ёмкость потоков, не останавливая конвейер.
+    { OC_ZONE("submit: readback copy+fence");
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     glBindBuffer(GL_COPY_READ_BUFFER, m_gpu_counts_ssbo);
     glBindBuffer(GL_COPY_WRITE_BUFFER, rb.buffer);
@@ -1242,6 +1258,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         i = j;
     }
     rb.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    }
     ++m_gpu_readback_count;
 }
 
@@ -1268,6 +1285,7 @@ bool Renderer::debug_gpu_section_quads(const glm::ivec3& chunk_position, int sec
 // Подготовка кадра: загружает обновлённые GPU-меши по бюджету, после чего отправляет на GPU
 // только кандидатов и метаданные секций. GPU выполняет frustum/Hi-Z culling и пишет indirect-команды.
 void Renderer::build_gpu_hiz(const glm::mat4& view_projection) {
+    OC_ZONE("Renderer::build_gpu_hiz");
     if (m_gpu_hiz_copy_program == 0 || m_gpu_hiz_reduce_program == 0) {
         m_gpu_hiz_valid = false;
         return;
@@ -1469,6 +1487,7 @@ void Renderer::build_gpu_hiz(const glm::mat4& view_projection) {
 }
 
 void Renderer::poll_gpu_cull_stats() {
+    OC_ZONE("Renderer::poll_gpu_cull_stats");
     // GPU counters are consumed only after a fence signals. A busy slot is left alone;
     // this method never waits for the GPU and therefore cannot stall the frame.
     for (Gpu_Cull_Stats_Readback& readback : m_gpu_cull_stats_readbacks) {
@@ -1499,6 +1518,7 @@ void Renderer::poll_gpu_cull_stats() {
 void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opaque_order,
                                  bool spectator, const glm::vec3& camera_position,
                                  const glm::mat4& view_projection) {
+    OC_ZONE("Renderer::prepare_gpu_frame");
     poll_gpu_cull_stats();
     poll_gpu_readbacks(false);
 
@@ -1815,6 +1835,7 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
 }
 
 void Renderer::draw_gpu_kind(int kind) {
+    OC_ZONE("Renderer::draw_gpu_kind");
     const Gpu_Frame_List& list = m_gpu_lists[kind];
     if (list.entries == 0) return;
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpu_cmd_ssbo);
@@ -1888,6 +1909,7 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
                             glm::vec3 fog_color,
                             glm::vec3 sun_direction,
                             bool enable_fog) {
+    OC_ZONE("Renderer::render_chunks");
     // Non-blocking GPU timer: consume only query results already available; never stall a frame.
     for (Gpu_Frame_Timer_Query& timer : m_gpu_frame_timer_queries) {
         if (!timer.id || !timer.pending) continue;
@@ -2227,6 +2249,7 @@ void Renderer::draw_sky(const glm::vec3& camera_position,
                        float moon_illumination,
                        float sun_darkness,
                        float moon_darkness) {
+    OC_ZONE("Renderer::draw_sky");
     // Классический приём "скайбокса": рисуем без теста/записи глубины, ДО обычной
     // непрозрачной геометрии мира — рельеф естественно перекрывает солнце/луну там, где
     // должен закрывать горизонт, без отдельной логики окклюзии для самих дисков.

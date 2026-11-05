@@ -2,6 +2,7 @@
 // Created by noktemor on 28.03.2026.
 //
 
+#include "utils/profiling/Profiler.h"
 #include "core/app/Application.h"
 #include <cstdlib>
 
@@ -808,6 +809,7 @@ void Application::initialize() {
 }
 
 void Application::handle_input() {
+    OC_ZONE("App::handle_input");
     if (I_Game_State* state = active_state()) {
         state->handle_input();
     }
@@ -815,6 +817,7 @@ void Application::handle_input() {
 }
 
 void Application::update(float delta_time) {
+    OC_ZONE("App::update (state update)");
     if (I_Game_State* state = active_state()) {
         state->update(delta_time);
     }
@@ -822,6 +825,7 @@ void Application::update(float delta_time) {
 }
 
 void Application::render() {
+    OC_ZONE("App::render (state render)");
     if (I_Game_State* state = active_state()) {
         state->render();
     }

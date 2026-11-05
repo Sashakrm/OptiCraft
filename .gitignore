@@ -59,3 +59,11 @@ __pycache__/
 tools/cave_paths/cave_paths
 tools/cave_paths/*.o
 tools/cave_paths/out/
+
+# ---------- Профайлер Tracy ----------
+# Игнорируем только исходники Tracy; готовый GUI-бинарник хранится в tools/profiling.
+# Исходники клонируются отдельно: git clone --depth 1 --branch v0.14.1 https://github.com/wolfpld/tracy.git external/tracy
+external/tracy/
+# Записи профилировщика (.tracy) и результаты прогонов tools/profiling
+*.tracy
+profiling-results/

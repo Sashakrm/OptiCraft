@@ -5,6 +5,7 @@
 //
 // Mobs_Update.cpp — реализация модуля мобов. Описание назначения и компромиссов — в Mobs_Update.h.
 //
+#include "utils/profiling/Profiler.h"
 #include "mobs/Mobs_Update.h"
 
 #include <algorithm>
@@ -380,6 +381,7 @@ void Mobs_Update::update_hostiles(float dt, const Mob_Player_View& player, Chunk
 
 Mob_Result Mobs_Update::update_frame(float dt, const Mob_Player_View& player, const Mob_Blocked_Fn& blocked,
                                      Chunk_Manager& chunks) {
+    OC_ZONE("Mobs::update_frame");
     Mob_Result result;
     Mob_Player_View current = player;
 

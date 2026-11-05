@@ -3,6 +3,7 @@
 //
 
 
+#include "utils/profiling/Profiler.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/crafting/Smelting.h"
 #include "utils/logging/Logger.h"
@@ -244,10 +245,12 @@ void Chunk_Manager::sync_block_entity(int wx, int wy, int wz, Block_Types old_ty
 }
 
 void Chunk_Manager::update_fluids(float delta_time) {
+    OC_ZONE("ChunkMgr::update_fluids");
     m_fluids.update(*this, delta_time);
 }
 
 void Chunk_Manager::update_block_entities(float delta_time) {
+    OC_ZONE("ChunkMgr::update_block_entities");
     const Smelting_Registry& smelting = Smelting_Registry::get_instance();
     constexpr int k_max_stack = 64;
 
@@ -431,6 +434,7 @@ void Chunk_Manager::schedule_region_preparation_locked(int chunk_x, int chunk_z,
 }
 
 void Chunk_Manager::prewarm_generation_regions_near_player() {
+    OC_ZONE("ChunkMgr::prewarm_generation_regions_near_player");
     if (!m_world_generator || m_player_chunk.x == std::numeric_limits<int>::min()) return;
 
     // The region lattice is 256 blocks = 8 chunks. Prepare the player's current region
@@ -1107,6 +1111,7 @@ size_t Chunk_Manager::max_inflight_chunks() const {
 }
 
 bool Chunk_Manager::update_vertical_window() {
+    OC_ZONE("ChunkMgr::update_vertical_window");
     const float vy = std::abs(m_player_velocity.y);
     const bool small_radius = m_load_radius <= kSmallRenderRadius;
     const int before = m_vertical_half;
@@ -1172,6 +1177,7 @@ int Chunk_Manager::desired_lod_stride(int cx, int cy, int cz, int current_stride
 }
 
 void Chunk_Manager::refresh_view_rings() {
+    OC_ZONE("ChunkMgr::refresh_view_rings");
     ++m_view_generation;
     std::vector<glm::ivec3> entered_near;   // чанки, которые только что вошли в кольца 0–1 без меша
     m_chunks.for_each([&](const glm::ivec3& key, Chunk_Ptr& chunk) {
@@ -1189,6 +1195,7 @@ void Chunk_Manager::refresh_view_rings() {
 }
 
 void Chunk_Manager::reprioritize_pending_jobs() {
+    OC_ZONE("ChunkMgr::reprioritize_pending_jobs");
     // Re-score both not-yet-prepared columns and individual chunk-build tasks. When the player
     // moves, stale individual tasks are released (including their shared prepared context).
     std::vector<Generation_Job> jobs;
@@ -1277,6 +1284,7 @@ int Chunk_Manager::mesh_job_priority(const glm::ivec3& position, bool first_mesh
 }
 
 void Chunk_Manager::reprioritize_pending_meshes() {
+    OC_ZONE("ChunkMgr::reprioritize_pending_meshes");
     // Главный поток. Снимаем ожидающие задачи, пересчитываем направление/дистанцию и
     // возвращаем их в корзины. Задача, уже взятая worker'ом, сюда не попадёт.
     std::vector<std::unique_ptr<Mesh_Job>> jobs;
@@ -1302,6 +1310,7 @@ void Chunk_Manager::reprioritize_pending_meshes() {
 }
 
 void Chunk_Manager::reprioritize_completed_meshes() {
+    OC_ZONE("ChunkMgr::reprioritize_completed_meshes");
     // Результат мог завершиться до резкого перемещения игрока. Не позволяем его старому
     // приоритету удерживать GPU hand-off впереди свежих чанков новой области.
     std::vector<std::unique_ptr<Mesh_Result>> results;
@@ -1324,6 +1333,7 @@ void Chunk_Manager::reprioritize_completed_meshes() {
 }
 
 void Chunk_Manager::request_urgent_mesh_rebuild(int cx, int cy, int cz) {
+    OC_ZONE("ChunkMgr::request_urgent_mesh_rebuild");
     if (!get_chunk(cx, cy, cz)) return;
     if (m_urgent_mesh_set.contains(cx, cy, cz)) return;
     m_urgent_mesh_set.insert(cx, cy, cz);
@@ -1331,6 +1341,7 @@ void Chunk_Manager::request_urgent_mesh_rebuild(int cx, int cy, int cz) {
 }
 
 void Chunk_Manager::flush_urgent_mesh_rebuilds() {
+    OC_ZONE("ChunkMgr::flush_urgent_mesh_rebuilds");
     if (m_urgent_mesh_list.empty()) return;
     std::vector<glm::ivec3> list;
     list.swap(m_urgent_mesh_list);
@@ -1370,6 +1381,7 @@ int Chunk_Manager::first_incomplete_ring() {
 }
 
 void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent, int lod_stride) {
+    OC_ZONE("ChunkMgr::enqueue_mesh_rebuild");
     const glm::ivec3 position{cx, cy, cz};
     Chunk* target = get_chunk(cx, cy, cz);
     if (!target) {
@@ -1530,6 +1542,7 @@ void Chunk_Manager::set_load_radius(int radius) {
 }
 
 void Chunk_Manager::load_around(int player_cx, int player_cz) {
+    OC_ZONE("ChunkMgr::load_around");
     const size_t cap = max_inflight_chunks();
     const size_t inflight = m_requested_chunks.size();
     const int min_cy = std::max(Config::world_min_chunk_y, m_player_chunk_y - m_vertical_half);
@@ -1614,6 +1627,7 @@ void Chunk_Manager::load_around(int player_cx, int player_cz) {
 }
 
 void Chunk_Manager::unload_distant(int center_cx, int center_cz, int max_distance) {
+    OC_ZONE("ChunkMgr::unload_distant");
     // Выгрузка плавная: по высоте держим на один слой больше окна загрузки (сужение окна при быстром
     // полёте ничего не выгружает), а лишнее убираем порциями от самых далёких. Раньше при смене высоты
     // целый слой уходил за один кадр и потом заново генерировался.
@@ -1646,6 +1660,7 @@ void Chunk_Manager::unload_distant(int center_cx, int center_cz, int max_distanc
 }
 
 void Chunk_Manager::update_player_position(float player_x, float player_y, float player_z) {
+    OC_ZONE("ChunkMgr::update_player_position");
     // Пока идёт захват области, загрузкой управляет pump_capture_region().
     if (capture_active()) return;
 
@@ -1714,6 +1729,7 @@ void Chunk_Manager::update_player_position(float player_x, float player_y, float
 }
 
 void Chunk_Manager::collect_finished_chunks() {
+    OC_ZONE("ChunkMgr::collect_finished_chunks");
 
     bool any_chunk_inserted = false;
 
@@ -1754,8 +1770,12 @@ void Chunk_Manager::collect_finished_chunks() {
         // insert_or_assign возвращает указатель на только что вставленный чанк напрямую —
         // не нужен повторный get_chunk() (отдельный поиск в таблице) сразу после вставки,
         // как было раньше.
-        Chunk* new_chunk = m_chunks.insert_or_assign(result.position.x, result.position.y,
-                                                       result.position.z, std::move(result.chunk));
+        Chunk* new_chunk = nullptr;
+        {
+            OC_ZONE("apply: insert chunk into table");
+            new_chunk = m_chunks.insert_or_assign(result.position.x, result.position.y,
+                                                  result.position.z, std::move(result.chunk));
+        }
         any_chunk_inserted = true;
         new_chunk->set_view_ring(view_ring_of(result.position), m_view_generation);
 
@@ -1775,6 +1795,7 @@ void Chunk_Manager::collect_finished_chunks() {
         // 65K-entry temporary vector for every incoming chunk. The registry exposes compact
         // ID-indexed tables, so the hot voxel loop performs only byte lookups.
         {
+    { OC_ZONE("apply: light/liquid scan of new chunk");
             const Block_Registry& registry = Block_Registry::get_instance();
             const uint8_t* emission = registry.light_emission_table();
             const uint8_t* liquid = registry.liquid_table();
@@ -1838,6 +1859,7 @@ void Chunk_Manager::collect_finished_chunks() {
             else m_light_sources[result.position] = std::move(found_sources);
             m_chunks_pending_block_light.push_back(result.position);
         }
+    }
 
         // Чанк с текущей водой (метаданные жидкости хранятся только у течений): тики
         // не сохраняются, поэтому назначаем их заново — иначе течение, оставшееся без источника
@@ -1863,6 +1885,7 @@ void Chunk_Manager::collect_finished_chunks() {
 
         // Все 26 соседей: AO читает клетки по рёбрам и углам, а также вертикальные швы по Y
         // (потолок пещеры на границе секции), поэтому помечаем весь куб окрестности.
+    { OC_ZONE("apply: mark 26 neighbours dirty");
         for (int dz = -1; dz <= 1; ++dz) {
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -1874,6 +1897,7 @@ void Chunk_Manager::collect_finished_chunks() {
                 }
             }
         }
+    }
 
     }
 
@@ -1940,6 +1964,7 @@ void Chunk_Manager::collect_finished_chunks() {
 }
 
 void Chunk_Manager::collect_finished_mesh_jobs() {
+    OC_ZONE("ChunkMgr::collect_finished_mesh_jobs");
 
     const size_t mesh_cap = capture_active() ? capture_max_finished_meshes_per_frame : 32;
     size_t processed_meshes = 0;
@@ -2011,6 +2036,7 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
 }
 
 void Chunk_Manager::rebuild_dirty_chunks() {
+    OC_ZONE("ChunkMgr::rebuild_dirty_chunks");
     const float speed = glm::length(m_player_velocity);
     const size_t enqueue_cap = capture_active()
         ? capture_max_mesh_jobs_enqueued_per_frame
@@ -2435,6 +2461,7 @@ void Chunk_Manager::recompute_sky_lighting(
     const std::unordered_set<uint64_t>& changed_chunk_columns,
     bool propagate_horizontal
 ) {
+    OC_ZONE("ChunkMgr::recompute_sky_lighting");
     // Rebuild skylight only for the (chunk_x, chunk_z) columns that gained a newly loaded
     // chunk since the last call - NOT the whole currently loaded voxel volume.
     // IMPORTANT: an earlier version of this function rebuilt the entire loaded world every
@@ -2736,6 +2763,7 @@ void Chunk_Manager::remove_light_source(const glm::ivec3& world_pos) {
 }
 
 void Chunk_Manager::relight_block_light_near(const glm::ivec3& p) {
+    OC_ZONE("ChunkMgr::relight_block_light_near");
     // Свет источника (<= max_light_level) за N шагов даёт max_light_level - N, поэтому правка в p
     // может изменить клетки не дальше чем в max_light_level - 1 от себя; берём радиус с запасом.
     constexpr int r = Config::max_light_level;
@@ -2832,6 +2860,7 @@ void Chunk_Manager::relight_block_light_box(int x0, int y0, int z0, int x1, int 
 }
 
 void Chunk_Manager::relight_block_light_new_chunks(size_t max_chunks) {
+    OC_ZONE("ChunkMgr::relight_block_light_new_chunks");
     if (m_chunks_pending_block_light.empty() || max_chunks == 0) return;
     // Keep block-light propagation frame-bounded while chunks stream in. Any remainder stays
     // queued for the next update instead of creating a single large BFS burst.
@@ -2893,6 +2922,7 @@ void Chunk_Manager::relight_block_light_new_chunks(size_t max_chunks) {
 }
 
 void Chunk_Manager::relight_sky_light_near(const glm::ivec3& p) {
+    OC_ZONE("ChunkMgr::relight_sky_light_near");
     // Вертикальная тень зависит только от колонки (x, z) правки и меняется в пределах
     // sky_shadow_range клеток под ней. Растекание вокруг этих клеток уходит по горизонтали не
     // дальше max_light_level, поэтому пересчитывается куб: ±max_light_level по x/z, от
@@ -3359,6 +3389,7 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     int flora_render_distance_chunks,
     bool spectator
 ) {
+    OC_ZONE("ChunkMgr::get_renderable_chunks");
     // The frustum is intentionally evaluated on the GPU by Renderer::prepare_gpu_frame.
     (void)frustum;
 
