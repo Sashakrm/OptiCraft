@@ -6,6 +6,7 @@
 #define OPTICRAFT_CHUNK_MANAGER_H
 
 #include <algorithm>
+#include <array>
 #include <unordered_set>
 #include <unordered_map>
 #include <chrono>
@@ -156,6 +157,10 @@ private:
         // Срочная пересборка (правка блока игроком): идёт первой в очереди и возвращается по отдельной очереди результатов.
         bool urgent = false;
         uint64_t seq = 0;
+        // Световой проход: геометрия не менялась с момента geometry_version, пересобирается только объём света
+        // (квады на видеокарте остаются). false — полная задача: новая геометрия и новый geometry_version.
+        bool light_only = false;
+        uint64_t geometry_version = 0;
     };
 
     struct Mesh_Result {
@@ -198,7 +203,28 @@ private:
     // the whole loaded world (a full-world redo running several times a second is what
     // previously made the game hang).
     std::unordered_set<uint64_t> m_columns_pending_sky_recompute;
+    // Изменённые игроком колонки нуждаются не только в прямом солнечном свете, но и в
+    // горизонтальном распространении в пещеры. Флаг идёт отдельно, чтобы обычная загрузка
+    // чанка оставалась дешёвой, а полная relight-работа выполнялась лениво по бюджету кадра.
+    struct Sunlight_Height_Column {
+        // Абсолютный Y верхнего блока, непрозрачного для солнечного света; world_min_y-1 = пусто.
+        std::array<int16_t, Config::chunk_size * Config::chunk_size> top{};
+    };
+    // Кэш 2D heightmap на каждую загруженную/обновлявшуюся X/Z-колонку. Заполняется из
+    // локальных карт высот чанков + базовой высоты генератора, а не повторным проходом по Y.
+    std::unordered_map<uint64_t, Sunlight_Height_Column> m_sunlight_heightmap;
+    struct Pending_Sky_Edit {
+        int world_x = 0;
+        int world_z = 0;
+        int min_y = 0;
+        int max_y = 0;
+    };
+    // Дедуплицированные X/Z-колонки правок: если игрок быстро ломает несколько блоков
+    // в одной вертикальной колонке, свет пересчитывается один раз по итоговому состоянию.
+    std::unordered_map<uint64_t, Pending_Sky_Edit> m_pending_sky_edits;
     int m_frames_since_sky_recompute = 0;
+    // Сколько кадров подряд колонку света неба откладывали, потому что приём чанков уже занял время кадра.
+    int m_sky_defer_frames = 0;
 
     // Горизонтальная позиция игрока в чанках (x, z) — вертикальный столбец загружается
     // целиком (см. Config::world_height_chunks), поэтому раньше здесь Y не хранился. Теперь
@@ -410,15 +436,15 @@ private:
     void relight_block_light_new_chunks(size_t max_chunks = 8);
     // Локальный пересчёт света неба после правки: вертикальная тень пересчитывается только для
     // колонки правки, горизонтальное растекание — в кубе вокруг неё (см. реализацию).
-    void relight_sky_light_near(const glm::ivec3& world_pos);
+    void refresh_sunlight_height_column(int chunk_x, int chunk_z);
+    int sunlight_height_at(int world_x, int world_z);
+    void queue_sunlight_rebuild(int chunk_x, int chunk_z);
+    void queue_sunlight_edit(int world_x, int world_y, int world_z);
+    void process_pending_sky_edits(size_t max_jobs = 1);
     void relight_sky_light_box(int x0, int y0, int z0, int x1, int y1, int z1);
-    // Грани соседа читают свет через границу: после смены света в чанках из changed_chunks
-    // шесть соседей помечаются грязными, иначе их граница держала бы старый свет.
-    void mark_light_neighbors_dirty(const std::unordered_set<glm::ivec3, Chunk_Key_Hash>& changed_chunks);
     // Scoped to the given (chunk_x, chunk_z) columns (packed (x<<32)|z) rather than the whole
     // loaded world - see the comment at the implementation and at m_columns_pending_sky_recompute.
-    void recompute_sky_lighting(const std::unordered_set<uint64_t>& changed_chunk_columns,
-                                bool propagate_horizontal = true);
+    void recompute_sky_lighting(const std::unordered_set<uint64_t>& changed_chunk_columns);
 
 public:
     // Загружен ли чанк (нужен менеджеру посевов: вне загруженной зоны ничего не растёт).
@@ -429,6 +455,9 @@ public:
 
     void set_world_generator(const World_Generator& generator) {
         m_world_generator = &generator;
+        m_sunlight_heightmap.clear();
+        m_columns_pending_sky_recompute.clear();
+        m_pending_sky_edits.clear();
     }
     // Генератор мира (для запросов биома, например спавном мобов); nullptr, если не задан.
     const World_Generator* world_generator() const { return m_world_generator; }

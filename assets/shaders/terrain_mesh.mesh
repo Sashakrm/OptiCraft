@@ -34,6 +34,10 @@ out float SkyLight[];
 out float Appearance[];
 flat out vec4 Rect[];
 out float AO[];
+// Световой путь (см. terrain_gpu_fragment.glsl): Baked = 1 — свет и AO запечены (varying выше), 0 — объём ручки.
+flat out uint Baked[];
+flat out uint VolumeHandle[];
+flat out vec3 ChunkOrigin[];
 
 // Corner order is identical to the old vertex-pulling shader. The triangle index
 // table preserves face winding and lets the mesh shader emit 4 unique vertices per quad.
@@ -71,6 +75,7 @@ void main() {
     const float height = float(((w0 >> 23u) & 31u) + 1u);
     const bool rotate_uv = ((w0 >> 28u) & 1u) != 0u;
     const float normal_extent = float(1u << ((w0 >> 29u) & 3u));
+    const uint baked = (w0 >> 31u) & 1u;
     const uint ao_bits = (w1 >> 24u) & 0xFFu;
     const bool flip = ((ao_bits & 3u) + ((ao_bits >> 6u) & 3u)) >
                       (((ao_bits >> 2u) & 3u) + ((ao_bits >> 4u) & 3u));
@@ -122,6 +127,9 @@ void main() {
         SkyLight[out_vertex] = float(light_byte >> 4u);
         Rect[out_vertex] = rect;
         AO[out_vertex] = float(ao);
+        Baked[out_vertex] = baked;
+        VolumeHandle[out_vertex] = payload.chunk_handle;
+        ChunkOrigin[out_vertex] = chunk_origin.xyz;
     }
 
     const uint table_offset = variant * 6u;

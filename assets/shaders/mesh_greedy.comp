@@ -1,16 +1,25 @@
 #version 430 core
 // GPU-версия жадного мешера непрозрачной геометрии (см. Renderer::submit_gpu_batch и build_chunk_mesh в Chunk.cpp).
-// Одна инвокация разбирает ОДИН срез одной секции в одном направлении грани: по 72 среза на секцию
-// (32 по X, 8 по Y, 32 по Z) и два знака, то есть 576 работ на чанк. Срезы независимы: слияние
+// Одна РАБОЧАЯ ГРУППА (64 потока) разбирает ОДИН срез одной секции в одном направлении грани: по 72 среза на
+// секцию (32 по X, 8 по Y, 32 по Z) и два знака, то есть 576 групп на чанк. Срезы независимы: слияние
 // идёт только внутри среза, как и в CPU-проходе, поэтому квады совпадают с CPU по составу.
+// Раньше срез разбирал один поток: на чанк выходило всего 576 потоков, и каждый последовательно проходил до
+// 1024 клеток с десятками зависимых чтений палитры, из-за чего один чанк стоил на встроенной графике
+// 10-30 мс GPU. Теперь ключи клеток (дорогая часть: блоки, AO, свет) считает вся группа параллельно в
+// общую память, а короткое жадное слияние по готовой маске выполняет один поток, тем же кодом, что и раньше.
 //
 // Вход — упакованные каналы чанка (палитры + биты, см. pack_channel в Chunk.cpp). Выход — 16-байтные
 // записи квадов в общий пул (раскладка записи — в декодере terrain_gpu_vertex.glsl). Место под квады
 // секции задаёт таблица ranges: (первый квад в пуле, ёмкость). Квады сверх ёмкости не пишутся, но
 // считаются: по счётчику CPU видит переполнение и переносит чанк в больший участок пула.
 //
-// Ключ среза: UV-прямоугольник/поворот, AO и свет четырёх углов. Соседние блоки разных типов с одной
-// текстурой сливаются, только если совпадают AO и свет всех углов (как в CPU-мешере).
+// Ключ среза. Два режима (см. baked ниже):
+//  * запечённый (дальний LOD, либо u_bake_all для отката): UV-прямоугольник/поворот, AO и свет четырёх углов.
+//    Соседние блоки сливаются, только если совпадают AO и свет всех углов (как в CPU-мешере). Бит 31 записи
+//    квада = 1, AO и свет лежат в записи.
+//  * объёмный (ближние чанки, по умолчанию): только UV-прямоугольник/поворот. AO и свет на этот квад не
+//    пишутся: их на пикселе берёт терраин-фрагментный шейдер из светового объёма чанка (mesh_volume.comp).
+//    Бит 31 = 0. Так слияние не зависит от света, и смена света не требует пересборки геометрии.
 layout(local_size_x = 64) in;
 
 // Заголовок чанка: kGpuHeaderStride = 27 uvec4 (см. Chunk.h). [1].z = LOD stride (1/2/4).
@@ -28,6 +37,8 @@ layout(std430, binding = 5) readonly buffer Tables { uint light_coarse[256]; uin
 layout(std430, binding = 6) readonly buffer Ranges { uvec2 ranges[]; };
 
 uniform int u_chunk_count;
+// 1 — запекать AO и свет в квады для всех чанков (откат к прежнему пути, Config::gpu_light_volume = false).
+uniform int u_bake_all;
 
 const uint FLAG_GREEDY = 1u;
 const uint FLAG_TRANSPARENT = 2u;
@@ -150,7 +161,8 @@ uint face_ao(uint hb, ivec3 cell, int axis, int sign, int normal_extent,
 
 // Ключ грани: .x = индекс UV-прямоугольника | поворот<<15; .y = AO<<8 | присутствие<<16;
 // .z = свет четырёх углов (байт угла: sky<<4 | blk). Для слияния сравнивается ВЕСЬ ключ.
-uvec3 mask[1024];
+shared uvec3 mask[1024];
+shared uint s_any_key;
 
 // Свет четырёх углов грани (как face_corner_light в Chunk.cpp): среднее по клетке перед гранью и по
 // трём клеткам слоя, непрозрачные клетки не учитываются, клетки за двумя границами чанка тоже.
@@ -195,7 +207,8 @@ uint face_corner_light(uint hb, ivec3 cell, int axis, int sign, int normal_exten
 }
 
 void main() {
-    const uint g = gl_GlobalInvocationID.x;
+    const uint tid = gl_LocalInvocationID.x;
+    const uint g = gl_WorkGroupID.x;   // номер среза в батче: все потоки группы делят его условия выхода
     const uint chunk = g / ITEMS_PER_CHUNK;
     if (chunk >= uint(u_chunk_count)) return;
     const uint item = g - chunk * ITEMS_PER_CHUNK;
@@ -211,6 +224,8 @@ void main() {
     if (!pos && (info.x & 1u) != 0u) return;
     const int dir = pos ? 1 : -1;
     const int lod_stride = int(clamp(info.z, 1u, 4u));
+    // Дальние LOD всегда запекают свет и AO в квад (их сетка грубее объёма); ближние — только при откате.
+    const bool baked = u_bake_all != 0 || lod_stride > 1;
     const uint r = pos ? rem : rem - 72u;
     int axis;
     int s;
@@ -248,51 +263,59 @@ void main() {
     const int u_samples = lod_sample_count(u_stride);
     const int v_samples = lod_sample_count(v_stride);
 
-    for (int vi = 0; vi < v_samples; ++vi) {
-        for (int ui = 0; ui < u_samples; ++ui) {
-            mask[vi * 32 + ui] = uvec3(0u);
-        }
-    }
+    // Общая память группы: сначала обнуляем маску и флаг, потом все потоки считают ключи клеток.
+    if (tid == 0u) s_any_key = 0u;
+    for (uint i = tid; i < 1024u; i += 64u) mask[i] = uvec3(0u);
+    memoryBarrierShared();
+    barrier();
 
-    bool any_key = false;
-    for (int vi = 0; vi < v_samples; ++vi) {
+    const uint cell_count = uint(u_samples * v_samples);
+    for (uint cell = tid; cell < cell_count; cell += 64u) {
+        const int vi = int(cell) / u_samples;
+        const int ui = int(cell) - vi * u_samples;
         const int v = lod_sample_coord(vi, v_stride);
         if (v < v_base || v >= v_base + v_count) continue;
-        for (int ui = 0; ui < u_samples; ++ui) {
-            const int u = lod_sample_coord(ui, u_stride);
-            ivec3 c;
-            c[axis] = s;
-            c[ua] = u;
-            c[va] = v;
-            uvec3 key = uvec3(0u);
-            const int u_extent = lod_sample_extent(ui, u_stride, u_samples);
-            const int v_extent = lod_sample_extent(vi, v_stride, v_samples);
-            const uint cur = mesh_block_at(hb, c.x, c.y, c.z, lod_stride);
-            const uint fc = block_flags[cur];
-            if ((fc & FLAG_GREEDY) != 0u) {
-                ivec3 nc = c;
-                nc[axis] += dir * neighbor_extent;
-                const uint nb = mesh_block_at(hb, nc.x, nc.y, nc.z, lod_stride);
-                const bool cull_same = (fc & FLAG_CULL_SAME) != 0u;
-                if ((block_flags[nb] & FLAG_TRANSPARENT) != 0u && !(nb == cur && cull_same)) {
-                    uint meta = 0u;
-                    if ((fc & FLAG_USES_META) != 0u) {
-                        const uint meta_channel = (lod_stride > 1) ? 24u : 1u;
-                        meta = read_channel(hb, meta_channel, uint((c.y * 32 + c.z) * 32 + c.x));
-                    }
-                    const uint material = rect_lut[(cur * 6u + face) * 256u + meta] & 0xFFFFu;
+        const int u = lod_sample_coord(ui, u_stride);
+        ivec3 c;
+        c[axis] = s;
+        c[ua] = u;
+        c[va] = v;
+        uvec3 key = uvec3(0u);
+        const int u_extent = lod_sample_extent(ui, u_stride, u_samples);
+        const int v_extent = lod_sample_extent(vi, v_stride, v_samples);
+        const uint cur = mesh_block_at(hb, c.x, c.y, c.z, lod_stride);
+        const uint fc = block_flags[cur];
+        if ((fc & FLAG_GREEDY) != 0u) {
+            ivec3 nc = c;
+            nc[axis] += dir * neighbor_extent;
+            const uint nb = mesh_block_at(hb, nc.x, nc.y, nc.z, lod_stride);
+            const bool cull_same = (fc & FLAG_CULL_SAME) != 0u;
+            if ((block_flags[nb] & FLAG_TRANSPARENT) != 0u && !(nb == cur && cull_same)) {
+                uint meta = 0u;
+                if ((fc & FLAG_USES_META) != 0u) {
+                    const uint meta_channel = (lod_stride > 1) ? 24u : 1u;
+                    meta = read_channel(hb, meta_channel, uint((c.y * 32 + c.z) * 32 + c.x));
+                }
+                const uint material = rect_lut[(cur * 6u + face) * 256u + meta] & 0xFFFFu;
+                if (baked) {
                     const uint ao = face_ao(hb, c, axis, dir, neighbor_extent,
                                             u_extent, v_extent, ua, va);
                     key = uvec3(material, (ao << 8u) | (1u << 16u),
                                 face_corner_light(hb, c, axis, dir, neighbor_extent,
                                                   u_extent, v_extent, ua, va));
-                    any_key = true;
+                } else {
+                    key = uvec3(material, 1u << 16u, 0u);
                 }
+                atomicOr(s_any_key, 1u);
             }
-            mask[vi * 32 + ui] = key;
         }
+        mask[vi * 32 + ui] = key;
     }
-    if (!any_key) return;
+    memoryBarrierShared();
+    barrier();
+    if (s_any_key == 0u) return;   // одинаково для всех потоков группы: после барьера они читают одно значение
+    // Жадное слияние идёт по готовой маске и стоит мало рядом с построением ключей: его делает один поток.
+    if (tid != 0u) return;
 
     // Жадное слияние по coarse-ячейкам. Размер итогового квада записывается в физических
     // блоках, поэтому вершинный шейдеру не нужно выполнять дополнительный поиск соседей.
@@ -353,7 +376,8 @@ void main() {
             const uint w0 = uint(o.x) | (uint(o.y) << 5u) | (uint(o.z) << 10u) |
                             (uint(axis) << 15u) | ((pos ? 1u : 0u) << 17u) |
                             (uint(physical_width - 1) << 18u) | (uint(physical_height - 1) << 23u) |
-                            (rotate ? (1u << 28u) : 0u) | (normal_scale_log2 << 29u);
+                            (rotate ? (1u << 28u) : 0u) | (normal_scale_log2 << 29u) |
+                            (baked ? (1u << 31u) : 0u);
             const uint w1 = rect | (ao << 24u);
 
             const uint stream = handle * 16u + sec;

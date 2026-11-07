@@ -1,0 +1,111 @@
+#version 430 core
+// Световой объём чанка для терраин-фрагментного шейдера (см. terrain_gpu_fragment.glsl).
+//
+// Для каждой ручки строится куб 34 x 34 x 34 клетки: чанк 32 x 32 x 32 плюс по одной клетке с каждой стороны
+// (грани и кольцо рёбер/углов соседей). Клетка хранится одним байтом:
+//   0xFF           — полный непрозрачный куб (Mesh_Tables::occludes): закрывает AO и не даёт свет;
+//   иначе          — sky << 4 | block (как Chunk_Light_Grid).
+// Кольцо рёбер и углов (две или три координаты вне чанка) свет не имеет: в усреднении света его не учитываем,
+// а непрозрачность там нужна для AO, так же как в мешере.
+//
+// Индекс клетки в объёме: ((y + 1) * 34 + (z + 1)) * 34 + (x + 1). Байты упакованы по 4 в слово (little endian).
+// Объём пишется всегда, даже для чанка, у которого геометрия не пересобирается (только свет): он читает
+// те же каналы полезной нагрузки, что и greedy-мешер, поэтому не требует отдельного снимка.
+//
+// Одна инвокация пишет одно 32-битное слово: 9826 слов на чанк, 154 группы по 64 потока.
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
+layout(std430, binding = 1) readonly buffer Payload { uint payload[]; };
+layout(std430, binding = 5) readonly buffer Tables { uint light_coarse[256]; uint block_flags[]; };
+// Объёмы всех ручек подряд: ручка h занимает слова [h * 9826, (h + 1) * 9826).
+layout(std430, binding = 10) writeonly buffer LightVolumes { uint volume_words[]; };
+
+uniform int u_chunk_count;
+
+const uint FLAG_OCCLUDES = 16u;
+const uint HEADER_STRIDE = 27u;
+const uint VOLUME_WORDS = 9826u;   // 34 * 34 * 34 / 4
+const uint WORD_GROUPS = 154u;     // ceil(9826 / 64)
+const uint VOLUME_EDGE_PLANE = 1156u;  // 34 * 34
+
+uint read_channel(uint hb, uint ch, uint i) {
+    const uvec4 c = headers[hb + 2u + ch];
+    const uint bits = c.z;
+    if (bits == 0u) return payload[c.x];
+    const uint bit = i * bits;
+    const uint w = c.y + (bit >> 5u);
+    const uint s = bit & 31u;
+    uint v = payload[w] >> s;
+    if (s + bits > 32u) v |= payload[w + 1u] << (32u - s);
+    return payload[c.x + (v & ((1u << bits) - 1u))];
+}
+
+// Та же раскладка кольца, что в mesh_greedy.comp и Chunk.h (chunk_ring_index).
+int ring_index(int x, int y, int z) {
+    const bool ox = x < 0 || x >= 32;
+    const bool oy = y < 0 || y >= 32;
+    const bool oz = z < 0 || z >= 32;
+    const int px = x >= 32 ? 1 : 0;
+    const int py = y >= 32 ? 1 : 0;
+    const int pz = z >= 32 ? 1 : 0;
+    if (int(ox) + int(oy) + int(oz) == 3) return 384 + px + 2 * py + 4 * pz;
+    if (!oy) return (px + 2 * pz) * 32 + y;
+    if (!ox) return 128 + (py + 2 * pz) * 32 + x;
+    return 256 + (px + 2 * py) * 32 + z;
+}
+
+// Блок клетки (x,y,z) в диапазоне -1..32 по каждой оси: собственный, грань соседа или кольцо.
+uint block_at(uint hb, int x, int y, int z) {
+    const int out_axes = int(x < 0 || x >= 32) + int(y < 0 || y >= 32) + int(z < 0 || z >= 32);
+    if (out_axes >= 2) return read_channel(hb, 15u, uint(ring_index(x, y, z)));
+    if (x < 0) return read_channel(hb, 3u, uint(y * 32 + z));
+    if (x >= 32) return read_channel(hb, 4u, uint(y * 32 + z));
+    if (y < 0) return read_channel(hb, 5u, uint(z * 32 + x));
+    if (y >= 32) return read_channel(hb, 6u, uint(z * 32 + x));
+    if (z < 0) return read_channel(hb, 7u, uint(y * 32 + x));
+    if (z >= 32) return read_channel(hb, 8u, uint(y * 32 + x));
+    return read_channel(hb, 0u, uint((y * 32 + z) * 32 + x));
+}
+
+// Свет клетки с одной осью за границей (грань соседа) или внутри чанка.
+uint light_at(uint hb, int x, int y, int z) {
+    if (x < 0) return read_channel(hb, 9u, uint(y * 32 + z));
+    if (x >= 32) return read_channel(hb, 10u, uint(y * 32 + z));
+    if (y < 0) return read_channel(hb, 11u, uint(z * 32 + x));
+    if (y >= 32) return read_channel(hb, 12u, uint(z * 32 + x));
+    if (z < 0) return read_channel(hb, 13u, uint(y * 32 + x));
+    if (z >= 32) return read_channel(hb, 14u, uint(y * 32 + x));
+    return read_channel(hb, 2u, uint((y * 32 + z) * 32 + x));
+}
+
+void main() {
+    const uint g = gl_WorkGroupID.x;
+    const uint chunk = g / WORD_GROUPS;
+    if (chunk >= uint(u_chunk_count)) return;
+    const uint word = (g - chunk * WORD_GROUPS) * 64u + gl_LocalInvocationID.x;
+    if (word >= VOLUME_WORDS) return;
+
+    const uint hb = chunk * HEADER_STRIDE;
+    const uint handle = headers[hb].x;
+
+    uint word_bits = 0u;
+    for (uint k = 0u; k < 4u; ++k) {
+        const uint idx = word * 4u + k;
+        const int y = int(idx / VOLUME_EDGE_PLANE) - 1;
+        const uint rest = idx - uint(y + 1) * VOLUME_EDGE_PLANE;
+        const int z = int(rest / 34u) - 1;
+        const int x = int(rest - uint(z + 1) * 34u) - 1;
+        const int out_axes = int(x < 0 || x >= 32) + int(y < 0 || y >= 32) + int(z < 0 || z >= 32);
+
+        uint value = 0u;
+        const uint id = block_at(hb, x, y, z);
+        if ((block_flags[id] & FLAG_OCCLUDES) != 0u) {
+            value = 0xFFu;
+        } else if (out_axes < 2) {
+            value = light_at(hb, x, y, z);
+        }
+        word_bits |= value << (8u * k);
+    }
+    volume_words[handle * VOLUME_WORDS + word] = word_bits;
+}

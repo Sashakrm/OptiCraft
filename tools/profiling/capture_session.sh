@@ -93,7 +93,7 @@ echo "Игра закрыта, запись сохранена: $OUT/session.tra
 
 # --- посекундная сводка -----------------------------------------------------------------
 if python3 "$ROOT/tools/profiling/summarize_trace.py" "$OUT/session.tracy" \
-        --csvexport "$TOOLS/tracy-csvexport" --out "$OUT"; then
+        --csvexport "$TOOLS/tracy-csvexport" --out "$OUT" --gamelog "$OUT/game.log"; then
     echo "Сводка: $OUT/session_summary.md и $OUT/session_per_second.csv"
 else
     echo "Сводка не построена (см. выше). Запись сохранена: $OUT/session.tracy" >&2

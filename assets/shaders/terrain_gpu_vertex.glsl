@@ -29,6 +29,11 @@ out float SkyLight;
 out float Appearance;
 flat out vec4 Rect;
 out float AO;
+// Световой путь (см. terrain_gpu_fragment.glsl): Baked = 1 — AO и свет запечены в квад (varying выше);
+// Baked = 0 — свет и AO берутся на пикселе из светового объёма ручки VolumeHandle, начало чанка — ChunkOrigin.
+flat out uint Baked;
+flat out uint VolumeHandle;
+flat out vec3 ChunkOrigin;
 
 // Углы квада (fu + 2*fv) по шести вершинам, в порядке emit_terrain_quad (Chunk.cpp), включая
 // переворот порядка при знаке. Вариант = axis*2 + (знак > 0 ? 0 : 1).
@@ -66,6 +71,7 @@ void main() {
     const float h = float(((w0 >> 23u) & 31u) + 1u);
     const bool rot = ((w0 >> 28u) & 1u) != 0u;
     const float normal_extent = float(1u << ((w0 >> 29u) & 3u));
+    const uint baked = (w0 >> 31u) & 1u;
 
     // AO углов: два бита на угол (код fu + 2*fv), см. face_ao в Chunk.cpp. Диагональ идёт через
     // более тёмную пару углов, поэтому порядок вершин выбирается по AO.
@@ -117,5 +123,8 @@ void main() {
     BlockLight = float(cl & 15u);
     Rect = rects[w1 & 0x7FFFu];
     AO = float((ao_bits >> (2u * uint(code))) & 3u);
+    Baked = baked;
+    VolumeHandle = sec >> 2u;
+    ChunkOrigin = chunk_origin.xyz;
     gl_Position = view_projection * vec4(p, 1.0);
 }

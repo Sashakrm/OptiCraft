@@ -64,6 +64,9 @@ private:
         // Ручка чанка в пуле GPU-мешера (-1 = чанк не на GPU) и версия меша, по которой посчитаны квады.
         int gpu_handle = -1;
         uint64_t gpu_version = 0;
+        // Версия геометрии, по которой лежат квады в пуле (Chunk_Meshes::geometry_version). Световой проход
+        // (light_only) совпадает с ней — квады не пересоздаются, обновляется только световой объём.
+        uint64_t gpu_geometry_version = 0;
         // По потокам: первый квад и ёмкость в квадах (0 = потока нет); желаемая ёмкость после readback'а.
         std::array<uint32_t, kGpuStreams> gpu_first{};
         std::array<uint32_t, kGpuStreams> gpu_cap{};
@@ -128,6 +131,11 @@ private:
                            bool spectator, const glm::vec3& camera_position,
                            const glm::mat4& view_projection);
     void poll_gpu_cull_stats();
+    // GPU-таймеры по фазам кадра (glQueryCounter). Опрос неблокирующий: слот читается только когда его
+    // последняя метка уже готова. Раз в секунду итог печатается строкой "[GPUSTAT] ..." (см. summarize_trace.py).
+    void poll_gpu_phase_timers();
+    void gpu_phase_stamp(int stamp);
+    void record_gpu_mesher_sample(double elapsed_ms, uint32_t chunk_count);
     void build_gpu_hiz(const glm::mat4& view_projection);
     void draw_gpu_kind(int kind);
 
@@ -180,6 +188,40 @@ private:
         std::vector<glm::ivec3> positions;
         std::vector<uint64_t> versions;
         std::vector<int> handles;
+        // Метки GL_TIMESTAMP до и после компьют-диспетчеризации этого батча: по ним считается, сколько
+        // миллисекунд GPU стоит один чанк, и от этого зависит размер следующих батчей.
+        GLuint stamps[2] = {0, 0};
+        uint32_t timed_chunks = 0;   // 0 — батч не измерялся
+    };
+    // Фазы кадра для GPU-таймеров. Метка пишется после соответствующей фазы.
+    enum Gpu_Phase_Stamp {
+        kStampStart = 0,   // начало render_chunks
+        kStampPrepared,    // после prepare_gpu_frame: загрузка мешей, диспетчеризация мешера, culling
+        kStampOpaque,      // после непрозрачных кубов и блоков формы
+        kStampHiz,         // после пирамиды Hi-Z
+        kStampFlora,       // после флоры
+        kStampEnd,         // после мобов и жидкости
+        kStampCount
+    };
+    struct Gpu_Phase_Slot {
+        GLuint ids[kStampCount] = {};
+        bool pending = false;
+    };
+    static constexpr int kGpuPhaseSlots = 6;
+    // Световой объём ручки: 34 x 34 x 34 байта = 9826 слов (см. mesh_volume.comp).
+    static constexpr uint32_t kGpuVolumeWords = 9826u;
+    // Сумма за окно в одну секунду реального времени.
+    struct Gpu_Stats_Window {
+        double begin_time = -1.0;
+        uint32_t frames = 0;
+        double frame_ms = 0.0, frame_max_ms = 0.0;
+        double prepare_ms = 0.0, opaque_ms = 0.0, hiz_ms = 0.0, flora_ms = 0.0, liquid_ms = 0.0;
+        uint32_t mesher_batches = 0, mesher_chunks = 0;
+        double mesher_ms = 0.0, mesher_max_ms = 0.0;
+        // Последнее состояние планировщика мешера (сколько чанков ждёт загрузки и какой был размер батча).
+        uint32_t pending_chunks = 0, last_batch_chunks = 0;
+        // Батч: сколько чанков прошли световым путём (квады не пересобирались) и сколько — полным.
+        uint32_t light_chunks = 0, full_chunks = 0;
     };
     // Свободные участки пула (в блоках): начало -> длина. Соседние участки сливаются при освобождении.
     struct Gpu_Pool_Allocator {
@@ -252,7 +294,11 @@ private:
     Shader* m_gpu_terrain_shader_ptr = nullptr;   // непрозрачные кубы
     Shader* m_gpu_misc_shader_ptr = nullptr;      // блоки формы, флора, жидкость
     int m_gpu_loc_greedy_chunk_count = -1;
+    int m_gpu_loc_greedy_bake_all = -1;
     int m_gpu_loc_misc_chunk_count = -1;
+    unsigned int m_gpu_volume_program = 0;     // mesh_volume.comp: световые объёмы ручек
+    int m_gpu_loc_volume_chunk_count = -1;
+    unsigned int m_gpu_volume_ssbo = 0;        // объёмы всех ручек подряд: kGpuVolumeWords слов на ручку
     unsigned int m_gpu_section_vao = 0;     // VAO с одним атрибутом: baseInstance = ручка*4 + секция, делитель 1
     unsigned int m_gpu_section_ids_vbo = 0; // тождественные номера 0..4*capacity-1
     unsigned int m_gpu_lut_ssbo = 0;        // rect_lut[(id*6 + грань)*256 + метаданные]
@@ -314,6 +360,12 @@ private:
     std::vector<uint32_t> m_gpu_payload_cpu;
     std::vector<glm::uvec2> m_gpu_order_cpu; // legacy scratch retained for debug compatibility
     std::array<Gpu_Readback, kGpuReadbackRing> m_gpu_readbacks{};
+    std::array<Gpu_Phase_Slot, kGpuPhaseSlots> m_gpu_phase_slots{};
+    int m_gpu_phase_current = -1;   // слот, куда пишет текущий кадр (-1: кадр не измеряется)
+    int m_gpu_phase_write = 0;
+    Gpu_Stats_Window m_gpu_stats{};
+    // Скользящее среднее стоимости одного чанка в GPU-мешере (мс), 0 — замеров ещё не было.
+    float m_gpu_mesher_ms_per_chunk = 0.0f;
     int m_gpu_readback_head = 0;
     int m_gpu_readback_count = 0;
     std::array<Gpu_Frame_List, kGpuKindCount> m_gpu_lists{};

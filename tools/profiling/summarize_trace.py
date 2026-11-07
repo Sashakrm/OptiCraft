@@ -18,6 +18,7 @@ import argparse
 import collections
 import csv
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -37,6 +38,11 @@ MAIN_ZONES = {
     "sky_light_ms": "ChunkMgr::recompute_sky_lighting",
     "fluid_ms": "Fluid::update",
     "mobs_ms": "Mobs::update_frame",
+    # Подзоны постановки мешера (части enqueue_mesh_ms): где именно уходит время.
+    "enq_snapshot_ms": "enqueue: snapshot of own grids",
+    "enq_faces_ms": "enqueue: 6 neighbour faces",
+    "enq_ring_ms": "enqueue: ring (AO edges+corners)",
+    "enq_push_ms": "enqueue: push job + wake workers",
 }
 WORKER_ZONES = {
     "gen_ms": "Gen::generate_prepared_chunk_impl",
@@ -45,6 +51,17 @@ COUNT_ZONES = {
     "chunks_applied": "apply: insert chunk into table",
     "gen_chunks": "Gen::generate_prepared_chunk_impl",
 }
+# Строки "[GPUSTAT] ..." из game.log: GPU-время по фазам кадра и мешера (Renderer::poll_gpu_phase_timers).
+# Значения с суффиксом _ms складываются по секундам, *_max_ms берётся максимумом, остальные — последнее значение.
+GPU_SUM_KEYS = ["gpu_frame_ms", "gpu_prepare_ms", "gpu_mesher_ms", "mesher_batches", "mesher_chunks",
+                "gpu_opaque_ms", "gpu_hiz_ms", "gpu_flora_ms", "gpu_liquid_ms"]
+GPU_MAX_KEYS = ["gpu_frame_max_ms", "gpu_mesher_max_ms"]
+GPU_LAST_KEYS = ["ms_per_chunk", "pending_chunks", "batch_chunks"]
+GPU_COLS = ["gpu_frame_ms", "gpu_frame_max_ms", "gpu_prepare_ms", "gpu_mesher_ms", "gpu_mesher_max_ms",
+            "mesher_batches", "mesher_chunks", "ms_per_chunk", "gpu_opaque_ms", "gpu_hiz_ms", "gpu_flora_ms",
+            "gpu_liquid_ms", "pending_chunks", "batch_chunks"]
+GPUSTAT_RE = re.compile(r"\[GPUSTAT\]\s+(.*)")
+GPUSTAT_KV = re.compile(r"(\w+)=(-?[\d.]+)")
 FRAME_ZONE = "Frame"
 TOP_LEVEL = ("App::render (state render)", "App::update (state update)",
              "App::handle_input", "Frame tail: GPU present (swap)", "Frame tail: window events (poll)")
@@ -68,11 +85,29 @@ def read_events(csvexport, trace):
     proc.wait()
 
 
+def read_gpustat(path):
+    """Строки [GPUSTAT] из game.log: список словарей (frame — номер кадра главного цикла)."""
+    rows = []
+    if path is None or not pathlib.Path(path).is_file():
+        return rows
+    text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+    for line in text.replace("\r", "\n").split("\n"):
+        m = GPUSTAT_RE.search(line)
+        if not m:
+            continue
+        kv = {k: float(v) for k, v in GPUSTAT_KV.findall(m.group(1))}
+        if "frame" in kv:
+            rows.append(kv)
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace", type=pathlib.Path)
     ap.add_argument("--csvexport", default="tracy-csvexport")
     ap.add_argument("--out", type=pathlib.Path, default=None)
+    ap.add_argument("--gamelog", type=pathlib.Path, default=None,
+                    help="game.log с строками [GPUSTAT] — добавляет в таблицу колонки GPU-времени")
     args = ap.parse_args()
 
     trace = args.trace.resolve()
@@ -90,7 +125,7 @@ def main():
     first_ns = None
     last_ns = 0
 
-    all_names = set(MAIN_ZONES.values()) | set(WORKER_ZONES.values()) | {FRAME_ZONE}
+    all_names = set(MAIN_ZONES.values()) | set(WORKER_ZONES.values()) | set(COUNT_ZONES.values()) | {FRAME_ZONE}
     # Два прохода не нужны: сначала узнаём главный поток по зоне Frame из потока-кандидата.
     buffered = []
     for name, start, dur, thread in read_events(args.csvexport, trace):
@@ -130,8 +165,29 @@ def main():
     n_sec = (last_ns - base) // 1_000_000_000 + 1
     cols = ["t_s", "frames", "frame_avg_ms", "frame_max_ms", "render_ms", "update_ms", "input_ms",
             "present_ms", "mesher_ms", "draw_ms", "hiz_ms", "player_pos_ms", "enqueue_mesh_ms",
+            "enq_snapshot_ms", "enq_faces_ms", "enq_ring_ms", "enq_push_ms",
             "collect_chunks_ms", "light_scan_ms", "sky_light_ms", "fluid_ms", "mobs_ms",
             "chunks_applied", "gen_chunks", "gen_ms"]
+
+    # GPU-время из game.log: строку [GPUSTAT] относим к той секунде записи, где начался кадр с номером frame=.
+    gpu_per_sec = collections.defaultdict(dict)
+    gpu_lines = read_gpustat(args.gamelog)
+    if gpu_lines and frames:
+        frame_starts = sorted(start for start, _ in frames)
+        for kv in gpu_lines:
+            idx = min(int(kv["frame"]), len(frame_starts) - 1)
+            sec = (frame_starts[idx] - base) // 1_000_000_000
+            acc = gpu_per_sec[sec]
+            for k in GPU_SUM_KEYS:
+                if k in kv:
+                    acc[k] = acc.get(k, 0.0) + kv[k]
+            for k in GPU_MAX_KEYS:
+                if k in kv:
+                    acc[k] = max(acc.get(k, 0.0), kv[k])
+            for k in GPU_LAST_KEYS:
+                if k in kv:
+                    acc[k] = kv[k]
+        cols += GPU_COLS
     rows = []
     for s in range(int(n_sec)):
         d = per_sec.get(s, {})
@@ -145,6 +201,10 @@ def main():
         row["chunks_applied"] = c.get("chunks_applied", 0)
         row["gen_chunks"] = c.get("gen_chunks", 0)
         row["gen_ms"] = round(d.get("gen_ms", 0), 1)
+        if gpu_per_sec:
+            g = gpu_per_sec.get(s, {})
+            for k in GPU_COLS:
+                row[k] = round(g.get(k, 0), 2) if k == "ms_per_chunk" else round(g.get(k, 0), 1)
         rows.append(row)
 
     csv_path = out_dir / f"{stem}_per_second.csv"

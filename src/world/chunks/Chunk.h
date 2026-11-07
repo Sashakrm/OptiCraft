@@ -173,6 +173,12 @@ struct Chunk_Meshes {
     uint8_t lod_stride = 1;
     // Снимок области захвата (изометрия): отрицательные грани не строятся — рисуются только +X/+Y/+Z.
     bool positive_faces_only = false;
+    // Версия геометрии: глобально уникальный номер снимка блоков, по которому построены квады на видеокарте
+    // (Chunk::allocate_geometry_version). 0 — геометрии нет.
+    uint64_t geometry_version = 0;
+    // true — задача пересобрала только свет: блоки совпадают с geometry_version, квады на видеокарте не
+    // пересоздаются, обновляется лишь световой объём ручки (см. Renderer::submit_gpu_batch).
+    bool light_only = false;
     // Полезная нагрузка для видеокарты (палитры и битово упакованные значения каналов).
     // mutable: Renderer забирает её при загрузке в GPU и очищает, поэтому после отправки
     // она не держится в RAM.
@@ -422,6 +428,42 @@ public:
         for (auto& b : m_data) b &= 0x0Fu;
     }
 
+    // Устанавливает прямой небесный свет сразу для всего чанка, не трогая нижний
+    // полубайт блочного света. Возвращает true только если хотя бы один воксель изменился.
+    bool fill_sky(uint8_t level, std::array<bool, 6>* changed_faces = nullptr) {
+        level &= 0x0Fu;
+        const uint8_t sky_bits = static_cast<uint8_t>(level << 4);
+        if (m_data.empty()) {
+            const uint8_t next = static_cast<uint8_t>((m_uniform & 0x0Fu) | sky_bits);
+            if (next == m_uniform) return false;
+            m_uniform = next;
+            if (changed_faces) changed_faces->fill(true);
+            return true;
+        }
+        bool changed = false;
+        constexpr size_t layer = static_cast<size_t>(Config::chunk_size) * Config::chunk_size;
+        for (size_t i = 0; i < m_data.size(); ++i) {
+            uint8_t& value = m_data[i];
+            const uint8_t next = static_cast<uint8_t>((value & 0x0Fu) | sky_bits);
+            if (next != value) {
+                changed = true;
+                if (changed_faces) {
+                    const size_t x = i % Config::chunk_size;
+                    const size_t z = (i / Config::chunk_size) % Config::chunk_size;
+                    const size_t y = i / layer;
+                    if (x == 0) (*changed_faces)[0] = true;
+                    if (x == Config::chunk_size - 1) (*changed_faces)[1] = true;
+                    if (y == 0) (*changed_faces)[2] = true;
+                    if (y == Config::chunk_height - 1) (*changed_faces)[3] = true;
+                    if (z == 0) (*changed_faces)[4] = true;
+                    if (z == Config::chunk_size - 1) (*changed_faces)[5] = true;
+                }
+            }
+            value = next;
+        }
+        return changed;
+    }
+
     void fill(uint8_t level) {
         level &= 0x0Fu;
         m_uniform = static_cast<uint8_t>(level | (level << 4));
@@ -528,6 +570,10 @@ private:
     Chunk_Block_Grid m_blocks;
     Chunk_Light_Grid m_block_light; // packed: low nibble block light, high nibble sky light
     std::array<int, Config::chunk_height> m_layer_block_count{};
+    // Локальная карта высот: индекс z*chunk_size+x хранит максимальный Y непрозрачного
+    // для солнечного света блока внутри чанка; -1 означает, что в колонке таких блоков нет.
+    // Она строится при генерации/загрузке и обновляется O(1) при обычной правке блока.
+    std::array<int8_t, Config::chunk_size * Config::chunk_size> m_column_top_opaque{};
 
     const World_Generator* m_world_generator = nullptr;
     Dimension_Id m_dimension = Dimension_Id::Overworld;
@@ -536,6 +582,9 @@ private:
 
     Chunk_Meshes m_meshes;
     bool m_is_mesh_dirty = true;
+    // Геометрия (блоки, метаданные, первый меш) требует полной пересборки. Если сброшен, а m_is_mesh_dirty
+    // поднят, пересобрать достаточно световой объём (см. mark_light_dirty).
+    bool m_geometry_dirty = true;
     static inline std::atomic<uint64_t> s_dirty_events{0};
     // Растёт при каждой пометке грязности (см. mark_mesh_dirty): задача пересборки запоминает его
     // на моменте снимка, и если к её применению он вырос, правка легла уже после снимка.
@@ -576,6 +625,16 @@ public:
         m_layer_block_count = counts;
     }
     void recalculate_metadata();
+    void recalculate_column_heightmap();
+    int get_column_top_opaque(int x, int z) const {
+        if (x < 0 || x >= Config::chunk_size || z < 0 || z >= Config::chunk_size) return -1;
+        return m_column_top_opaque[static_cast<size_t>(z) * Config::chunk_size + x];
+    }
+    // Bulk direct-sunlight update used by the column heightmap pass.
+    bool set_all_sky_light(uint8_t level, std::array<bool, 6>& changed_faces) {
+        changed_faces.fill(false);
+        return m_block_light.fill_sky(level, &changed_faces);
+    }
     void apply_mesh(Chunk_Meshes meshes);
     void touch_mesh_version();
 
@@ -612,12 +671,34 @@ public:
         m_view_generation = generation;
     }
     bool is_mesh_dirty() const { return m_is_mesh_dirty; }
+    // Грязность по геометрии (блоки менялись) в отличие от одного света.
+    bool is_geometry_dirty() const { return m_geometry_dirty; }
+    // Грязен только свет: геометрия нетронута и можно пересобрать лишь световой объём.
+    bool is_light_only_dirty() const { return m_is_mesh_dirty && !m_geometry_dirty; }
+    static uint64_t allocate_geometry_version();
     bool is_modified() const { return m_is_modified; }
     // Вызывать для изменений, выполненных пакетно или в обход Chunk::set_block/set_meta.
     void mark_modified() { m_is_modified = true; }
     // Сбрасывает признак пользовательской правки при создании или загрузке исходного состояния.
     void clear_modified() { m_is_modified = false; }
-    void mark_mesh_dirty() {
+    // Геометрия изменилась. light_reason = true — полная пересборка вызвана светом (блочный свет запечён
+    // в квады либо откат): геометрию блоков это не меняет, но флаг грязности поднимаем, чтобы задача прошла.
+    void mark_mesh_dirty(bool light_reason = false) {
+        m_is_mesh_dirty = true;
+        if (!light_reason) m_geometry_dirty = true;
+        ++m_dirty_epoch;
+        s_dirty_events.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Свет изменился. Ближний чанк с одной солид-геометрией пересобирает только световой объём: квады не
+    // трогаем. Иначе свет запечён в квады (дальний LOD, чанк с жидкостью/флорой/формами, откат) — полная пересборка.
+    void mark_light_dirty() {
+        const bool volume_path = Config::gpu_light_volume && m_meshes.lod_stride == 1 &&
+                                 (m_meshes.gpu_kinds & static_cast<uint8_t>(~1u)) == 0u &&
+                                 m_meshes.geometry_version != 0u;
+        if (!volume_path) {
+            mark_mesh_dirty(true);
+            return;
+        }
         m_is_mesh_dirty = true;
         ++m_dirty_epoch;
         s_dirty_events.fetch_add(1, std::memory_order_relaxed);

@@ -21,6 +21,9 @@
 
 namespace {
     std::atomic<uint64_t> g_mesh_version_counter{0};
+    // Номера версий геометрии уникальны на весь процесс (не привязаны к чанку): выгрузили и загрузили заново —
+    // новый объект получает новый номер, и видеокарта не примет старые квады за актуальные.
+    std::atomic<uint64_t> g_geometry_version_counter{0};
     // Номер объекта чанка (см. Chunk::get_instance_id). Начинается с 1: 0 значит «не привязано к объекту».
     std::atomic<uint64_t> g_chunk_instance_counter{0};
     // Счётчик изменений связности (см. current_connectivity_epoch).
@@ -195,25 +198,68 @@ Chunk::Chunk(int chunk_x, int chunk_y, int chunk_z, const World_Generator& gener
     // и загрузили заново — позиция та же, а результат задачи, снятой для старого объекта, применять нельзя.
     m_instance_id = ++g_chunk_instance_counter;
     m_dimension = generator.get_dimension_id();
+    m_column_top_opaque.fill(-1);
 }
 
 void Chunk::recalculate_metadata() {
     m_layer_block_count.fill(0);
+    m_column_top_opaque.fill(-1);
     if (m_blocks.is_uniform()) {
-        if (m_blocks.uniform_block() != Block_Types::Air) {
+        const Block_ID id = static_cast<Block_ID>(m_blocks.uniform_block());
+        if (id != static_cast<Block_ID>(Block_Types::Air)) {
             m_layer_block_count.fill(Config::chunk_size * Config::chunk_size);
+        }
+        if (!Block_Registry::get_instance().sky_transparent_table()[id]) {
+            m_column_top_opaque.fill(static_cast<int8_t>(Config::chunk_height - 1));
         }
         return;
     }
-    std::vector<Block_ID> flat(Chunk_Block_Grid::voxel_count);
+
+    static thread_local std::array<Block_ID, Chunk_Block_Grid::voxel_count> flat;
     m_blocks.unpack(flat.data());
-    constexpr size_t layer = static_cast<size_t>(Config::chunk_size) * Config::chunk_size;
+    const bool* sky_transparent = Block_Registry::get_instance().sky_transparent_table();
+    constexpr int layer = Config::chunk_size * Config::chunk_size;
     const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
     for (int y = 0; y < Config::chunk_height; ++y) {
         const Block_ID* row = flat.data() + static_cast<size_t>(y) * layer;
         int count = 0;
-        for (size_t i = 0; i < layer; ++i) count += (row[i] != air);
+        for (int i = 0; i < layer; ++i) count += (row[i] != air);
         m_layer_block_count[y] = count;
+    }
+    for (int y = Config::chunk_height - 1; y >= 0; --y) {
+        const size_t base = static_cast<size_t>(y) * layer;
+        for (size_t column = 0; column < static_cast<size_t>(layer); ++column) {
+            if (m_column_top_opaque[column] >= 0) continue;
+            if (!sky_transparent[flat[base + column]]) m_column_top_opaque[column] = static_cast<int8_t>(y);
+        }
+    }
+}
+
+// Строит карту высот одним последовательным проходом по распакованной сетке. В отличие
+// от поиска неба для каждого вокселя, это делается один раз при генерации/загрузке чанка.
+void Chunk::recalculate_column_heightmap() {
+    m_column_top_opaque.fill(-1);
+    if (m_blocks.is_uniform()) {
+        const Block_ID id = static_cast<Block_ID>(m_blocks.uniform_block());
+        if (!Block_Registry::get_instance().sky_transparent_table()[id]) {
+            m_column_top_opaque.fill(static_cast<int8_t>(Config::chunk_height - 1));
+        }
+        return;
+    }
+
+    static thread_local std::array<Block_ID, Chunk_Block_Grid::voxel_count> flat;
+    m_blocks.unpack(flat.data());
+    const bool* sky_transparent = Block_Registry::get_instance().sky_transparent_table();
+    constexpr int layer = Config::chunk_size * Config::chunk_size;
+    for (int y = Config::chunk_height - 1; y >= 0; --y) {
+        const size_t base = static_cast<size_t>(y) * layer;
+        for (int z = 0; z < Config::chunk_size; ++z) {
+            for (int x = 0; x < Config::chunk_size; ++x) {
+                const size_t column = static_cast<size_t>(z) * Config::chunk_size + x;
+                if (m_column_top_opaque[column] >= 0) continue;
+                if (!sky_transparent[flat[base + column]]) m_column_top_opaque[column] = static_cast<int8_t>(y);
+            }
+        }
     }
 }
 
@@ -262,6 +308,7 @@ void Chunk::finish_generation(bool already_known_air, bool layer_metadata_precom
     // Декорации меняют сетку через set() — выкидываем ставшие ненужными записи палитры.
     m_blocks.compact();
     if (!layer_metadata_precomputed) recalculate_metadata();
+    else recalculate_column_heightmap();
     m_is_modified = false;
 }
 
@@ -955,10 +1002,15 @@ bool block_occludes_view(Block_Types type) {
     return id < static_cast<size_t>(k_max_block_types) && mesh_tables().occludes[id] != 0;
 }
 
+uint64_t Chunk::allocate_geometry_version() {
+    return ++g_geometry_version_counter;
+}
+
 void Chunk::apply_mesh(Chunk_Meshes meshes) {
     if (!same_connectivity(m_meshes, meshes)) g_connectivity_epoch.fetch_add(1, std::memory_order_relaxed);
     m_meshes = std::move(meshes);
     m_is_mesh_dirty = false;
+    m_geometry_dirty = false;
     m_mesh_version = ++g_mesh_version_counter;
 }
 
@@ -1013,6 +1065,24 @@ void Chunk::set_block(int x, int y, int z, Block_Types type) {
     const bool now_air = (type == Block_Types::Air);
     if (was_air && !now_air) ++m_layer_block_count[y];
     else if (!was_air && now_air) --m_layer_block_count[y];
+
+    const bool* sky_transparent = Block_Registry::get_instance().sky_transparent_table();
+    const bool was_opaque = !sky_transparent[static_cast<Block_ID>(slot)];
+    const bool now_opaque = !sky_transparent[static_cast<Block_ID>(type)];
+    const size_t column = static_cast<size_t>(z) * Config::chunk_size + x;
+    int8_t& column_top = m_column_top_opaque[column];
+    if (!was_opaque && now_opaque) {
+        if (y > column_top) column_top = static_cast<int8_t>(y);
+    } else if (was_opaque && !now_opaque && y == column_top) {
+        // Удалён верхний блок колонны: ищем следующий только внутри этих 32 слоёв.
+        column_top = -1;
+        for (int scan_y = y - 1; scan_y >= 0; --scan_y) {
+            if (!sky_transparent[static_cast<Block_ID>(m_blocks.get(x, scan_y, z))]) {
+                column_top = static_cast<int8_t>(scan_y);
+                break;
+            }
+        }
+    }
 
     m_blocks.set(x, y, z, type);
     mark_mesh_dirty();
