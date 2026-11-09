@@ -675,7 +675,8 @@
         "top": "glow_berry",
         "side": "glow_berry",
         "bottom": "glow_berry"
-      }
+      },
+      "light_emission": 12
     },
     {
       "id": 36,
@@ -3547,6 +3548,1862 @@
         "top": "red_sand",
         "side": "red_sand",
         "bottom": "red_sand"
+      }
+    },
+    {
+      "id": 166,
+      "name": "Beech Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "beech_log_top",
+        "side": "beech_log_side",
+        "bottom": "beech_log_top"
+      }
+    },
+    {
+      "id": 167,
+      "name": "Beech Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Beech Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "beech_leaves",
+        "side": "beech_leaves",
+        "bottom": "beech_leaves"
+      }
+    },
+    {
+      "id": 201,
+      "name": "Beech Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "beech_planks",
+        "side": "beech_planks",
+        "bottom": "beech_planks"
+      }
+    },
+    {
+      "id": 209,
+      "name": "Beech Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "beech_sapling",
+        "side": "beech_sapling",
+        "bottom": "beech_sapling"
+      }
+    },
+    {
+      "id": 168,
+      "name": "Redwood Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "redwood_log_top",
+        "side": "redwood_log_side",
+        "bottom": "redwood_log_top"
+      }
+    },
+    {
+      "id": 169,
+      "name": "Redwood Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Redwood Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "redwood_leaves",
+        "side": "redwood_leaves",
+        "bottom": "redwood_leaves"
+      }
+    },
+    {
+      "id": 202,
+      "name": "Redwood Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "redwood_planks",
+        "side": "redwood_planks",
+        "bottom": "redwood_planks"
+      }
+    },
+    {
+      "id": 210,
+      "name": "Redwood Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "redwood_sapling",
+        "side": "redwood_sapling",
+        "bottom": "redwood_sapling"
+      }
+    },
+    {
+      "id": 170,
+      "name": "Mangrove Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_log_top",
+        "side": "mangrove_log_side",
+        "bottom": "mangrove_log_top"
+      }
+    },
+    {
+      "id": 171,
+      "name": "Mangrove Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Mangrove Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_leaves",
+        "side": "mangrove_leaves",
+        "bottom": "mangrove_leaves"
+      }
+    },
+    {
+      "id": 203,
+      "name": "Mangrove Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_planks",
+        "side": "mangrove_planks",
+        "bottom": "mangrove_planks"
+      }
+    },
+    {
+      "id": 211,
+      "name": "Mangrove Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_sapling",
+        "side": "mangrove_sapling",
+        "bottom": "mangrove_sapling"
+      }
+    },
+    {
+      "id": 172,
+      "name": "Willow Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "willow_log_top",
+        "side": "willow_log_side",
+        "bottom": "willow_log_top"
+      }
+    },
+    {
+      "id": 173,
+      "name": "Willow Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Willow Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "willow_leaves",
+        "side": "willow_leaves",
+        "bottom": "willow_leaves"
+      }
+    },
+    {
+      "id": 204,
+      "name": "Willow Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "willow_planks",
+        "side": "willow_planks",
+        "bottom": "willow_planks"
+      }
+    },
+    {
+      "id": 212,
+      "name": "Willow Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "willow_sapling",
+        "side": "willow_sapling",
+        "bottom": "willow_sapling"
+      }
+    },
+    {
+      "id": 174,
+      "name": "Skywood Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "skywood_log_top",
+        "side": "skywood_log_side",
+        "bottom": "skywood_log_top"
+      }
+    },
+    {
+      "id": 175,
+      "name": "Skywood Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Skywood Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "skywood_leaves",
+        "side": "skywood_leaves",
+        "bottom": "skywood_leaves"
+      }
+    },
+    {
+      "id": 205,
+      "name": "Skywood Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "skywood_planks",
+        "side": "skywood_planks",
+        "bottom": "skywood_planks"
+      }
+    },
+    {
+      "id": 213,
+      "name": "Skywood Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "skywood_sapling",
+        "side": "skywood_sapling",
+        "bottom": "skywood_sapling"
+      }
+    },
+    {
+      "id": 176,
+      "name": "Glowwood Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glowwood_log_top",
+        "side": "glowwood_log_side",
+        "bottom": "glowwood_log_top"
+      }
+    },
+    {
+      "id": 177,
+      "name": "Glowwood Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Glowwood Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glowwood_leaves",
+        "side": "glowwood_leaves",
+        "bottom": "glowwood_leaves"
+      },
+      "light_emission": 5
+    },
+    {
+      "id": 206,
+      "name": "Glowwood Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glowwood_planks",
+        "side": "glowwood_planks",
+        "bottom": "glowwood_planks"
+      }
+    },
+    {
+      "id": 214,
+      "name": "Glowwood Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glowwood_sapling",
+        "side": "glowwood_sapling",
+        "bottom": "glowwood_sapling"
+      }
+    },
+    {
+      "id": 178,
+      "name": "Baobab Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "baobab_log_top",
+        "side": "baobab_log_side",
+        "bottom": "baobab_log_top"
+      }
+    },
+    {
+      "id": 179,
+      "name": "Baobab Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Baobab Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "baobab_leaves",
+        "side": "baobab_leaves",
+        "bottom": "baobab_leaves"
+      }
+    },
+    {
+      "id": 207,
+      "name": "Baobab Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "baobab_planks",
+        "side": "baobab_planks",
+        "bottom": "baobab_planks"
+      }
+    },
+    {
+      "id": 215,
+      "name": "Baobab Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "baobab_sapling",
+        "side": "baobab_sapling",
+        "bottom": "baobab_sapling"
+      }
+    },
+    {
+      "id": 180,
+      "name": "Palm Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "palm_log_top",
+        "side": "palm_log_side",
+        "bottom": "palm_log_top"
+      }
+    },
+    {
+      "id": 181,
+      "name": "Palm Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Palm Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "palm_leaves",
+        "side": "palm_leaves",
+        "bottom": "palm_leaves"
+      }
+    },
+    {
+      "id": 208,
+      "name": "Palm Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "palm_planks",
+        "side": "palm_planks",
+        "bottom": "palm_planks"
+      }
+    },
+    {
+      "id": 216,
+      "name": "Palm Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "palm_sapling",
+        "side": "palm_sapling",
+        "bottom": "palm_sapling"
+      }
+    },
+    {
+      "id": 217,
+      "name": "Cherry Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 2.2,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cherry_log_top",
+        "side": "cherry_log_side",
+        "bottom": "cherry_log_top"
+      }
+    },
+    {
+      "id": 218,
+      "name": "Cherry Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.2,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Cherry Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cherry_leaves",
+        "side": "cherry_leaves",
+        "bottom": "cherry_leaves"
+      }
+    },
+    {
+      "id": 219,
+      "name": "Cherry Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cherry_planks",
+        "side": "cherry_planks",
+        "bottom": "cherry_planks"
+      }
+    },
+    {
+      "id": 220,
+      "name": "Cherry Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cherry_sapling",
+        "side": "cherry_sapling",
+        "bottom": "cherry_sapling"
+      }
+    },
+    {
+      "id": 182,
+      "name": "Kelp",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "kelp",
+        "side": "kelp",
+        "bottom": "kelp"
+      }
+    },
+    {
+      "id": 183,
+      "name": "Sea Grass",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "sea_grass",
+        "side": "sea_grass",
+        "bottom": "sea_grass"
+      }
+    },
+    {
+      "id": 184,
+      "name": "Brain Coral",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "coral_brain",
+        "side": "coral_brain",
+        "bottom": "coral_brain"
+      }
+    },
+    {
+      "id": 185,
+      "name": "Branch Coral",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "coral_branch",
+        "side": "coral_branch",
+        "bottom": "coral_branch"
+      }
+    },
+    {
+      "id": 186,
+      "name": "Tube Coral",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "coral_tube",
+        "side": "coral_tube",
+        "bottom": "coral_tube"
+      }
+    },
+    {
+      "id": 187,
+      "name": "Coral Fan",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "coral_fan",
+        "side": "coral_fan",
+        "bottom": "coral_fan"
+      }
+    },
+    {
+      "id": 188,
+      "name": "Sea Anemone",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "sea_anemone",
+        "side": "sea_anemone",
+        "bottom": "sea_anemone"
+      },
+      "light_emission": 2
+    },
+    {
+      "id": 189,
+      "name": "Cattail",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cattail",
+        "side": "cattail",
+        "bottom": "cattail"
+      }
+    },
+    {
+      "id": 190,
+      "name": "Reed",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "reed",
+        "side": "reed",
+        "bottom": "reed"
+      }
+    },
+    {
+      "id": 191,
+      "name": "Cactus",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cactus",
+        "side": "cactus",
+        "bottom": "cactus"
+      }
+    },
+    {
+      "id": 192,
+      "name": "Dry Bush",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "dry_bush",
+        "side": "dry_bush",
+        "bottom": "dry_bush"
+      }
+    },
+    {
+      "id": 193,
+      "name": "Glow Bloom",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glow_bloom",
+        "side": "glow_bloom",
+        "bottom": "glow_bloom"
+      },
+      "light_emission": 13
+    },
+    {
+      "id": 194,
+      "name": "Sky Vine",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "sky_vine",
+        "side": "sky_vine",
+        "bottom": "sky_vine"
+      }
+    },
+    {
+      "id": 195,
+      "name": "Sky Flower",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "sky_flower",
+        "side": "sky_flower",
+        "bottom": "sky_flower"
+      },
+      "light_emission": 2
+    },
+    {
+      "id": 196,
+      "name": "Mangrove Root",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 1.5,
+      "blast_resistance": 2.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_root",
+        "side": "mangrove_root",
+        "bottom": "mangrove_root"
+      },
+      "effective_tool": "axe",
+      "drop": "self"
+    },
+    {
+      "id": 197,
+      "name": "Bog Grass",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "bog_grass",
+        "side": "bog_grass",
+        "bottom": "bog_grass"
+      }
+    },
+    {
+      "id": 198,
+      "name": "Blue Orchid",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "blue_orchid",
+        "side": "blue_orchid",
+        "bottom": "blue_orchid"
+      }
+    },
+    {
+      "id": 199,
+      "name": "Dead Bush",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "dead_bush",
+        "side": "dead_bush",
+        "bottom": "dead_bush"
+      }
+    },
+    {
+      "id": 200,
+      "name": "Wildflower",
+      "solid": false,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "wildflower",
+        "side": "wildflower",
+        "bottom": "wildflower"
+      }
+    },
+    {
+      "id": 221,
+      "name": "Aspen Log",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.2,
+      "blast_resistance": 4.4,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "orientation": "axis",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "aspen_log_top",
+        "side": "aspen_log_side",
+        "bottom": "aspen_log_top"
+      }
+    },
+    {
+      "id": 222,
+      "name": "Aspen Leaves",
+      "solid": true,
+      "opaque": false,
+      "can_update": true,
+      "hardness": 0.2,
+      "blast_resistance": 0.4,
+      "mesh_type": "Flora",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "drop": "Aspen Sapling",
+      "drop_chance": 0.045,
+      "drop_count": 1,
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "aspen_leaves",
+        "side": "aspen_leaves",
+        "bottom": "aspen_leaves"
+      }
+    },
+    {
+      "id": 223,
+      "name": "Aspen Planks",
+      "solid": true,
+      "opaque": true,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 4.0,
+      "mesh_type": "Solid",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "effective_tool": "axe",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "aspen_planks",
+        "side": "aspen_planks",
+        "bottom": "aspen_planks"
+      }
+    },
+    {
+      "id": 224,
+      "name": "Aspen Sapling",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "can_update": false,
+      "hardness": 0.0,
+      "blast_resistance": 0.0,
+      "mesh_type": "Flora",
+      "mesh_style": "XStyle",
+      "state": "Solid",
+      "drop": "self",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "aspen_sapling",
+        "side": "aspen_sapling",
+        "bottom": "aspen_sapling"
+      }
+    },
+    {
+      "id": 225,
+      "name": "Oak Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "oak_planks",
+        "side": "oak_planks",
+        "bottom": "oak_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 226,
+      "name": "Oak Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "oak_planks",
+        "side": "oak_planks",
+        "bottom": "oak_planks"
+      }
+    },
+    {
+      "id": 227,
+      "name": "Birch Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "birch_planks",
+        "side": "birch_planks",
+        "bottom": "birch_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 228,
+      "name": "Birch Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "birch_planks",
+        "side": "birch_planks",
+        "bottom": "birch_planks"
+      }
+    },
+    {
+      "id": 229,
+      "name": "Spruce Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "spruce_planks",
+        "side": "spruce_planks",
+        "bottom": "spruce_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 230,
+      "name": "Spruce Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "spruce_planks",
+        "side": "spruce_planks",
+        "bottom": "spruce_planks"
+      }
+    },
+    {
+      "id": 231,
+      "name": "Jungle Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "jungle_planks",
+        "side": "jungle_planks",
+        "bottom": "jungle_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 232,
+      "name": "Jungle Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "jungle_planks",
+        "side": "jungle_planks",
+        "bottom": "jungle_planks"
+      }
+    },
+    {
+      "id": 233,
+      "name": "Acacia Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "acacia_planks",
+        "side": "acacia_planks",
+        "bottom": "acacia_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 234,
+      "name": "Acacia Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "acacia_planks",
+        "side": "acacia_planks",
+        "bottom": "acacia_planks"
+      }
+    },
+    {
+      "id": 235,
+      "name": "Slimewood Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "slimewood_planks",
+        "side": "slimewood_planks",
+        "bottom": "slimewood_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 236,
+      "name": "Slimewood Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "slimewood_planks",
+        "side": "slimewood_planks",
+        "bottom": "slimewood_planks"
+      }
+    },
+    {
+      "id": 237,
+      "name": "Beech Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "beech_planks",
+        "side": "beech_planks",
+        "bottom": "beech_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 238,
+      "name": "Beech Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "beech_planks",
+        "side": "beech_planks",
+        "bottom": "beech_planks"
+      }
+    },
+    {
+      "id": 239,
+      "name": "Redwood Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "redwood_planks",
+        "side": "redwood_planks",
+        "bottom": "redwood_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 240,
+      "name": "Redwood Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "redwood_planks",
+        "side": "redwood_planks",
+        "bottom": "redwood_planks"
+      }
+    },
+    {
+      "id": 241,
+      "name": "Mangrove Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_planks",
+        "side": "mangrove_planks",
+        "bottom": "mangrove_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 242,
+      "name": "Mangrove Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "mangrove_planks",
+        "side": "mangrove_planks",
+        "bottom": "mangrove_planks"
+      }
+    },
+    {
+      "id": 243,
+      "name": "Willow Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "willow_planks",
+        "side": "willow_planks",
+        "bottom": "willow_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 244,
+      "name": "Willow Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "willow_planks",
+        "side": "willow_planks",
+        "bottom": "willow_planks"
+      }
+    },
+    {
+      "id": 245,
+      "name": "Skywood Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "skywood_planks",
+        "side": "skywood_planks",
+        "bottom": "skywood_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 246,
+      "name": "Skywood Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "skywood_planks",
+        "side": "skywood_planks",
+        "bottom": "skywood_planks"
+      }
+    },
+    {
+      "id": 247,
+      "name": "Glowwood Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glowwood_planks",
+        "side": "glowwood_planks",
+        "bottom": "glowwood_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 248,
+      "name": "Glowwood Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "glowwood_planks",
+        "side": "glowwood_planks",
+        "bottom": "glowwood_planks"
+      }
+    },
+    {
+      "id": 249,
+      "name": "Baobab Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "baobab_planks",
+        "side": "baobab_planks",
+        "bottom": "baobab_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 250,
+      "name": "Baobab Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "baobab_planks",
+        "side": "baobab_planks",
+        "bottom": "baobab_planks"
+      }
+    },
+    {
+      "id": 251,
+      "name": "Palm Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "palm_planks",
+        "side": "palm_planks",
+        "bottom": "palm_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 252,
+      "name": "Palm Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "palm_planks",
+        "side": "palm_planks",
+        "bottom": "palm_planks"
+      }
+    },
+    {
+      "id": 253,
+      "name": "Cherry Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cherry_planks",
+        "side": "cherry_planks",
+        "bottom": "cherry_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 254,
+      "name": "Cherry Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "cherry_planks",
+        "side": "cherry_planks",
+        "bottom": "cherry_planks"
+      }
+    },
+    {
+      "id": 255,
+      "name": "Aspen Stairs",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "stairs",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "aspen_planks",
+        "side": "aspen_planks",
+        "bottom": "aspen_planks"
+      },
+      "orientation": "facing"
+    },
+    {
+      "id": 256,
+      "name": "Aspen Slab",
+      "solid": true,
+      "opaque": false,
+      "can_update": false,
+      "hardness": 2.0,
+      "blast_resistance": 3,
+      "mesh_type": "Shaped",
+      "mesh_style": "Block",
+      "state": "Solid",
+      "shape": "slab",
+      "drop": "self",
+      "effective_tool": "axe",
+      "texture": {
+        "atlas": "blocks_main",
+        "top": "aspen_planks",
+        "side": "aspen_planks",
+        "bottom": "aspen_planks"
       }
     }
   ]

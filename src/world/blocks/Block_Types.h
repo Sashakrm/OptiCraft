@@ -167,10 +167,61 @@ enum class Block_Types : Block_ID {
 
     // Мантийный камень: нижний слой мира, нельзя сломать и взорвать (аналог бедрока).
     Mantle_Stone = 165,
-    // Динамит: взрывается по сигналу красной логики (соседний включённый узел).
-    Dynamite = 8,            // раньше зарезервированный id; динамит, взрывается по сигналу красной логики
+    // Дополнительные виды древесины для новых природных зон.
+    Beech_Log = 166, Beech_Leaves = 167,
+    Redwood_Log = 168, Redwood_Leaves = 169,
+    Mangrove_Log = 170, Mangrove_Leaves = 171,
+    Willow_Log = 172, Willow_Leaves = 173,
+    Skywood_Log = 174, Skywood_Leaves = 175,
+    Glowwood_Log = 176, Glowwood_Leaves = 177,
+    Baobab_Log = 178, Baobab_Leaves = 179,
+    Palm_Log = 180, Palm_Leaves = 181,
+    Cherry_Log = 217, Cherry_Leaves = 218,
+    Aspen_Log = 221, Aspen_Leaves = 222,
 
-    Count = 167
+    // Морские, болотные, пустынные и небесные растения.
+    Kelp = 182, Sea_Grass = 183,
+    Coral_Brain = 184, Coral_Branch = 185, Coral_Tube = 186, Coral_Fan = 187,
+    Sea_Anemone = 188, Cattail = 189, Reed = 190,
+    Cactus = 191, Dry_Bush = 192,
+    Glow_Bloom = 193, Sky_Vine = 194, Sky_Flower = 195,
+    Mangrove_Root = 196, Bog_Grass = 197, Blue_Orchid = 198,
+    Dead_Bush = 199, Wildflower = 200,
+
+    // Доски каждого нового вида дерева: полноценные предметы для строительных рецептов.
+    Beech_Planks = 201, Redwood_Planks = 202, Mangrove_Planks = 203,
+    Willow_Planks = 204, Skywood_Planks = 205, Glowwood_Planks = 206,
+    Baobab_Planks = 207, Palm_Planks = 208, Cherry_Planks = 219,
+    Aspen_Planks = 223,
+
+    // Саженцы новых пород: их рост обслуживает Sapling_Manager.
+    Beech_Sapling = 209, Redwood_Sapling = 210, Mangrove_Sapling = 211,
+    Willow_Sapling = 212, Skywood_Sapling = 213, Glowwood_Sapling = 214,
+    Baobab_Sapling = 215, Palm_Sapling = 216, Cherry_Sapling = 220,
+    Aspen_Sapling = 224,
+
+    // Деревянные ступеньки и полублоки всех 16 пород (IDs 225..256).
+    Oak_Stairs = 225, Oak_Slab = 226,
+    Birch_Stairs = 227, Birch_Slab = 228,
+    Spruce_Stairs = 229, Spruce_Slab = 230,
+    Jungle_Stairs = 231, Jungle_Slab = 232,
+    Acacia_Stairs = 233, Acacia_Slab = 234,
+    Slimewood_Stairs = 235, Slimewood_Slab = 236,
+    Beech_Stairs = 237, Beech_Slab = 238,
+    Redwood_Stairs = 239, Redwood_Slab = 240,
+    Mangrove_Stairs = 241, Mangrove_Slab = 242,
+    Willow_Stairs = 243, Willow_Slab = 244,
+    Skywood_Stairs = 245, Skywood_Slab = 246,
+    Glowwood_Stairs = 247, Glowwood_Slab = 248,
+    Baobab_Stairs = 249, Baobab_Slab = 250,
+    Palm_Stairs = 251, Palm_Slab = 252,
+    Cherry_Stairs = 253, Cherry_Slab = 254,
+    Aspen_Stairs = 255, Aspen_Slab = 256,
+
+    // Динамит: взрывается по сигналу красной логики (соседний включённый узел).
+    Dynamite = 8,
+
+    Count = 257
 };
 
 // Максимальная ёмкость реестра блоков: данные из blocks.json могут занимать любые id в этом

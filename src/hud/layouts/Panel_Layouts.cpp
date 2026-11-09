@@ -10,13 +10,16 @@ namespace Panel_Layouts {
         // --- инвентарь: Creative ---
         // Сверху палитра блоков (3 ряда по 9), под ней листалка страниц, ниже — тот же
         // хранилище + хотбар, что и в Survival: предметы из палитры попадают в них.
-        constexpr float k_creative_height = 166.0f;
+        constexpr float k_creative_height = 174.0f;
         constexpr float k_creative_palette_y = 18.0f;
-        constexpr float k_creative_storage_y = 84.0f;
-        constexpr float k_creative_hotbar_y = 142.0f;
-        constexpr glm::vec2 k_creative_page_prev{8.0f, 76.0f};
-        constexpr glm::vec2 k_creative_page_next{154.0f, 76.0f};
-        constexpr glm::vec2 k_creative_page_text{88.0f, 79.0f};
+        // Отдельная строка листания теперь помещается между палитрой и хранилищем:
+        // кнопки не накрывают верхние слоты первой строки.
+        constexpr float k_creative_storage_y = 92.0f;
+        constexpr float k_creative_hotbar_y = 150.0f;
+        constexpr glm::vec2 k_creative_page_prev{8.0f, 72.0f};
+        constexpr glm::vec2 k_creative_page_next{152.0f, 72.0f};
+        // Верх текста: центр строки совпадает с центром квадратных кнопок 16x16.
+        constexpr glm::vec2 k_creative_page_text{88.0f, 76.0f};
 
         // --- инвентарь: Survival ---
         constexpr float k_survival_height = 166.0f;

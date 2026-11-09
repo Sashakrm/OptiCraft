@@ -118,7 +118,8 @@ void main() {
     }
 
     // Block-space reveal keeps the exact positions shared by neighboring chunks.
-    float appear = clamp((time - chunk_origin.w) / max(appearDuration, 0.05), 0.0, 1.0);
+    float appear = chunk_origin.w < 0.0 ? 1.0
+        : clamp((time - chunk_origin.w) / max(appearDuration, 0.05), 0.0, 1.0);
     Appearance = appear * appear * (3.0 - 2.0 * appear);
 
     Local = tc_param;

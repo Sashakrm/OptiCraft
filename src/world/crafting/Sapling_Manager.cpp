@@ -27,6 +27,16 @@ namespace {
             case Block_Types::Jungle_Leaves:
             case Block_Types::Acacia_Leaves:
             case Block_Types::Slimewood_Leaves:
+            case Block_Types::Beech_Leaves:
+            case Block_Types::Redwood_Leaves:
+            case Block_Types::Mangrove_Leaves:
+            case Block_Types::Willow_Leaves:
+            case Block_Types::Skywood_Leaves:
+            case Block_Types::Glowwood_Leaves:
+            case Block_Types::Baobab_Leaves:
+            case Block_Types::Palm_Leaves:
+            case Block_Types::Cherry_Leaves:
+            case Block_Types::Aspen_Leaves:
                 return true;
             default:
                 break;
@@ -55,6 +65,16 @@ namespace {
             case Block_Types::Jungle_Sapling:    return Tree_Type::Jungle;
             case Block_Types::Acacia_Sapling:    return Tree_Type::Acacia;
             case Block_Types::Slimewood_Sapling: return Tree_Type::Slimewood;
+            case Block_Types::Beech_Sapling:     return Tree_Type::Beech;
+            case Block_Types::Redwood_Sapling:   return Tree_Type::Redwood;
+            case Block_Types::Mangrove_Sapling:  return Tree_Type::Mangrove;
+            case Block_Types::Willow_Sapling:    return Tree_Type::Willow;
+            case Block_Types::Skywood_Sapling:   return Tree_Type::Skywood;
+            case Block_Types::Glowwood_Sapling:  return Tree_Type::Glowwood;
+            case Block_Types::Baobab_Sapling:    return Tree_Type::Baobab;
+            case Block_Types::Palm_Sapling:      return Tree_Type::Palm;
+            case Block_Types::Cherry_Sapling:    return Tree_Type::Cherry;
+            case Block_Types::Aspen_Sapling:     return Tree_Type::Aspen;
             default:                             return Tree_Type::Spruce;
         }
     }
@@ -68,6 +88,16 @@ bool Sapling_Manager::is_sapling(Block_Types type) {
         case Block_Types::Jungle_Sapling:
         case Block_Types::Acacia_Sapling:
         case Block_Types::Slimewood_Sapling:
+        case Block_Types::Beech_Sapling:
+        case Block_Types::Redwood_Sapling:
+        case Block_Types::Mangrove_Sapling:
+        case Block_Types::Willow_Sapling:
+        case Block_Types::Skywood_Sapling:
+        case Block_Types::Glowwood_Sapling:
+        case Block_Types::Baobab_Sapling:
+        case Block_Types::Palm_Sapling:
+        case Block_Types::Cherry_Sapling:
+        case Block_Types::Aspen_Sapling:
             return true;
         default:
             return false;
@@ -77,7 +107,9 @@ bool Sapling_Manager::is_sapling(Block_Types type) {
 Sapling_Manager::Sapling_Manager() : m_rng(std::random_device{}()) {}
 
 bool Sapling_Manager::can_grow_on(Block_Types ground) {
-    return ground == Block_Types::Grass || ground == Block_Types::Dirt;
+    return ground == Block_Types::Grass || ground == Block_Types::Dirt ||
+           ground == Block_Types::Mud || ground == Block_Types::Sand ||
+           ground == Block_Types::Cloud_Stone || ground == Block_Types::Mossy_Stone;
 }
 
 std::vector<glm::ivec3> Sapling_Manager::cells_of(const glm::ivec3& origin, int size) {

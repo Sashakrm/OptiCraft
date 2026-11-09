@@ -94,7 +94,8 @@ namespace {
         islands.terrain = Terrain_Mode::Noise;
         islands.caves = false;
         islands.ground = false;
-        islands.decorations = false;
+        // На небесных островах растут skywood, цветы и свисающие лианы.
+        islands.decorations = true;
         islands.sky_islands = true;
         islands.single_biome = true;
 

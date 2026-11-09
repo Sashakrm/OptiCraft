@@ -174,12 +174,25 @@ void main() {
             const uint meta = read_channel(hb, 1u, uint((y * 32 + z) * 32 + x));
             const uvec2 index = shape_index[shape * 256u + meta];
             for (uint b = 0u; b < index.x; ++b) {
-                const uvec2 box = shape_boxes[index.y + b];
+                uvec2 box = shape_boxes[index.y + b];
                 const int lo[3] = int[3](int(box.x & 127u), int((box.x >> 7u) & 127u), int((box.x >> 14u) & 127u));
                 const int hi[3] = int[3](int((box.x >> 21u) & 127u), int(box.y & 127u), int((box.y >> 7u) & 127u));
                 for (int f = 0; f < 6; ++f) {                       // +X, -X, +Y, -Y, +Z, -Z
                     const int axis = f >> 1;
                     const bool pos = (f & 1) == 0;
+                    // Stairs consist of two touching boxes. Suppress the hidden underside
+                    // of the upper box, and split the lower box's top so its exposed half
+                    // remains visible. Otherwise coplanar faces z-fight and appear striped.
+                    if (shape == 2u && b == 1u && axis == 1 && !pos) continue;
+                    uvec2 face_box = box;
+                    if (shape == 2u && b == 0u && axis == 1 && pos) {
+                        // meta: north(-Z)=0, east(+X)=1, south(+Z)=2, west(-X)=3.
+                        const uint facing = meta & 3u;
+                        if (facing == 0u) face_box.x = (face_box.x & ~(127u << 14u)) | (32u << 14u); // lo.z
+                        else if (facing == 2u) face_box.x = (face_box.x & ~(127u << 21u)) | (32u << 21u); // hi.z
+                        else if (facing == 1u) face_box.x = (face_box.x & ~(127u << 21u)) | (32u << 21u); // hi.x
+                        else face_box.x = (face_box.x & ~127u) | 32u; // lo.x
+                    }
                     // Грань лежит на стенке клетки, а за стенкой полный непрозрачный куб — не рисуем.
                     const bool on_boundary = pos ? (hi[axis] >= 64) : (lo[axis] <= 0);
                     ivec3 n = cell;
@@ -188,7 +201,7 @@ void main() {
                     if (on_boundary && nid != 0u && (block_flags[nid] & FLAG_SHAPE_CULLS) != 0u) continue;
                     const uint rect = rect_lut[(id * 6u + uint(f)) * 256u] & 0x7FFFu;
                     const uint light = light_at(hb, n.x, n.y, n.z);
-                    emit(handle, KIND_SHAPED, sec, make_rec(x, y, z, uint(f), light, rect, box.x, box.y));
+                    emit(handle, KIND_SHAPED, sec, make_rec(x, y, z, uint(f), light, rect, face_box.x, face_box.y));
                 }
             }
             continue;

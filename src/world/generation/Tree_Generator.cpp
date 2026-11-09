@@ -67,6 +67,15 @@ void Tree_Generator::place_tree(Tree_Type type, int x, int y, int z,
         case Tree_Type::Spruce:    place_spruce_tree(x, y, z, setter, rng); break;
         case Tree_Type::Jungle:    place_jungle_tree(x, y, z, setter, rng); break;
         case Tree_Type::Slimewood: place_slimewood_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Beech:     place_beech_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Redwood:   place_redwood_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Mangrove:  place_mangrove_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Willow:   place_willow_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Skywood:  place_skywood_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Glowwood: place_glowwood_cave_tree(x, z, y, y + 24, setter, rng); break;
+        case Tree_Type::Baobab:   place_baobab_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Cherry:   place_cherry_tree(x, y, z, setter, rng); break;
+        case Tree_Type::Aspen:    place_aspen_tree(x, y, z, setter, rng); break;
     }
 }
 
@@ -281,7 +290,7 @@ void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, F
     int cx = x;
     for (int i = 1; i <= h; ++i) {
         if (i == h / 3 || i == (2 * h) / 3) cx += bend;
-        setter(cx, y + i, z, Block_Types::Oak_Log);
+        setter(cx, y + i, z, Block_Types::Palm_Log);
     }
 
     const int top_y = y + h + 1;
@@ -293,11 +302,11 @@ void Tree_Generator::place_palm_tree(int x, int y, int z, Block_Setter setter, F
         for (int j = 1; j <= 4; ++j) {
             const int px = cx + static_cast<int>(std::round(std::cos(a) * j));
             const int pz = z  + static_cast<int>(std::round(std::sin(a) * j));
-            setter(px, top_y - (j > 2 ? 1 : 0), pz, Block_Types::Oak_Leaf);
+            setter(px, top_y - (j > 2 ? 1 : 0), pz, Block_Types::Palm_Leaves);
         }
-        setter(cx + fx, top_y - 1, z + fz, Block_Types::Oak_Leaf);
+        setter(cx + fx, top_y - 1, z + fz, Block_Types::Palm_Leaves);
     }
-    setter(cx, top_y, z, Block_Types::Oak_Leaf);
+    setter(cx, top_y, z, Block_Types::Palm_Leaves);
 }
 
 // Slimewood: chunky, twisted trunk and a glowing-looking asymmetric crown.
@@ -378,4 +387,256 @@ void Tree_Generator::place_slimewood_tree(int x, int y, int z, Block_Setter sett
 
     for (const Placed& p : leaves) setter(p.x, p.y, p.z, p.type);
     for (const Placed& p : logs) setter(p.x, p.y, p.z, p.type);
+}
+
+
+// Буковое дерево: широкая плотная куполообразная крона и несколько коротких боковых ветвей.
+void Tree_Generator::place_beech_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(8, 12), rd(3, 4), shift(-1, 1);
+    const int h = hd(rng);
+    const int canopy_shift = shift(rng);
+    for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Beech_Log);
+    for (int d = 0; d < 4; ++d) {
+        const int dx = (d == 0) - (d == 1);
+        const int dz = (d == 2) - (d == 3);
+        const int len = 2 + (d & 1);
+        for (int i = 1; i <= len; ++i)
+            setter(x + dx * i, y + h - 3 + i / 3, z + dz * i, Block_Types::Beech_Log);
+    }
+    const int radius = rd(rng);
+    for (int dy = -2; dy <= 2; ++dy) {
+        const int r = std::max(1, radius - (std::abs(dy) == 2 ? 1 : 0));
+        for (int dx = -r; dx <= r; ++dx) for (int dz = -r; dz <= r; ++dz) {
+            if (dx * dx + dz * dz > r * r + 1) continue;
+            if (dy == -2 && (dx + dz) % 3 == 0) continue;
+            setter(x + canopy_shift + dx, y + h + dy, z + dz, Block_Types::Beech_Leaves);
+        }
+    }
+}
+
+
+// Редвуд: гигантский прямой ствол, четыре широких яруса ветвей и верхняя плоская крона.
+void Tree_Generator::place_redwood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(24, 32), radius_dist(4, 6);
+    const int h = hd(rng);
+    const int base = (h > 28) ? 1 : 0;
+    for (int dy = 1; dy <= h; ++dy) {
+        for (int dx = -base; dx <= base; ++dx)
+            for (int dz = -base; dz <= base; ++dz)
+                setter(x + dx, y + dy, z + dz, Block_Types::Redwood_Log);
+    }
+    for (int tier = 0; tier < 4; ++tier) {
+        const int level = h - 7 + tier * 2;
+        const int radius = radius_dist(rng) - (tier == 3 ? 1 : 0);
+        disk(setter, x, y + level, z, radius, Block_Types::Redwood_Leaves);
+        for (int d = 0; d < 4; ++d) {
+            const int dx = (d == 0) - (d == 1);
+            const int dz = (d == 2) - (d == 3);
+            const int len = radius - 1;
+            for (int i = 1; i <= len; ++i)
+                setter(x + dx * i, y + level + i / 4, z + dz * i, Block_Types::Redwood_Log);
+            disk(setter, x + dx * len, y + level + 1, z + dz * len,
+                 std::max(2, radius - 1), Block_Types::Redwood_Leaves);
+        }
+    }
+    disk(setter, x, y + h, z, 3, Block_Types::Redwood_Leaves);
+}
+
+// Мангровое дерево: ствол над водой, расходящиеся опорные корни и компактная зелёная крона.
+void Tree_Generator::place_mangrove_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(7, 10), root_len(2, 4), crown(3, 4);
+    const int h = hd(rng);
+    for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Mangrove_Log);
+    constexpr int dxs[8] = {1,-1,0,0,1,1,-1,-1};
+    constexpr int dzs[8] = {0,0,1,-1,1,-1,1,-1};
+    for (int d = 0; d < 8; ++d) {
+        const int len = root_len(rng);
+        for (int i = 1; i <= len; ++i) {
+            const int py = y + std::max(0, 3 - i / 2);
+            setter(x + dxs[d] * i, py, z + dzs[d] * i, Block_Types::Mangrove_Root);
+        }
+    }
+    disk(setter, x, y + h, z, crown(rng), Block_Types::Mangrove_Leaves);
+    for (int d = 0; d < 4; ++d) {
+        const int dx = (d == 0) - (d == 1);
+        const int dz = (d == 2) - (d == 3);
+        setter(x + dx * 2, y + h - 1, z + dz * 2, Block_Types::Mangrove_Log);
+        for (int j = 0; j < 3; ++j)
+            setter(x + dx * 3, y + h - 2 - j, z + dz * 3, Block_Types::Mangrove_Leaves);
+    }
+}
+
+// Ива: ветви поднимаются наружу, после чего тонкие побеги свисают ниже кроны.
+void Tree_Generator::place_willow_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(7, 10), len_dist(3, 5), hang_dist(4, 7);
+    const int h = hd(rng);
+    for (int i = 1; i <= h; ++i) setter(x, y + i, z, Block_Types::Willow_Log);
+    constexpr int dxs[4] = {1,0,-1,0}, dzs[4] = {0,1,0,-1};
+    for (int d = 0; d < 4; ++d) {
+        const int len = len_dist(rng);
+        int ex = x, ez = z, ey = y + h - 2;
+        for (int i = 1; i <= len; ++i) {
+            ex += dxs[d]; ez += dzs[d];
+            if (i % 2 == 0) ++ey;
+            setter(ex, ey, ez, Block_Types::Willow_Log);
+        }
+        const int hang = hang_dist(rng);
+        for (int j = 0; j <= hang; ++j) {
+            setter(ex, ey - j, ez, Block_Types::Willow_Leaves);
+            if ((j & 1) == 0) {
+                setter(ex + dxs[d], ey - j, ez + dzs[d], Block_Types::Willow_Leaves);
+                setter(ex - dzs[d], ey - j, ez + dxs[d], Block_Types::Willow_Leaves);
+            }
+        }
+    }
+    disk(setter, x, y + h + 1, z, 2, Block_Types::Willow_Leaves);
+}
+
+// Небесное дерево: изогнутый ствол, облачная крона и свисающие побеги.
+void Tree_Generator::place_skywood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(8, 13), bend(-1, 1), rd(3, 5);
+    const int h = hd(rng);
+    int cx = x, cz = z;
+    for (int i = 1; i <= h; ++i) {
+        if (i % 4 == 0) { cx += bend(rng); cz += bend(rng); }
+        setter(cx, y + i, cz, Block_Types::Skywood_Log);
+    }
+    const int r = rd(rng);
+    for (int dy = -2; dy <= 2; ++dy) {
+        const int layer = std::max(1, r - (std::abs(dy) == 2 ? 2 : 0));
+        for (int dx = -layer; dx <= layer; ++dx)
+            for (int dz = -layer; dz <= layer; ++dz)
+                if (dx * dx + dz * dz <= layer * layer + 1)
+                    setter(cx + dx, y + h + dy, cz + dz, Block_Types::Skywood_Leaves);
+    }
+    for (int d = 0; d < 6; ++d) {
+        const double a = d * 1.0471975512;
+        const int dx = static_cast<int>(std::round(std::cos(a) * (r - 1)));
+        const int dz = static_cast<int>(std::round(std::sin(a) * (r - 1)));
+        for (int j = 1; j <= 4; ++j)
+            setter(cx + dx, y + h - 1 - j, cz + dz, Block_Types::Sky_Vine);
+    }
+}
+
+// Светящееся пещерное дерево: ствол тянется почти от пола до потолка, а ветви
+// образуют несколько ярусов биолюминесцентной кроны на всей высоте зала.
+void Tree_Generator::place_glowwood_cave_tree(int x, int z, int floor_y, int ceiling_y,
+                                               Block_Setter setter, Fast_Rng& rng) {
+    const int bottom = floor_y + 1;
+    const int top = ceiling_y - 1;
+    const int h = top - bottom + 1;
+    if (h < 8) return;
+    for (int y = bottom; y <= top; ++y) {
+        setter(x, y, z, Block_Types::Glowwood_Log);
+    }
+    // Короткие ветви распределены по всей длине ствола, чтобы растение занимало зал
+    // от пола до потолка, а не превращалось в обычную крону у верхушки.
+    const int stride = std::max(3, h / 5);
+    for (int level = bottom + 2, tier = 0; level < top - 1; level += stride, ++tier) {
+        const int reach = (tier % 2 == 0) ? 3 : 2;
+        for (int d = 0; d < 4; ++d) {
+            const int dx = (d == 0) - (d == 1);
+            const int dz = (d == 2) - (d == 3);
+            int bx = x, bz = z;
+            for (int i = 1; i <= reach; ++i) {
+                bx = x + dx * i; bz = z + dz * i;
+                setter(bx, level + (i > 2 ? 1 : 0), bz, Block_Types::Glowwood_Log);
+            }
+            for (int ox = -1; ox <= 1; ++ox) for (int oz = -1; oz <= 1; ++oz)
+                setter(bx + ox, level + 1, bz + oz, Block_Types::Glowwood_Leaves);
+            // Нити со светящимися плодами создают отдельные точки света по высоте комнаты.
+            const int hang = 1 + static_cast<int>(rng() % 4u);
+            for (int j = 1; j <= hang; ++j)
+                setter(bx, level - j, bz, j == hang ? Block_Types::Glow_Berry : Block_Types::Glowwood_Leaves);
+        }
+        if ((tier & 1) == 0) {
+            for (int dx = -1; dx <= 1; ++dx) for (int dz = -1; dz <= 1; ++dz)
+                setter(x + dx, level + 2, z + dz, Block_Types::Glowwood_Leaves);
+            setter(x, level + 2, z, Block_Types::Glow_Bloom);
+        }
+    }
+    // Верхушка также светится, но оставляет зазор до потолка и не ломает породу.
+    disk(setter, x, top - 1, z, 2, Block_Types::Glowwood_Leaves);
+    setter(x, top, z, Block_Types::Glow_Bloom);
+}
+
+// Баобаб: массивный бочкообразный ствол и небольшая разреженная крона высоко над ним.
+void Tree_Generator::place_baobab_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(7, 10), rdist(2, 3);
+    const int h = hd(rng);
+    for (int dy = 1; dy <= h; ++dy) {
+        const int r = (dy < 3) ? 2 : 1;
+        for (int dx = -r; dx <= r; ++dx) for (int dz = -r; dz <= r; ++dz)
+            if (dx * dx + dz * dz <= r * r + 1)
+                setter(x + dx, y + dy, z + dz, Block_Types::Baobab_Log);
+    }
+    const int r = rdist(rng);
+    disk(setter, x, y + h + 1, z, r, Block_Types::Baobab_Leaves);
+    for (int d = 0; d < 4; ++d) {
+        const int dx = (d == 0) - (d == 1);
+        const int dz = (d == 2) - (d == 3);
+        for (int i = 1; i <= 3; ++i)
+            setter(x + dx * i, y + h - 1 + i / 2, z + dz * i, Block_Types::Baobab_Log);
+    }
+}
+
+
+// Сакура: разветвлённый ствол и несколько розовых облаков цветения, разделённых воздухом.
+void Tree_Generator::place_cherry_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(7, 10), len(2, 4), radius(2, 3), bend(-1, 1);
+    const int h = hd(rng);
+    int tx = x, tz = z;
+    for (int i = 1; i <= h; ++i) {
+        if (i == h / 2 || i == (h * 3) / 4) { tx += bend(rng); tz += bend(rng); }
+        setter(tx, y + i, tz, Block_Types::Cherry_Log);
+    }
+    constexpr int dxs[4] = {1,0,-1,0}, dzs[4] = {0,1,0,-1};
+    for (int d = 0; d < 4; ++d) {
+        int ex = tx, ez = tz, ey = y + h - 2;
+        const int n = len(rng);
+        for (int i = 1; i <= n; ++i) {
+            ex += dxs[d]; ez += dzs[d];
+            if ((i & 1) == 0) ++ey;
+            setter(ex, ey, ez, Block_Types::Cherry_Log);
+        }
+        const int r = radius(rng);
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int ox = -r; ox <= r; ++ox)
+                for (int oz = -r; oz <= r; ++oz)
+                    if (ox * ox + oz * oz <= r * r + 1)
+                        setter(ex + ox, ey + dy, ez + oz, Block_Types::Cherry_Leaves);
+    }
+    disk(setter, tx, y + h + 1, tz, 3, Block_Types::Cherry_Leaves);
+}
+
+
+// Осина: высокая и сравнительно узкая крона, прямой светлый ствол и несколько
+// тонких ветвей. По силуэту заметно отличается от широкой берёзы и бука.
+void Tree_Generator::place_aspen_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng) {
+    std::uniform_int_distribution<int> hd(12, 17), branch_len(2, 3), crown_radius(2, 3);
+    const int h = hd(rng);
+    int cx = x, cz = z;
+    for (int dy = 1; dy <= h; ++dy) {
+        if (dy == h / 2 || dy == (h * 3) / 4) {
+            if ((rng() & 3u) == 0u) cx += (rng() & 1u) ? 1 : -1;
+            if ((rng() & 3u) == 0u) cz += (rng() & 1u) ? 1 : -1;
+        }
+        setter(cx, y + dy, cz, Block_Types::Aspen_Log);
+    }
+
+    constexpr int dxs[4] = {1, 0, -1, 0};
+    constexpr int dzs[4] = {0, 1, 0, -1};
+    for (int d = 0; d < 4; ++d) {
+        const int level = y + h - 3 - (d & 1) * 2;
+        const int len = branch_len(rng);
+        for (int i = 1; i <= len; ++i)
+            setter(cx + dxs[d] * i, level + i / 3, cz + dzs[d] * i, Block_Types::Aspen_Log);
+        const int r = crown_radius(rng);
+        disk(setter, cx + dxs[d] * len, level + 1, cz + dzs[d] * len, r, Block_Types::Aspen_Leaves);
+    }
+    // Верхняя крона вытянута по вертикали: три небольших слоя вместо широкого шара.
+    for (int dy = -1; dy <= 2; ++dy) {
+        const int r = (dy == -1 || dy == 2) ? 1 : 2;
+        disk(setter, cx, y + h + dy, cz, r, Block_Types::Aspen_Leaves);
+    }
 }

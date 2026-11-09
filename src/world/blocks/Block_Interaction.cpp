@@ -292,20 +292,33 @@ void Block_Interaction::update(float delta_time,
         return;
     }
 
-    // Creative: мгновенная поломка по клику, как и раньше.
-    if (!survival && input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) &&
-        !get_block_props(m_current_hit.block_type).unbreakable()) {
-        if (!chunk_manager.set_block_world(
-            m_current_hit.block_x,
-            m_current_hit.block_y,
-            m_current_hit.block_z,
-            Block_Types::Air
-        )) {
+    // Creative: мгновенно ломает любой блок, включая блоки с отрицательной прочностью,
+    // но не удаляет жидкости. Событие ниже очищает служебное состояние растений и логики,
+    // не создавая дроп — в Creative предметы из сломанных блоков не выпадают.
+    if (!survival && input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)) {
+        const Block_Properties& target_props = get_block_props(m_current_hit.block_type);
+        if (target_props.state == Block_State::Liquid) {
+            // Жидкость остаётся нетронутой; не запускаем повторное разрушение на следующем кадре.
+            m_action_cooldown = k_action_delay;
             return;
         }
+
+        const glm::ivec3 broken_pos(m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z);
+        const Block_Types broken_type = m_current_hit.block_type;
+        if (!chunk_manager.set_block_world(
+            broken_pos.x, broken_pos.y, broken_pos.z, Block_Types::Air)) {
+            return;
+        }
+
+        Broken_Block_Event event;
+        event.position = broken_pos;
+        event.type = broken_type;
+        event.harvested = false;
+        event.allow_drops = false;
+        m_broken_blocks.push_back(std::move(event));
+
         invalidate_chunk_and_neighbors(
-            m_current_hit.block_x, m_current_hit.block_y, m_current_hit.block_z,
-            chunk_manager, renderer);
+            broken_pos.x, broken_pos.y, broken_pos.z, chunk_manager, renderer);
         m_action_cooldown = k_action_delay;
         m_current_hit.hit = false;
         return;

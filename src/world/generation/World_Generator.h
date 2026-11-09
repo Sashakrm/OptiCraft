@@ -47,6 +47,23 @@ enum class Biome_Id : uint8_t {
     Underground,
     Deep_Underground,
     Flooded_Underground,
+    // Реалистичные дополнительные наземные и морские экосистемы.
+    Temperate_Rainforest,
+    Swamp,
+    Mangrove_Swamp,
+    Cherry_Grove,
+    Beech_Forest,
+    Aspen_Grove,
+    Meadow,
+    Shrubland,
+    Badlands,
+    Cold_Desert,
+    Snowy_Taiga,
+    Alpine_Meadow,
+    Cold_Ocean,
+    Warm_Ocean,
+    Coral_Reef,
+    Mushroom_Fields,
     Count
 };
 
@@ -221,24 +238,6 @@ private:
                                       size_t index, Chunk_Block_Grid& output,
                                       Chunk* owner) const;
 
-    struct Biome_Definition {
-        Biome_Id id = Biome_Id::Plains;
-        const char* name = "";
-
-        double min_temperature = -1.0, max_temperature = 1.0;
-        double min_humidity = -1.0, max_humidity = 1.0;
-        double min_continentalness = -1.0, max_continentalness = 1.0;
-        double min_erosion = -1.0, max_erosion = 1.0;
-        double min_weirdness = -1.0, max_weirdness = 1.0;
-        double min_depth = -1.0, max_depth = 1.0;
-
-        double priority = 0.0;
-
-        bool requires_mountainness = false;
-        double min_mountainness = 0.0;
-        bool surface_candidate = false;   // участвует в обычном поиске по 6 измерениям
-    };
-
     OpenSimplexEnv* m_noise_environment = nullptr;
     Noise_Field m_temperature;
     Noise_Field m_humidity;
@@ -253,7 +252,6 @@ private:
     std::unique_ptr<River_Network> m_river_network;
     std::unique_ptr<Structure_Placement> m_structures;
 
-    std::vector<Biome_Definition> m_biomes;
     std::string m_generation_folder;
     const Dimension_Info* m_dimension;
     uint32_t m_seed;
@@ -296,9 +294,8 @@ private:
     bool sky_island_block(int world_x, int world_y, int world_z) const;
     bool sky_anchor_valid(int anchor_x, int anchor_z) const;
 
-    void register_default_biomes();
     Biome_Id surface_biome_for_column(const Column& column) const;
-    Biome_Id biome_at(const Column& column, int world_y, Cave_Kind cave) const;
+    Biome_Id biome_at(int world_x, int world_y, int world_z, const Column& column, Cave_Kind cave) const;
 
     Fast_Rng make_rng(int world_x, int world_z, int salt = 0) const;
     Block_Types surface_block_for(int world_x, int world_z, const Column& column) const;

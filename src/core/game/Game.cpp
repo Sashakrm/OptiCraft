@@ -186,15 +186,21 @@ void Game::run() {
             m_fps_frame_count = 0;
         }
 
-        m_input_ptr->update();
+        { OC_ZONE("Frame: input polling"); m_input_ptr->update(); }
         const double update_begin = glfwGetTime();
-        m_application_ptr->handle_input();
-        m_application_ptr->update(m_delta_time);
+        {
+            OC_ZONE("Frame: input and simulation");
+            m_application_ptr->handle_input();
+            m_application_ptr->update(m_delta_time);
+        }
         m_last_update_cpu_ms = static_cast<float>((glfwGetTime() - update_begin) * 1000.0);
 
         const double render_begin = glfwGetTime();
-        m_application_ptr->render();
+        { OC_ZONE("Frame: render submission"); m_application_ptr->render(); }
         m_last_render_cpu_ms = static_cast<float>((glfwGetTime() - render_begin) * 1000.0);
+        OC_PLOT("Frame CPU ms", raw_frame_ms);
+        OC_PLOT("Update CPU ms", m_last_update_cpu_ms);
+        OC_PLOT("Render CPU ms", m_last_render_cpu_ms);
 
         // Отладочный хук для автоматических скриншотов: если задана OPTICRAFT_SHOT_REQUEST и
         // такой файл существует, в нём лежит путь, куда сохранить кадр (PPM).
@@ -361,9 +367,12 @@ Hud_Inventory_Slot make_hud_slot(const Item_Stack& stack, bool infinite_stack = 
         durability = 1.0f - static_cast<float>(stack.damage) / static_cast<float>(max_durability);
     }
     Hud_Inventory_Slot slot{props.uv_icon, props.name, stack.count, false, durability};
-    // Обычные блоки показываем кубом с тремя гранями; предметы и «крестики» — плоско.
+    // В превью повторяем не только материал, но и базовую форму блока.
+    // Иначе shaped-блоки (например, ступеньки) ошибочно выглядели обычными кубами.
     if (!props.is_item && props.mesh_style == Block_Mesh_Style::Block) {
-        slot.as_cube = true;
+        slot.as_stairs = props.shape == Block_Shape::Stairs;
+        slot.as_slab = props.shape == Block_Shape::Slab;
+        slot.as_cube = props.shape == Block_Shape::None;
         slot.uv_cube_top = props.textures.top;
         slot.uv_cube_left = props.textures.has_front ? props.textures.front : props.textures.side;
         slot.uv_cube_right = props.textures.side;
@@ -684,6 +693,7 @@ bool Game::delete_world(const std::string& dir) {
 }
 
 bool Game::load_world(const std::string& dir) {
+    OC_ZONE("Game::load_world");
     if (is_world_loaded()) close_world();
 
     World_File file(fs::path(k_worlds_root) / dir / "world.json");
@@ -1400,26 +1410,31 @@ void Game::update_gameplay(float delta_time, bool simulation_active, bool player
     for (const Broken_Block_Event& event : m_block_interaction_ptr->take_broken_blocks()) {
         if (Crop_Manager::is_crop_block(event.type)) {
             if (m_crops_ptr) m_crops_ptr->remove(event.position);
-            handle_crop_harvest(event.position, event.type);
+            if (event.allow_drops) handle_crop_harvest(event.position, event.type);
             continue;
         }
         if (Sapling_Manager::is_sapling(event.type) && m_saplings_ptr) {
             m_saplings_ptr->remove(event.position);
         }
-        if (Game_Leaf_Sapling(event.type) != Block_Types::Air) {
+        if (event.allow_drops && Game_Leaf_Sapling(event.type) != Block_Types::Air) {
             handle_leaf_drops(event.position, event.type);
         }
-        // Руду без подходящей кирки разрушили впустую: падает только содержимое контейнера (если было).
-        m_dropped_items_ptr->spawn_block_drops(event.position,
-                                               event.harvested ? event.type : Block_Types::Air,
-                                               event.container_contents);
-        // Красная логика: узлы без опоры (сломали блок под ними) отрываются и падают предметом.
+        // Creative удаляет блоки без предметов; Survival учитывает пригодность инструмента
+        // и стандартное содержимое контейнеров.
+        if (event.allow_drops) {
+            m_dropped_items_ptr->spawn_block_drops(event.position,
+                                                   event.harvested ? event.type : Block_Types::Air,
+                                                   event.container_contents);
+        }
+        // Красная логика: узлы без опоры удаляются в обоих режимах, но в Creative не дропаются.
         auto logic_world = make_chunk_world(*m_chunk_manager_ptr);
         for (const glm::ivec3& node : Logic_Manager::nodes_without_support(logic_world, event.position)) {
             const Block_Types type = logic_world.type(node.x, node.y, node.z);
             set_block_at(node.x, node.y, node.z, Block_Types::Air);
             invalidate_block_mesh(node.x, node.y, node.z, *m_chunk_manager_ptr, *m_renderer_ptr);
-            m_dropped_items_ptr->spawn_block_drops(node, Logic_Manager::item_of(type), {});
+            if (event.allow_drops) {
+                m_dropped_items_ptr->spawn_block_drops(node, Logic_Manager::item_of(type), {});
+            }
         }
     }
 

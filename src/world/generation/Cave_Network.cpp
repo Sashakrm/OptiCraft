@@ -31,8 +31,11 @@ constexpr double kChamberChance = 0.012;  // зал на шаг после 20 ш
 constexpr double kBranchChance = 0.008;   // ответвление на шаг
 
 // ---- Закрытые пещеры ----------------------------------------------------------------------
-constexpr int kSealedCell = 96;
-constexpr int kSealedMargin = 24;     // центры камер до 20 блоков от края ячейки
+// Закрытые камеры размещаются в центрах крупных ячеек с небольшим джиттером.
+// Диаметр кластера ограничен 90 блоками, а центры соседей разделены минимум ~128 блоками:
+// даже самые крупные камеры и их боковые залы не соединяются друг с другом.
+constexpr int kSealedCell = 144;
+constexpr int kSealedMargin = 64;
 
 uint64_t splitmix(uint64_t v) {
     v += 0x9E3779B97F4A7C15ULL;
@@ -269,8 +272,10 @@ private:
         }
     }
 
-    // Закрытые пещеры: одна камера на ячейку с вероятностью 1/2. Внутри своей ячейки и
-    // запаса kSealedMargin; никогда не выше kSealedMaxY и не ниже kSealedMinY.
+    // Закрытые глубокие пещеры — отдельные большие комплексы. Каждый комплекс состоит
+    // из основной камеры и 2–3 примыкающих боковых залов. Это одна изолированная пещера,
+    // а не несколько независимых дыр: боковые камеры перекрываются с центральной.
+    // Соседние комплексы центрируются в разных ячейках с гарантированным запасом породы.
     void spawn_sealed() {
         const int cz0 = floordiv(m_region.z0 - kSealedMargin, kSealedCell);
         const int cz1 = floordiv(m_region.z0 + kRegion + kSealedMargin, kSealedCell);
@@ -281,24 +286,47 @@ private:
                 const uint64_t key = static_cast<uint64_t>(static_cast<int64_t>(cx)) * 83492791ULL ^
                                      static_cast<uint64_t>(static_cast<int64_t>(cz)) * 2971215073ULL;
                 Rng r(splitmix(static_cast<uint64_t>(m_seed) ^ 0x5EA1EDULL ^ key));
-                if (r.uni() > 0.5) continue;
-                const double cxw = cx * kSealedCell + r.range(0.0, kSealedCell);
-                const double czw = cz * kSealedCell + r.range(0.0, kSealedCell);
-                const double rxz = r.range(10.0, 20.0);
-                const double ry = r.range(7.0, 11.0);
+                if (r.uni() > 0.76) continue;
+
+                // Фиксированная середина ячейки плюс небольшой джиттер исключают
+                // случайное сближение центров камер на границе соседних ячеек.
+                const double cxw = cx * kSealedCell + kSealedCell * 0.5 + r.range(-8.0, 8.0);
+                const double czw = cz * kSealedCell + kSealedCell * 0.5 + r.range(-8.0, 8.0);
+                const double rxz = r.range(29.0, 38.0);
+                const double ry = r.range(14.0, 20.0);
                 const double cy = r.range(Cave_Network::kSealedMinY + ry + 2,
                                           Cave_Network::kSealedMaxY - ry - 1);
-                const bool flood = (cy - ry >= Cave_Network::kFloodFloorY) && r.uni() < 0.5;
+                const bool flood = (cy - ry >= Cave_Network::kFloodFloorY) && r.uni() < 0.55;
                 carve_sealed(cxw, cy, czw, rxz, ry, flood);
+
+                // Боковые залы образуют извилистую, но единую полость. Смещение всегда
+                // меньше суммы радиусов — поэтому каждый зал соединён с главным объёмом.
+                const int satellites = 2 + static_cast<int>(r.next() % 2u);
+                for (int i = 0; i < satellites; ++i) {
+                    const double angle = r.range(0.0, 6.28318530718);
+                    const double sat_rxz = r.range(14.0, 21.0);
+                    const double distance = rxz * 0.56 + sat_rxz * 0.28;
+                    const double sat_cx = cxw + std::cos(angle) * distance;
+                    const double sat_cz = czw + std::sin(angle) * distance;
+                    const double sat_ry = ry * r.range(0.62, 0.88);
+                    const double sat_cy = std::clamp(cy + r.range(-5.0, 5.0),
+                        Cave_Network::kSealedMinY + sat_ry + 2,
+                        Cave_Network::kSealedMaxY - sat_ry - 1);
+                    carve_sealed(sat_cx, sat_cy, sat_cz, sat_rxz, sat_ry, flood);
+                }
             }
         }
     }
 
+    // Каждая камера слегка деформирована горизонтальным шумом: вместо идеального
+    // эллипсоида получаются карманы, выступы и узкие перешейки. Шум вычисляется раз на
+    // колонку X/Z, поэтому форма неровная без дорогого 3D-шума на каждый воксель.
     void carve_sealed(double cx, double cy, double cz, double rxz, double ry, bool flood) {
-        const int xa = std::max(m_region.x0, static_cast<int>(std::floor(cx - rxz)));
-        const int xb = std::min(m_region.x0 + kRegion - 1, static_cast<int>(std::ceil(cx + rxz)));
-        const int za = std::max(m_region.z0, static_cast<int>(std::floor(cz - rxz)));
-        const int zb = std::min(m_region.z0 + kRegion - 1, static_cast<int>(std::ceil(cz + rxz)));
+        const double warp_margin = 1.10;
+        const int xa = std::max(m_region.x0, static_cast<int>(std::floor(cx - rxz * warp_margin)));
+        const int xb = std::min(m_region.x0 + kRegion - 1, static_cast<int>(std::ceil(cx + rxz * warp_margin)));
+        const int za = std::max(m_region.z0, static_cast<int>(std::floor(cz - rxz * warp_margin)));
+        const int zb = std::min(m_region.z0 + kRegion - 1, static_cast<int>(std::ceil(cz + rxz * warp_margin)));
         const int ya = std::max(Cave_Network::kSealedMinY, static_cast<int>(std::floor(cy - ry)));
         const int yb = std::min(Cave_Network::kSealedMaxY, static_cast<int>(std::ceil(cy + ry)));
         std::array<double, kSealedNY> dy_squared;
@@ -308,17 +336,22 @@ private:
         }
         constexpr size_t kPlane = static_cast<size_t>(kRegion) * kRegion;
         for (int wz = za; wz <= zb; ++wz) {
-            const double dz = (wz + 0.5 - cz) / rxz;
-            const double dz2 = dz * dz;
             const size_t row = static_cast<size_t>(wz - m_region.z0) * kRegion;
             for (int wx = xa; wx <= xb; ++wx) {
                 const double dx = (wx + 0.5 - cx) / rxz;
-                const double dx2 = dx * dx;
-                if (dx2 + dz2 > 1.0) continue;
+                const double dz = (wz + 0.5 - cz) / rxz;
+                const double horizontal = dx * dx + dz * dz;
+                if (horizontal > 1.21) continue;
+
+                const double n = ::noise2(m_env, m_grad, wx * 0.037 + cx * 0.001,
+                                           wz * 0.037 + cz * 0.001);
+                const double rough_limit = 0.91 + 0.13 * n;
+                const double local_vertical = 1.0 + 0.10 * n;
                 const size_t base = static_cast<size_t>(ya - Cave_Network::kSealedMinY) * kPlane +
                     row + static_cast<size_t>(wx - m_region.x0);
                 for (int y = ya; y <= yb; ++y) {
-                    if (dx2 + dy_squared[static_cast<size_t>(y - ya)] + dz2 > 1.0) continue;
+                    if (horizontal + dy_squared[static_cast<size_t>(y - ya)] /
+                                         (local_vertical * local_vertical) > rough_limit) continue;
                     const size_t i = base + static_cast<size_t>(y - ya) * kPlane;
                     set_bit(m_region.sealed, i);
                     if (flood) set_bit(m_region.flood, i);

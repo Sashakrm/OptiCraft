@@ -101,6 +101,20 @@ inline int floordiv_int(int a, int b) {
         return hash_position(x, z, seed, kTreeDensitySalt) % 100 < static_cast<uint64_t>(percent);
     }
 
+    // Один воспроизводимый якорь на ячейку. Используется морскими рифами, пещерными
+    // лесами и небесными островами: структура не зависит от порядка загрузки чанков.
+    bool is_grid_anchor(int x, int z, uint32_t seed, int cell, int jitter,
+                        int salt, int percent = 100) {
+        const int gx = floordiv_int(x, cell);
+        const int gz = floordiv_int(z, cell);
+        const uint64_t h = hash_position(gx, gz, seed, salt);
+        if (static_cast<int>((h >> 40) % 100u) >= percent) return false;
+        const int span = jitter * 2 + 1;
+        const int tx = gx * cell + cell / 2 + static_cast<int>((h >> 8) % span) - jitter;
+        const int tz = gz * cell + cell / 2 + static_cast<int>((h >> 24) % span) - jitter;
+        return x == tx && z == tz;
+    }
+
     double interval_distance(double value, double min_value, double max_value) {
         if (value < min_value) return min_value - value;
         if (value > max_value) return value - max_value;
@@ -119,7 +133,10 @@ inline int floordiv_int(int a, int b) {
         "Taiga", "Jungle", "Savanna", "Desert", "Stone Desert", "Steppe",
         "Tundra", "Ice Fields", "Mountains", "High Mountains", "Plateau",
         "Slime", "Solar", "Sky", "Underground", "Deep Underground",
-        "Flooded Underground"
+        "Flooded Underground", "Temperate Rainforest", "Swamp", "Mangrove Swamp",
+        "Cherry Grove", "Beech Forest", "Aspen Grove", "Meadow", "Shrubland",
+        "Badlands", "Cold Desert", "Snowy Taiga", "Alpine Meadow", "Cold Ocean",
+        "Warm Ocean", "Coral Reef", "Mushroom Fields"
     };
     static_assert(sizeof(kBiomeNames) / sizeof(kBiomeNames[0]) ==
                   static_cast<size_t>(Biome_Id::Count),
@@ -147,6 +164,11 @@ const std::vector<Biome_Id>& selectable_single_biomes() {
         Biome_Id::Jungle, Biome_Id::Savanna, Biome_Id::Desert, Biome_Id::Stone_Desert,
         Biome_Id::Steppe, Biome_Id::Tundra, Biome_Id::Ice_Fields, Biome_Id::Plateau,
         Biome_Id::Mountains, Biome_Id::High_Mountains,
+        Biome_Id::Temperate_Rainforest, Biome_Id::Swamp, Biome_Id::Mangrove_Swamp,
+        Biome_Id::Cherry_Grove, Biome_Id::Beech_Forest, Biome_Id::Aspen_Grove,
+        Biome_Id::Meadow, Biome_Id::Shrubland, Biome_Id::Badlands,
+        Biome_Id::Cold_Desert, Biome_Id::Snowy_Taiga, Biome_Id::Alpine_Meadow,
+        Biome_Id::Mushroom_Fields,
     };
     return list;
 }
@@ -165,7 +187,7 @@ namespace {
     constexpr size_t kTerrainCacheMask = kTerrainCacheSize - 1;
 
     // Максимальная высота структуры (дерева) над поверхностью: выше неё декорации чанк не затрагивают.
-    constexpr int kDecorationMaxHeight = 26;
+    constexpr int kDecorationMaxHeight = 44;
 
     constexpr size_t kColumnCacheBits = 13;              // 8192 колонки
     constexpr size_t kColumnCacheSize = 1u << kColumnCacheBits;
@@ -230,7 +252,6 @@ World_Generator::World_Generator(const std::string& generation_folder, uint32_t 
         seed, [this](int world_x, int world_z) { return get_height(world_x, world_z); },
         m_river_network.get(), kSeaLevel);
 
-    register_default_biomes();
 }
 
 World_Generator::~World_Generator() = default;
@@ -660,127 +681,114 @@ bool World_Generator::sky_island_block(int world_x, int world_y, int world_z) co
 }
 
 // ---------------------------------------------------------------------------
-//  Биомы
+//  Климатическая классификация биомов
 // ---------------------------------------------------------------------------
-void World_Generator::register_default_biomes() {
-    m_biomes.clear();
-
-    auto add = [this](Biome_Id id,
-                      double t0, double t1, double h0, double h1,
-                      double c0, double c1, double e0, double e1,
-                      double w0, double w1, double d0, double d1,
-                      double priority, bool surface_candidate) {
-        Biome_Definition b;
-        b.id = id;
-        b.name = biome_name(id);
-        b.min_temperature = t0; b.max_temperature = t1;
-        b.min_humidity = h0; b.max_humidity = h1;
-        b.min_continentalness = c0; b.max_continentalness = c1;
-        b.min_erosion = e0; b.max_erosion = e1;
-        b.min_weirdness = w0; b.max_weirdness = w1;
-        b.min_depth = d0; b.max_depth = d1;
-        b.priority = priority;
-        b.surface_candidate = surface_candidate;
-        m_biomes.push_back(b);
-    };
-
-    // Океан/мелководье/пляж выбираются по фактической высоте относительно моря (см.
-    // surface_biome_for_column), горные биомы — по рельефу. Остальные суша-биомы — это
-    // «точки» на плоскости температура/влажность (обе величины растянуты до равномерных
-    // 0..1, см. spread_noise), побеждает ближайшая. Раньше в поиск входили ещё
-    // континентальность и эрозия с узкими интервалами — в сумме это делало Desert,
-    // Ice Fields, Stone Desert и Jungle практически недостижимыми.
-    //
-    //                          T0   T1   H0   H1   C0   C1   E0   E1   W0   W1   D0  D1  prio
-    add(Biome_Id::Ice_Fields,    0.02,0.02, 0.67,0.67, -1,1, -1,1,  0,1, -1,1, 40, true);
-    add(Biome_Id::Tundra,        0.12,0.12, 0.05,0.05, -1,1, -1,1,  0,1, -1,1, 60, true);
-    add(Biome_Id::Taiga,         0.12,0.12, 0.67,0.67, -1,1, -1,1,  0,1, -1,1, 60, true);
-    add(Biome_Id::Plains,        0.30,0.30, 0.27,0.27, -1,1, -1,1,  0,1, -1,1, 50, true);
-    add(Biome_Id::Forest,        0.37,0.37, 0.83,0.83, -1,1, -1,1,  0,1, -1,1, 50, true);
-    add(Biome_Id::Birch_Forest,  0.70,0.70, 0.75,0.75, -1,1, -1,1,  0,1, -1,1, 45, true);
-    add(Biome_Id::Steppe,        0.80,0.80, 0.30,0.30, -1,1, -1,1,  0,1, -1,1, 55, true);
-    add(Biome_Id::Savanna,       0.80,0.80, 0.60,0.60, -1,1, -1,1,  0,1, -1,1, 40, true);
-    add(Biome_Id::Jungle,        0.76,0.76, 0.86,0.86, -1,1, -1,1,  0,1, -1,1, 35, true);
-    // Две пустыни делят один угол T/H и различаются «странностью» (weirdness).
-    add(Biome_Id::Desert,        0.85,0.85, 0.20,0.20, -1,1, -1,1,  0,.52, -1,1, 70, true);
-    add(Biome_Id::Stone_Desert,  0.85,0.85, 0.20,0.20, -1,1, -1,1, .52,1, -1,1, 45, true);
-
-    // Горные биомы в поиск по T/H не входят: их задаёт сам рельеф.
-    add(Biome_Id::Mountains,     .40,.40, .50,.50, .30,.80, .85,.85, .50,.50, -1,1, 65, false);
-    add(Biome_Id::High_Mountains,.20,.20, .45,.45, .40,.90, .90,.90, .50,.50, -1,1, 55, false);
-    add(Biome_Id::Plateau,       .55,.55, .30,.30, .50,1.0, .75,.75, .50,.50, -1,1, 40, false);
-}
-
 // Биом поверхности колонки. Вода/пляж определяются ВЫСОТОЙ относительно уровня
 // моря, а не континентальностью: раньше вода наливалась при C < -0.11, а рельеф
 // притягивался к морю при C < 0.06, из-за чего между ними оставалась сухая
 // плоская полка, а сам "Beach" оказывался под водой.
 Biome_Id World_Generator::surface_biome_for_column(const Column& column) const {
     if (m_dimension->single_biome) return m_biome;
+
     const double h = column.surface_height;
+    const double t = column.temperature;
+    const double wet = column.humidity;
+    const double rugged = 1.0 - smoothstep(0.35, 0.85, column.erosion);
+    const double relief = column.mountainness;
+    const double weird = column.weirdness;
 
-    if (h < kSeaLevel - 16.0) return Biome_Id::Ocean;
-    if (h < kSeaLevel - 1.0)  return Biome_Id::Shallow_Water;
-
-    // Полоса пляжа: узкая, у самой воды и только на пологом рельефе, поэтому
-    // песок больше не появляется на склоне горы.
-    if (h <= kSeaLevel + 3.0 && column.slope < 2.6 && column.temperature > 0.18)
-        return Biome_Id::Beach;
-
-    // Горные биомы определяются рельефом, а не климатом. Раньше Mountains требовал
-    // erosion = 0.85, но горы в raw_surface_height растут именно там, где эрозия НИЗКАЯ
-    // (ruggedness = 1 - smoothstep(erosion)) — поэтому настоящие горы получали ярлык
-    // Plains/Forest, а ярлык Mountains доставался случайным точкам.
-    {
-        const double ruggedness = 1.0 - smoothstep(0.35, 0.85, column.erosion);
-        if (ruggedness > 0.40 && h >= kHighMountainHeight) return Biome_Id::High_Mountains;
-        if (ruggedness > 0.40 && h >= kMountainHeight)     return Biome_Id::Mountains;
-        // Плато — высокая, но ровная местность (высокая эрозия при высокой «горности»).
-        if (ruggedness < 0.40 && h >= kPlateauHeight && column.mountainness > 0.55)
-            return Biome_Id::Plateau;
+    // Морские зоны задаются глубиной реального дна, а не произвольной точкой климата.
+    // Тёплая мелководная вода и достаточно влажный воздух образуют коралловые рифы.
+    if (h < kSeaLevel - 16.0) {
+        if (t < 0.25) return Biome_Id::Cold_Ocean;
+        if (t > 0.64 && wet > 0.57 && h > kSeaLevel - 34.0)
+            return Biome_Id::Coral_Reef;
+        if (t > 0.62) return Biome_Id::Warm_Ocean;
+        return Biome_Id::Ocean;
+    }
+    if (h < kSeaLevel - 1.0) {
+        if (t < 0.25) return Biome_Id::Cold_Ocean;
+        if (t > 0.64 && wet > 0.57 && h > kSeaLevel - 34.0)
+            return Biome_Id::Coral_Reef;
+        if (t > 0.62) return Biome_Id::Warm_Ocean;
+        return Biome_Id::Shallow_Water;
     }
 
-    const Biome_Definition* best = nullptr;
-    double best_distance = std::numeric_limits<double>::infinity();
+    // Берег существует только у воды и только на относительно пологом переходе.
+    if (h <= kSeaLevel + 3.0 && column.slope < 2.6) return Biome_Id::Beach;
 
-    for (const auto& b : m_biomes) {
-        if (!b.surface_candidate) continue;
+    // Высокогорье определяется формой рельефа; климат не может превратить гору в равнину.
+    if (rugged > 0.40 && h >= kHighMountainHeight) return Biome_Id::High_Mountains;
+    if (rugged > 0.40 && h >= kMountainHeight) return Biome_Id::Mountains;
+    if (rugged < 0.40 && h >= kPlateauHeight && relief > 0.55)
+        return Biome_Id::Plateau;
+    if (h >= 103.0 && h < kMountainHeight && relief > 0.52 && t < 0.58)
+        return Biome_Id::Alpine_Meadow;
 
-        const double distance =
-            sq(interval_distance(column.temperature, b.min_temperature, b.max_temperature)) +
-            sq(interval_distance(column.humidity, b.min_humidity, b.max_humidity)) +
-            sq(interval_distance(column.continentalness, b.min_continentalness, b.max_continentalness)) +
-            sq(interval_distance(column.erosion, b.min_erosion, b.max_erosion)) +
-            sq(interval_distance(column.weirdness, b.min_weirdness, b.max_weirdness)) +
-            sq(interval_distance(column.depth_parameter, b.min_depth, b.max_depth));
-
-        if (distance < best_distance ||
-            (distance == best_distance && best && b.priority > best->priority)) {
-            best_distance = distance;
-            best = &b;
-        }
+    // Переходные прибрежные низины: болота и мангровые леса требуют реальной сырости,
+    // малого уклона и близости к водоёму, а не просто случайной влажной климат-точки.
+    const bool lowland = h <= kSeaLevel + 17.0;
+    if (lowland && column.near_ocean && column.slope < 1.7 && wet > 0.74) {
+        if (t > 0.66) return Biome_Id::Mangrove_Swamp;
+        if (t > 0.30 && t < 0.78) return Biome_Id::Swamp;
     }
 
-    if (!best) return Biome_Id::Plains;
+    // Редкая микология — влажные умеренные острова, удалённые от экстремального климата.
+    if (weird > 0.84 && wet > 0.66 && t > 0.30 && t < 0.72)
+        return Biome_Id::Mushroom_Fields;
 
-    // Slime — редкий прибрежный биом. Раньше высота проверялась по абсолютной шкале
-    // «0..20», оставшейся от старого рельефа, — сейчас суша начинается около 63, и
-    // условие никогда не выполнялось. Теперь высота считается от уровня моря.
+    // Тёплые и влажные тропики: джунгли при максимальной влаге, сезонные саванны суше.
+    if (t > 0.72 && wet < 0.30) {
+        if (weird > 0.58) return Biome_Id::Badlands;
+        return Biome_Id::Desert;
+    }
+    if (t > 0.78 && wet < 0.43 && weird > 0.48) return Biome_Id::Stone_Desert;
+    if (t > 0.67 && wet > 0.78) return Biome_Id::Jungle;
+    if (t > 0.66 && wet >= 0.38 && wet <= 0.67) return Biome_Id::Savanna;
+    if (t > 0.67 && wet > 0.67) return Biome_Id::Temperate_Rainforest;
+
+    // Холодные экосистемы — отдельные снежные тайги, тундра и каменистые пустыни.
+    if (t < 0.12) return Biome_Id::Ice_Fields;
+    if (t < 0.24 && wet < 0.40) return Biome_Id::Tundra;
+    if (t < 0.32 && wet > 0.48) return Biome_Id::Snowy_Taiga;
+    if (t < 0.30 && wet < 0.28) return Biome_Id::Cold_Desert;
+    if (t < 0.40 && wet > 0.56) return Biome_Id::Taiga;
+
+    // Умеренные лиственные леса разделены по влажности/температуре; осинники предпочитают
+    // более прохладные и светлые участки, буковые леса — влажные предгорья.
+    if (t > 0.40 && t < 0.70 && wet > 0.80) return Biome_Id::Temperate_Rainforest;
+    if (t > 0.42 && t < 0.72 && wet > 0.54 && wet <= 0.80 && weird > 0.70)
+        return Biome_Id::Cherry_Grove;
+    if (t > 0.42 && t < 0.68 && wet > 0.59 && h > 78.0 && relief > 0.35)
+        return Biome_Id::Beech_Forest;
+    if (t > 0.28 && t < 0.47 && wet > 0.34 && wet < 0.70)
+        return Biome_Id::Aspen_Grove;
+    // Слизовый биом — редкое локальное исключение у влажного побережья. Его проверяем
+    // до широкого правила обычного леса, иначе лес перехватывает почти все подходящие точки.
     if (column.height >= kSeaLevel && column.height <= kSeaLevel + 14 &&
-        column.continentalness < 0.30 && column.humidity > 0.80 &&
-        column.temperature >= 0.55 && column.temperature <= 0.95 &&
-        column.erosion >= 0.35 && column.erosion <= 0.75 &&
-        column.weirdness > 0.45 && column.near_ocean) {
+        column.continentalness < 0.30 && wet > 0.80 && t >= 0.55 && t <= 0.95 &&
+        column.erosion >= 0.35 && column.erosion <= 0.75 && weird > 0.45 && column.near_ocean)
         return Biome_Id::Slime;
-    }
 
-    return best->id;
+    if (wet > 0.73 && t > 0.28 && t < 0.62) return Biome_Id::Forest;
+
+    // Сухие степи и кустарниковые зоны; влажные ровные участки — цветочные луга.
+    if (t > 0.58 && wet < 0.39) return Biome_Id::Steppe;
+    if (wet < 0.36) return Biome_Id::Shrubland;
+    if (wet > 0.60 && column.slope < 1.8) return Biome_Id::Meadow;
+    if (wet < 0.51) return Biome_Id::Plains;
+
+    return Biome_Id::Plains;
 }
 
-Biome_Id World_Generator::biome_at(const Column& column, int world_y, Cave_Kind cave) const {
+Biome_Id World_Generator::biome_at(int world_x, int world_y, int world_z,
+                                   const Column& column, Cave_Kind cave) const {
+    // Даже в измерении с single_biome настоящий блок парящего острова остаётся Sky.
+    // Проверка стоит до single_biome, чтобы F3 и biome lookup не называли остров Plains.
+    if (m_dimension->sky_islands && world_y >= 200 &&
+        sky_island_block(world_x, world_y, world_z)) return Biome_Id::Sky;
+
     if (m_dimension->single_biome) return m_biome;
-    if (world_y > 200 && column.humidity > 0.70 && column.continentalness < 0.60)
-        return Biome_Id::Sky;
 
     if (world_y > 80 && column.mountainness > 0.75 && column.erosion > 0.75)
         return Biome_Id::Solar;
@@ -794,10 +802,11 @@ Biome_Id World_Generator::biome_at(const Column& column, int world_y, Cave_Kind 
     }
 
     if (world_y > column.surface_height && world_y <= kSeaLevel) {
+        if (column.biome == Biome_Id::Coral_Reef || column.biome == Biome_Id::Warm_Ocean ||
+            column.biome == Biome_Id::Cold_Ocean) return column.biome;
         return column.surface_height < kSeaLevel - 16.0
              ? Biome_Id::Ocean : Biome_Id::Shallow_Water;
     }
-
     return column.biome;
 }
 
@@ -825,7 +834,13 @@ Block_Types World_Generator::surface_block_for(int world_x, int world_z,
             if (column.temperature < 0.25) return Block_Types::Gravel;
             return chance < 92 ? Block_Types::Sand : Block_Types::Gravel;
         case Biome_Id::Desert:
+        case Biome_Id::Cold_Desert:
             return chance < 82 ? Block_Types::Sand : Block_Types::Red_Sand;
+        case Biome_Id::Badlands:
+            return chance < 82 ? Block_Types::Red_Sand : Block_Types::Stone;
+        case Biome_Id::Swamp:
+        case Biome_Id::Mangrove_Swamp:
+            return Block_Types::Mud;
         case Biome_Id::Stone_Desert:
         case Biome_Id::Mountains:
         case Biome_Id::High_Mountains:
@@ -836,9 +851,21 @@ Block_Types World_Generator::surface_block_for(int world_x, int world_z,
         case Biome_Id::Ice_Fields:
             return chance < 65 ? Block_Types::Snow_Block : Block_Types::Ice;
         case Biome_Id::Tundra:
+        case Biome_Id::Snowy_Taiga:
             return chance < 75 ? Block_Types::Snow_Block : Block_Types::Grass;
+        case Biome_Id::Cold_Ocean:
+            return chance < 58 ? Block_Types::Gravel : Block_Types::Stone;
+        case Biome_Id::Alpine_Meadow:
+        case Biome_Id::Meadow:
+        case Biome_Id::Cherry_Grove:
+        case Biome_Id::Beech_Forest:
+        case Biome_Id::Aspen_Grove:
+        case Biome_Id::Temperate_Rainforest:
+        case Biome_Id::Mushroom_Fields:
+            return Block_Types::Grass;
         case Biome_Id::Steppe:
         case Biome_Id::Savanna:
+        case Biome_Id::Shrubland:
             return chance < 35 ? Block_Types::Red_Sand : Block_Types::Grass;
         case Biome_Id::Slime:
             return Block_Types::Slime_Block;
@@ -863,13 +890,21 @@ Block_Types World_Generator::subsurface_block_for(
         switch (column.biome) {
             case Biome_Id::Beach:
             case Biome_Id::Desert:
+            case Biome_Id::Cold_Desert:
                 return Block_Types::Sand;
+            case Biome_Id::Badlands:
+                return Block_Types::Red_Sand;
+            case Biome_Id::Swamp:
+            case Biome_Id::Mangrove_Swamp:
+                return Block_Types::Mud;
             case Biome_Id::Ocean:
             case Biome_Id::Shallow_Water:
                 return column.surface_height >= kSeaLevel - 14.0
                      ? Block_Types::Sand : Block_Types::Gravel;
             case Biome_Id::Mountains:
             case Biome_Id::High_Mountains:
+            case Biome_Id::Plateau:
+            case Biome_Id::Alpine_Meadow:
             case Biome_Id::Stone_Desert:
             case Biome_Id::Solar:
                 return Block_Types::Stone;
@@ -1109,7 +1144,7 @@ Biome_Id World_Generator::biome_id(int world_x, int world_y, int world_z) const 
     const Column column = column_at(world_x, world_z);
     const Cave_Kind cave = m_dimension->caves
         ? m_cave_network->kind_at(world_x, world_y, world_z) : Cave_Kind::None;
-    return biome_at(column, world_y, cave);
+    return biome_at(world_x, world_y, world_z, column, cave);
 }
 
 std::string World_Generator::get_biome_name(int world_x, int world_y, int world_z) const {
@@ -1117,7 +1152,7 @@ std::string World_Generator::get_biome_name(int world_x, int world_y, int world_
     const Column column = column_at(world_x, world_z);
     const Cave_Kind cave = m_dimension->caves
         ? m_cave_network->kind_at(world_x, world_y, world_z) : Cave_Kind::None;
-    return biome_name(biome_at(column, world_y, cave));
+    return biome_name(biome_at(world_x, world_y, world_z, column, cave));
 }
 
 bool World_Generator::cave_at(int world_x, int world_y, int world_z) const {
@@ -1460,25 +1495,204 @@ bool World_Generator::chunk_is_definitely_air(int chunk_x, int chunk_y, int chun
 //  Декорации
 // ---------------------------------------------------------------------------
 bool World_Generator::may_decorate_chunk(int chunk_x, int chunk_y, int chunk_z) const {
-    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations || !m_dimension->ground)
-        return false;
+    (void)chunk_x;
+    (void)chunk_z;
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations) return false;
 
-    // Поверхность Overworld ограничена сверху формулой рельефа: базовая отметка <=107,
-    // hill term <=43, mountain term <=235, detail <=8 (итого <394). 400 — запас.
-    // Декорации растут только вверх от поверхности >= уровня моря; поэтому на нижних
-    // Y и далеко выше максимально возможной поверхности нет смысла сканировать 48x48.
     const int chunk_min_y = chunk_y * Config::chunk_height;
     const int chunk_max_y = chunk_min_y + Config::chunk_height - 1;
+
+    // Верхний диапазон нужен не только земле: парящие острова имеют собственные деревья
+    // и свисающие лианы. Верхняя граница с запасом покрывает самый высокий остров и крону.
+    if (m_dimension->sky_islands && chunk_max_y >= 200 && chunk_min_y <= 650)
+        return true;
+
+    // Подземный лес растёт в обычных и в больших закрытых полостях. Проверка диапазона
+    // дешёвая; наличие конкретной пещеры проверяется уже только в редком anchor-столбце.
+    if (m_dimension->caves && chunk_max_y >= Cave_Network::kSealedMinY &&
+        chunk_min_y <= Cave_Network::kNetworkMaxY) return true;
+
+    if (!m_dimension->ground) return false;
+
+    // Океанские растения тянутся от реального дна до уровня моря.
+    if (chunk_max_y >= 16 && chunk_min_y <= kSeaLevel) return true;
+
+    // Растительность суши ограничена верхом рельефа и максимальной высотой деревьев.
     constexpr int kConservativeMaxSurface = 400;
     return chunk_max_y >= kSeaLevel &&
            chunk_min_y <= kConservativeMaxSurface + kDecorationMaxHeight;
 }
 
 void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) const {
-    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations || !m_dimension->ground) return;
+    if (m_dimension->terrain != Terrain_Mode::Noise || !m_dimension->decorations) return;
 
     const int chunk_min_y = chunk.get_chunk_y() * Config::chunk_height;
     const int chunk_max_y = chunk_min_y + Config::chunk_height - 1;
+
+    // Единственная точка записи ограничивает декорацию текущим чанком. При этом anchor
+    // вычисляется в мировых координатах, поэтому соседний чанк получит свою часть дерева,
+    // даже если исходный ствол находится за его границей.
+    const auto put_if_air = [&](int x, int y, int z, Block_Types type) {
+        if (y < chunk_min_y || y > chunk_max_y ||
+            y < Config::world_min_y || y > Config::world_max_y) return;
+        const int lx = x - chunk.get_chunk_x() * Config::chunk_size;
+        const int ly = y - chunk_min_y;
+        const int lz = z - chunk.get_chunk_z() * Config::chunk_size;
+        if (lx < 0 || lx >= Config::chunk_size || lz < 0 || lz >= Config::chunk_size) return;
+        if (get_block(x, y, z) != Block_Types::Air) return;
+        chunk.set_block(lx, ly, lz, type);
+    };
+
+    // --- Sky Islands: островная древесина, цветущие кроны и корни-лианы снизу. ---
+    if (m_dimension->sky_islands && chunk_max_y >= 200 && chunk_min_y <= 650 &&
+        is_grid_anchor(world_x, world_z, m_seed, 13, 3, 0x5A71, 62)) {
+        // Сканы вертикальной формы островов кэшируются по X/Z на поток: один и тот же
+        // столбец декораций вызывается для нескольких Y-чанков, и нет смысла пересчитывать
+        // геометрию острова сотни раз при каждом таком вызове.
+        struct Sky_Segment_Cache {
+            int x = 0, z = 0;
+            uint32_t epoch = 0;
+            uint8_t count = 0;
+            bool valid = false;
+            int low[4]{};
+            int high[4]{};
+        };
+        static thread_local std::array<Sky_Segment_Cache, 4096> sky_cache{};
+        const size_t cache_index = static_cast<size_t>(hash_position(world_x, world_z, m_seed, 0x5A72)) & 4095u;
+        Sky_Segment_Cache& segments = sky_cache[cache_index];
+        if (!segments.valid || segments.x != world_x || segments.z != world_z ||
+            segments.epoch != m_cache_epoch) {
+            segments = {};
+            segments.x = world_x; segments.z = world_z;
+            segments.epoch = m_cache_epoch; segments.valid = true;
+            bool inside = false;
+            int begin = 0;
+            for (int y = 200; y <= std::min(Config::world_max_y, 1024); ++y) {
+                const bool solid = sky_island_block(world_x, y, world_z);
+                if (solid && !inside) { begin = y; inside = true; }
+                if (!solid && inside) {
+                    if (segments.count < 4) {
+                        segments.low[segments.count] = begin;
+                        segments.high[segments.count] = y - 1;
+                        ++segments.count;
+                    }
+                    inside = false;
+                }
+            }
+            if (inside && segments.count < 4) {
+                segments.low[segments.count] = begin;
+                segments.high[segments.count] = std::min(Config::world_max_y, 1024);
+                ++segments.count;
+            }
+        }
+
+        for (uint8_t i = 0; i < segments.count; ++i) {
+            const int island_bottom = segments.low[i];
+            const int island_top = segments.high[i];
+            if (island_top + 1 <= Config::world_max_y && chunk_max_y >= island_top + 1 &&
+                chunk_min_y <= island_top + 16) {
+                Fast_Rng sky_rng(hash_position3(world_x, island_top, world_z, m_seed, 0x5A73));
+                Tree_Generator::place_skywood_tree(world_x, island_top, world_z, put_if_air, sky_rng);
+                if ((hash_position(world_x, world_z, m_seed, 0x5A74) % 5u) == 0u)
+                    put_if_air(world_x, island_top + 1, world_z, Block_Types::Sky_Flower);
+            }
+
+            // Лианы растут именно с нижней границы острова вниз, а не появляются в воздухе.
+            if (chunk_min_y <= island_bottom - 1 && chunk_max_y >= island_bottom - 12) {
+                const uint64_t vine_hash = hash_position(world_x, world_z, m_seed, 0x5A75);
+                if (vine_hash % 100u < 58u) {
+                    const int length = 3 + static_cast<int>((vine_hash >> 12) % 10u);
+                    for (int j = 1; j <= length; ++j)
+                        put_if_air(world_x, island_bottom - j, world_z, Block_Types::Sky_Vine);
+                }
+            }
+        }
+    }
+
+    // --- Подземные биомы: светящиеся деревья занимают почти всю высоту сухой пещеры. ---
+    if (m_dimension->ground && m_dimension->caves &&
+        chunk_max_y >= Cave_Network::kSealedMinY && chunk_min_y <= Cave_Network::kNetworkMaxY &&
+        is_grid_anchor(world_x, world_z, m_seed, 11, 3, 0xCA7E, 68)) {
+        constexpr int cave_first_y = Cave_Network::kSealedMinY;
+        constexpr int cave_count = Cave_Network::kNetworkMaxY - Cave_Network::kSealedMinY + 1;
+        Cave_Kind cave_kinds[cave_count];
+        m_cave_network->fill_column_kinds(world_x, world_z, cave_first_y, cave_count, cave_kinds);
+
+        int i = 0;
+        while (i < cave_count) {
+            const Cave_Kind k = cave_kinds[i];
+            if (k != Cave_Kind::Air && k != Cave_Kind::Sealed_Dry) { ++i; continue; }
+            const int first = i;
+            while (i < cave_count && (cave_kinds[i] == Cave_Kind::Air ||
+                                      cave_kinds[i] == Cave_Kind::Sealed_Dry)) ++i;
+            const int last = i - 1;
+            const int floor_y = cave_first_y + first - 1;
+            const int ceiling_y = cave_first_y + last + 1;
+            if (ceiling_y - floor_y < 10) continue;
+
+            // Дерево закрепляется на реальном твёрдом полу. Если сегмент выходит в воду,
+            // провал или соседнюю полость, соответствующий столбец не становится якорем.
+            const Block_Properties& floor_props = get_block_props(get_block(world_x, floor_y, world_z));
+            if (!floor_props.is_solid) continue;
+            Fast_Rng glow_rng(hash_position3(world_x, floor_y, world_z, m_seed, 0xCA7F));
+            Tree_Generator::place_glowwood_cave_tree(world_x, world_z, floor_y, ceiling_y,
+                                                      put_if_air, glow_rng);
+        }
+    }
+
+    // Измерение только с островами не имеет суши/океанов. Его декорации уже обработаны.
+    if (!m_dimension->ground) return;
+
+    // --- Морское дно: рифовые колонии, ламинарии и морская трава. ---
+    if (chunk_max_y >= 16 && chunk_min_y <= kSeaLevel &&
+        is_grid_anchor(world_x, world_z, m_seed, 8, 2, 0x0CEA, 70)) {
+        const int seabed = static_cast<int>(std::floor(terrain_point(world_x, world_z).surface_height));
+        if (seabed < kSeaLevel - 2 && seabed + 1 <= chunk_max_y && seabed + 1 >= chunk_min_y) {
+            const Column ocean_column = column_at(world_x, world_z);
+            const uint64_t ocean_hash = hash_position(world_x, world_z, m_seed, 0x0CEB);
+            const auto put_if_water = [&](int x, int y, int z, Block_Types type) {
+                if (y < chunk_min_y || y > chunk_max_y || y < seabed + 1 || y >= kSeaLevel) return;
+                const int lx = x - chunk.get_chunk_x() * Config::chunk_size;
+                const int ly = y - chunk_min_y;
+                const int lz = z - chunk.get_chunk_z() * Config::chunk_size;
+                if (lx < 0 || lx >= Config::chunk_size || lz < 0 || lz >= Config::chunk_size) return;
+                if (get_block(x, y, z) != Block_Types::Water) return;
+                chunk.set_block(lx, ly, lz, type);
+            };
+
+            const bool reef = ocean_column.biome == Biome_Id::Coral_Reef;
+            const bool shallow = seabed >= kSeaLevel - 14;
+            if (reef && seabed >= kSeaLevel - 34) {
+                // Коралловый сад: мозговики у дна, ветвистые кораллы, трубчатые колонии,
+                // веера на высоте и отдельные актинии. Все блоки проходят проверку воды.
+                put_if_water(world_x, seabed + 1, world_z, Block_Types::Coral_Brain);
+                constexpr int dx[6] = {1,-1,0,0,1,-1};
+                constexpr int dz[6] = {0,0,1,-1,1,-1};
+                for (int j = 0; j < 6; ++j) {
+                    const int ox = dx[j], oz = dz[j];
+                    const Block_Types coral = (j % 3 == 0) ? Block_Types::Coral_Tube
+                                           : (j % 3 == 1) ? Block_Types::Coral_Branch
+                                                          : Block_Types::Coral_Fan;
+                    put_if_water(world_x + ox, seabed + 1, world_z + oz, coral);
+                    if (j % 2 == 0) put_if_water(world_x + ox, seabed + 2, world_z + oz, Block_Types::Coral_Fan);
+                }
+                if ((ocean_hash >> 8) % 3u == 0u)
+                    put_if_water(world_x, seabed + 2, world_z, Block_Types::Sea_Anemone);
+                if (shallow && ((ocean_hash >> 16) % 3u == 0u))
+                    put_if_water(world_x + 2, seabed + 1, world_z, Block_Types::Sea_Grass);
+            } else if (ocean_column.biome == Biome_Id::Warm_Ocean || shallow) {
+                const int length = 4 + static_cast<int>((ocean_hash >> 20) % 12u);
+                for (int j = 1; j <= length; ++j)
+                    put_if_water(world_x, seabed + j, world_z, Block_Types::Kelp);
+                if ((ocean_hash >> 8) % 4u == 0u)
+                    put_if_water(world_x + 1, seabed + 1, world_z, Block_Types::Sea_Grass);
+            } else {
+                const int length = 5 + static_cast<int>((ocean_hash >> 20) % 10u);
+                for (int j = 1; j <= length; ++j)
+                    put_if_water(world_x, seabed + j, world_z, Block_Types::Kelp);
+            }
+        }
+    }
 
     // Дешёвая детерминированная проверка кандидата ДО вычисления даже высоты поверхности.
     // Большинство координат в нахлёсте 48x48 не является ни деревом, ни растением; раньше
@@ -1529,27 +1743,55 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
 
     if (surface == Block_Types::Water || surface == Block_Types::Snow_Block ||
         surface == Block_Types::Ice || surface == Block_Types::Slime_Block ||
-        surface == Block_Types::Sand || surface == Block_Types::Gravel)
+        surface == Block_Types::Gravel)
         return;
+    // Песчаные и краснопесчаные поверхности оставляем только пустынным зонам:
+    // там ниже появятся кактусы и редкие пальмовые оазисы.
+    if ((surface == Block_Types::Sand || surface == Block_Types::Red_Sand) &&
+        biome != Biome_Id::Desert && biome != Biome_Id::Cold_Desert &&
+        biome != Biome_Id::Badlands) return;
 
     int flora_frequency = 0;
     Block_Types flora = Block_Types::Tall_Grass;
 
     switch (biome) {
         case Biome_Id::Jungle:
-            flora_frequency = 42; flora = Block_Types::Fern; break;
+            flora_frequency = 58; flora = (flora_roll % 3 == 0) ? Block_Types::Fern : Block_Types::Bog_Grass; break;
+        case Biome_Id::Temperate_Rainforest:
+            flora_frequency = 48; flora = (flora_roll & 1) ? Block_Types::Fern : Block_Types::Moss; break;
         case Biome_Id::Forest:
+        case Biome_Id::Beech_Forest:
         case Biome_Id::Birch_Forest:
-            flora_frequency = 42; flora = Block_Types::Tall_Grass; break;
+            flora_frequency = 44; flora = (flora_roll % 3 == 0) ? Block_Types::Flower : Block_Types::Tall_Grass; break;
+        case Biome_Id::Aspen_Grove:
         case Biome_Id::Taiga:
+        case Biome_Id::Snowy_Taiga:
         case Biome_Id::Tundra:
-            flora_frequency = 65; flora = Block_Types::Fern; break;
+            flora_frequency = 58; flora = Block_Types::Fern; break;
+        case Biome_Id::Cherry_Grove:
+        case Biome_Id::Meadow:
+        case Biome_Id::Alpine_Meadow:
+            flora_frequency = 78; flora = (flora_roll % 3 == 0) ? Block_Types::Wildflower : Block_Types::Flower; break;
         case Biome_Id::Plains:
         case Biome_Id::Steppe:
         case Biome_Id::Savanna:
             flora_frequency = 90;
-            flora = (flora_roll & 1) ? Block_Types::Tall_Grass : Block_Types::Flower;
+            flora = (flora_roll & 1) ? Block_Types::Tall_Grass : Block_Types::Wildflower;
             break;
+        case Biome_Id::Swamp:
+        case Biome_Id::Mangrove_Swamp:
+            flora_frequency = 72;
+            flora = (flora_roll % 4 == 0) ? Block_Types::Cattail
+                   : (flora_roll % 4 == 1) ? Block_Types::Reed : Block_Types::Bog_Grass;
+            break;
+        case Biome_Id::Mushroom_Fields:
+            flora_frequency = 70; flora = (flora_roll & 1) ? Block_Types::Mushroom : Block_Types::Blue_Orchid; break;
+        case Biome_Id::Desert:
+        case Biome_Id::Cold_Desert:
+        case Biome_Id::Badlands:
+            flora_frequency = 20; flora = Block_Types::Dead_Bush; break;
+        case Biome_Id::Shrubland:
+            flora_frequency = 24; flora = Block_Types::Dry_Bush; break;
         case Biome_Id::Slime:
             flora_frequency = 55; flora = Block_Types::Slime_Grass; break;
         default: break;
@@ -1624,15 +1866,28 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
     switch (biome) {
         // Обычные биомы: радиус — минимальный шаг между стволами, плотность — доля занятых мест.
         // Лиственный лес: дубы с просветами, кроны не сливаются в стену.
-        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;    anchor_radius = 3; tree_density = 55; break;
-        // Берёзовый лес светлый и редкий: стволы стоят далеко друг от друга.
-        case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;  anchor_radius = 3; tree_density = 40; break;
-        // Тайга: ели широкие внизу, поэтому шаг больше, а часть мест пустует (поляны).
-        case Biome_Id::Taiga:        has_trees = true; tree_type = Tree_Type::Spruce; anchor_radius = 4; tree_density = 60; break;
-        case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle; anchor_radius = 4; tree_density = 50; break;
-        // Саванна: редкие зонтичные акации.
-        case Biome_Id::Savanna:      has_trees = true; tree_type = Tree_Type::Acacia; anchor_radius = 4; tree_density = 25; break;
-                // Слизовые ивы редкие: расстояние между ними 50+ блоков (см. is_sparse_tree_anchor).
+        case Biome_Id::Forest:       has_trees = true; tree_type = Tree_Type::Oak;     anchor_radius = 3; tree_density = 55; break;
+        case Biome_Id::Birch_Forest: has_trees = true; tree_type = Tree_Type::Birch;   anchor_radius = 3; tree_density = 40; break;
+        case Biome_Id::Aspen_Grove:  has_trees = true; tree_type = Tree_Type::Aspen;   anchor_radius = 4; tree_density = 48; break;
+        case Biome_Id::Beech_Forest: has_trees = true; tree_type = Tree_Type::Beech;   anchor_radius = 4; tree_density = 52; break;
+        case Biome_Id::Cherry_Grove: has_trees = true; tree_type = Tree_Type::Cherry;  anchor_radius = 4; tree_density = 40; break;
+        case Biome_Id::Temperate_Rainforest:
+            has_trees = true; tree_type = Tree_Type::Redwood; anchor_radius = 5; tree_density = 35; break;
+        case Biome_Id::Taiga:
+        case Biome_Id::Snowy_Taiga:
+            has_trees = true; tree_type = Tree_Type::Spruce; anchor_radius = 4; tree_density = 60; break;
+        case Biome_Id::Jungle:       has_trees = true; tree_type = Tree_Type::Jungle;  anchor_radius = 4; tree_density = 50; break;
+        case Biome_Id::Swamp:        has_trees = true; tree_type = Tree_Type::Willow;  anchor_radius = 5; tree_density = 34; break;
+        case Biome_Id::Mangrove_Swamp:
+            has_trees = true; tree_type = Tree_Type::Mangrove; anchor_radius = 4; tree_density = 58; break;
+        case Biome_Id::Savanna:
+            has_trees = true;
+            tree_type = (hash_position(world_x, world_z, m_seed, 0xBA0B) % 4u == 0u)
+                      ? Tree_Type::Baobab : Tree_Type::Acacia;
+            anchor_radius = tree_type == Tree_Type::Baobab ? 5 : 4;
+            tree_density = 27;
+            break;
+        // Слизовые ивы редкие: расстояние между ними 50+ блоков.
         case Biome_Id::Slime:        has_trees = true; tree_type = Tree_Type::Slimewood; anchor_radius = 4; break;
         default: break;
     }
@@ -1673,5 +1928,18 @@ void World_Generator::decorate_column(Chunk& chunk, int world_x, int world_z) co
                 chunk.set_block(lx, ly, lz, type);
         };
         Tree_Generator::place_tree(Tree_Type::Palm, world_x, terrain_height, world_z, setter, rng);
+    }
+
+    // Засухоустойчивые растения пустынь: кактусы появляются редко и только на песке.
+    // Высота детерминирована мировыми координатами, поэтому результат не зависит от
+    // порядка загрузки чанков.
+    if ((biome == Biome_Id::Desert || biome == Biome_Id::Cold_Desert ||
+         biome == Biome_Id::Badlands) &&
+        (surface == Block_Types::Sand || surface == Block_Types::Red_Sand) &&
+        hash_position(world_x, world_z, m_seed, 0xCAC7) % 83u == 0u) {
+        const int cactus_height = 1 + static_cast<int>(
+            hash_position(world_x, world_z, m_seed, 0xCA72) % 3u);
+        for (int dy = 1; dy <= cactus_height; ++dy)
+            put_if_air(world_x, terrain_height + dy, world_z, Block_Types::Cactus);
     }
 }

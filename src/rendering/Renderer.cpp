@@ -1184,6 +1184,10 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         res.gpu_wanted.fill(0);
         res.gpu_regrow = false;
 
+        // A player edit must be visible as a completed replacement, even when it
+        // created a new GPU residency (for example, after emptying a chunk).
+        if (meshes.urgent_update) res.appearance_start_time = -1.0f;
+
         // Палитры и слова чанка кладём в общий батч; смещения переносим на его начало.
         const uint32_t base = static_cast<uint32_t>(m_gpu_payload_cpu.size());
         m_gpu_payload_cpu.insert(m_gpu_payload_cpu.end(), meshes.gpu_words.begin(), meshes.gpu_words.end());
@@ -1209,7 +1213,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         const glm::vec4 origin(static_cast<float>(chunk.position.x * Config::chunk_size),
                                static_cast<float>(chunk.position.y * Config::chunk_height),
                                static_cast<float>(chunk.position.z * Config::chunk_size),
-                               res.appearance_start_time);
+                               meshes.urgent_update ? -1.0f : res.appearance_start_time);
         uploads.push_back({handle, origin, ranges, geometry_kept});
         if (!geometry_kept) {
             std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(handle * kGpuStreams), kGpuStreams, 0u);
@@ -1220,6 +1224,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         rb.positions.push_back(chunk.position);
         rb.versions.push_back(chunk.mesh_version);
         rb.handles.push_back(res.gpu_handle);
+        meshes.urgent_update = false;
     }
     }
 
@@ -1630,11 +1635,61 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
     // групп сохраняется исходный near-to-far порядок из frame_sort.
     std::stable_partition(pending.begin(), pending.end(), [&](const Renderable_Chunk* chunk) {
         const auto it = m_chunk_gl_cache.find(chunk->position);
-        return it == m_chunk_gl_cache.end() || it->second.gpu_handle < 0;
+        return chunk->meshes->urgent_update || it == m_chunk_gl_cache.end() || it->second.gpu_handle < 0;
     });
     // Rebuilding any resident mesh invalidates the previous depth pyramid: it may contain
     // an occluder that has since been removed or reshaped.
     if (!pending.empty()) m_gpu_hiz_valid = false;
+    if (!m_gpu_sync_residency) {
+        // Player edits bypass the background GPU meshing budget. The replacement is
+        // dispatched before this frame's draws, while the old resident mesh remains
+        // visible until the new GPU result is ready.
+        std::vector<const Renderable_Chunk*> urgent;
+        auto first_background = std::stable_partition(pending.begin(), pending.end(),
+            [](const Renderable_Chunk* chunk) { return chunk->meshes->urgent_update; });
+        urgent.assign(pending.begin(), first_background);
+        if (!urgent.empty()) {
+            const size_t max_in_flight = std::max<size_t>(1, Config::gpu_mesher_max_batches_in_flight);
+            while (m_gpu_readback_count >= max_in_flight || m_gpu_readback_count == kGpuReadbackRing)
+                poll_gpu_readbacks(true);
+            submit_gpu_batch(urgent);
+            pending.erase(pending.begin(), first_background);
+
+            // Urgent edits reuse this chunk's quad ranges. Finish their compute pass
+            // before building this frame's draw list so no draw can observe cleared or
+            // partially rewritten counters/quad data.
+            auto wait_for_latest_mesher_batch = [&]() {
+                const size_t tail = (m_gpu_readback_head + m_gpu_readback_count - 1) % kGpuReadbackRing;
+                Gpu_Readback& readback = m_gpu_readbacks[tail];
+                if (readback.fence) {
+                    for (;;) {
+                        const GLenum status = glClientWaitSync(readback.fence, GL_SYNC_FLUSH_COMMANDS_BIT,
+                                                               1000000000ull);
+                        if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED) break;
+                        if (status == GL_WAIT_FAILED) { glFinish(); break; }
+                    }
+                }
+                poll_gpu_readbacks(false);
+            };
+            wait_for_latest_mesher_batch();
+
+            // If a newly used stream exceeded its initial capacity, grow and remesh it
+            // now as well. Never display the truncated first pass for even one frame.
+            for (int retry = 0; retry < 4; ++retry) {
+                std::vector<const Renderable_Chunk*> overflow;
+                for (const Renderable_Chunk* edited : urgent) {
+                    const auto found = m_chunk_gl_cache.find(edited->position);
+                    if (found != m_chunk_gl_cache.end() && found->second.gpu_regrow)
+                        overflow.push_back(edited);
+                }
+                if (overflow.empty()) break;
+                while (m_gpu_readback_count >= max_in_flight || m_gpu_readback_count == kGpuReadbackRing)
+                    poll_gpu_readbacks(true);
+                submit_gpu_batch(overflow);
+                wait_for_latest_mesher_batch();
+            }
+        }
+    }
     if (m_gpu_sync_residency) {
         for (int pass = 0; pass < 8 && !pending.empty(); ++pass) {
             for (size_t at = 0; at < pending.size(); at += kGpuBatchChunks) {

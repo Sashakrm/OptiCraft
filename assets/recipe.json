@@ -6,7 +6,17 @@
       "Spruce Planks",
       "Jungle Planks",
       "Acacia Planks",
-      "Slimewood Planks"
+      "Slimewood Planks",
+      "Beech Planks",
+      "Redwood Planks",
+      "Mangrove Planks",
+      "Willow Planks",
+      "Skywood Planks",
+      "Glowwood Planks",
+      "Baobab Planks",
+      "Palm Planks",
+      "Cherry Planks",
+      "Aspen Planks"
     ],
     "logs": [
       "Oak Log",
@@ -14,10 +24,160 @@
       "Spruce Log",
       "Jungle Log",
       "Acacia Log",
-      "Slimewood Log"
+      "Slimewood Log",
+      "Beech Log",
+      "Redwood Log",
+      "Mangrove Log",
+      "Willow Log",
+      "Skywood Log",
+      "Glowwood Log",
+      "Baobab Log",
+      "Palm Log",
+      "Cherry Log",
+      "Aspen Log"
     ]
   },
   "recipes": [
+    {
+      "name": "planks_from_aspen_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Aspen Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Aspen Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_cherry_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Cherry Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Cherry Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_palm_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Palm Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Palm Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_baobab_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Baobab Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Baobab Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_glowwood_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Glowwood Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Glowwood Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_skywood_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Skywood Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Skywood Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_willow_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Willow Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Willow Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_mangrove_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Mangrove Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Mangrove Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_redwood_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Redwood Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Redwood Planks",
+        "count": 4
+      }
+    },
+    {
+      "name": "planks_from_beech_log",
+      "type": "shapeless",
+      "ingredients": [
+        {
+          "item": "Beech Log",
+          "count": 1
+        }
+      ],
+      "output": {
+        "item": "Beech Planks",
+        "count": 4
+      }
+    },
     {
       "name": "planks_from_oak_log",
       "type": "shapeless",
@@ -1389,6 +1549,516 @@
       "output": {
         "item": "Repeater",
         "count": 1
+      }
+    },
+    {
+      "name": "stone_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Stone"
+      },
+      "output": {
+        "item": "Stone Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "stone_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Stone"
+      },
+      "output": {
+        "item": "Stone Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "oak_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Oak Planks"
+      },
+      "output": {
+        "item": "Oak Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "oak_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Oak Planks"
+      },
+      "output": {
+        "item": "Oak Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "birch_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Birch Planks"
+      },
+      "output": {
+        "item": "Birch Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "birch_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Birch Planks"
+      },
+      "output": {
+        "item": "Birch Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "spruce_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Spruce Planks"
+      },
+      "output": {
+        "item": "Spruce Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "spruce_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Spruce Planks"
+      },
+      "output": {
+        "item": "Spruce Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "jungle_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Jungle Planks"
+      },
+      "output": {
+        "item": "Jungle Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "jungle_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Jungle Planks"
+      },
+      "output": {
+        "item": "Jungle Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "acacia_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Acacia Planks"
+      },
+      "output": {
+        "item": "Acacia Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "acacia_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Acacia Planks"
+      },
+      "output": {
+        "item": "Acacia Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "slimewood_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Slimewood Planks"
+      },
+      "output": {
+        "item": "Slimewood Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "slimewood_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Slimewood Planks"
+      },
+      "output": {
+        "item": "Slimewood Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "beech_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Beech Planks"
+      },
+      "output": {
+        "item": "Beech Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "beech_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Beech Planks"
+      },
+      "output": {
+        "item": "Beech Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "redwood_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Redwood Planks"
+      },
+      "output": {
+        "item": "Redwood Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "redwood_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Redwood Planks"
+      },
+      "output": {
+        "item": "Redwood Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "mangrove_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Mangrove Planks"
+      },
+      "output": {
+        "item": "Mangrove Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "mangrove_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Mangrove Planks"
+      },
+      "output": {
+        "item": "Mangrove Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "willow_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Willow Planks"
+      },
+      "output": {
+        "item": "Willow Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "willow_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Willow Planks"
+      },
+      "output": {
+        "item": "Willow Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "skywood_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Skywood Planks"
+      },
+      "output": {
+        "item": "Skywood Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "skywood_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Skywood Planks"
+      },
+      "output": {
+        "item": "Skywood Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "glowwood_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Glowwood Planks"
+      },
+      "output": {
+        "item": "Glowwood Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "glowwood_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Glowwood Planks"
+      },
+      "output": {
+        "item": "Glowwood Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "baobab_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Baobab Planks"
+      },
+      "output": {
+        "item": "Baobab Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "baobab_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Baobab Planks"
+      },
+      "output": {
+        "item": "Baobab Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "palm_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Palm Planks"
+      },
+      "output": {
+        "item": "Palm Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "palm_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Palm Planks"
+      },
+      "output": {
+        "item": "Palm Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "cherry_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Cherry Planks"
+      },
+      "output": {
+        "item": "Cherry Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "cherry_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Cherry Planks"
+      },
+      "output": {
+        "item": "Cherry Slab",
+        "count": 6
+      }
+    },
+    {
+      "name": "aspen_stairs",
+      "type": "shaped",
+      "pattern": [
+        "P  ",
+        "PP ",
+        "PPP"
+      ],
+      "key": {
+        "P": "Aspen Planks"
+      },
+      "output": {
+        "item": "Aspen Stairs",
+        "count": 4
+      }
+    },
+    {
+      "name": "aspen_slab",
+      "type": "shaped",
+      "pattern": [
+        "PPP"
+      ],
+      "key": {
+        "P": "Aspen Planks"
+      },
+      "output": {
+        "item": "Aspen Slab",
+        "count": 6
       }
     }
   ]

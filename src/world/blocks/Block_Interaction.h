@@ -26,6 +26,9 @@ struct Broken_Block_Event {
     std::vector<Item_Stack> container_contents;
     // false — инструмент не подходит для этого блока (руда без нужной кирки): дропа нет.
     bool harvested = true;
+    // Creative тоже отправляет событие, чтобы очистить служебное состояние растений/логики,
+    // но не создаёт предметы и не выбрасывает содержимое контейнеров.
+    bool allow_drops = true;
 };
 
 class Block_Interaction {
@@ -95,7 +98,7 @@ public:
     std::vector<glm::ivec3> explode(const glm::ivec3& center, float radius,
                                     Chunk_Manager& chunk_manager, Renderer& renderer);
 
-    // Блоки, сломанные с прошлого вызова (только Survival) — забирает Game каждый кадр.
+    // Блоки, сломанные с прошлого вызова — забирает Game каждый кадр (в Creative — без дропа).
     std::vector<Broken_Block_Event> take_broken_blocks() {
         std::vector<Broken_Block_Event> events;
         events.swap(m_broken_blocks);

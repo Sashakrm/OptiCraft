@@ -724,6 +724,7 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
         }
 
         if (has_generation_job) {
+            OC_ZONE("ChunkWorker::generate chunk");
             if (!generator) continue;
             const auto save_and_publish = [&](const Chunk_Job& job, Chunk_Ptr chunk,
                                               const std::shared_ptr<Region_File>& region) {
@@ -816,6 +817,7 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                 }
             }
         } else if (has_mesh_job) {
+            OC_ZONE("ChunkWorker::build mesh");
             if (!m_texture_atlas) {
                 continue;
             }
@@ -957,7 +959,10 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
             Mesh_Result done{mesh_job.position, mesh_job.generation_id, std::move(meshes),
                              mesh_job.priority, mesh_job.dirty_epoch, mesh_job.instance_id,
                              mesh_job.seq, mesh_job.urgent};
-            if (mesh_job.urgent) m_completed_urgent_mesh_jobs.push(std::move(done));
+            if (mesh_job.urgent) {
+                done.meshes.urgent_update = true;
+                m_completed_urgent_mesh_jobs.push(std::move(done));
+            }
             else m_completed_mesh_jobs.push(std::make_unique<Mesh_Result>(std::move(done)),
                                             mesh_job.priority);
         }
@@ -1419,7 +1424,9 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent, in
     if (!current_capture_clip().active && target->get_blocks().is_uniform() &&
         target->get_blocks().uniform_block() == Block_Types::Air &&
         !m_pending_mesh_rebuilds.contains(cx, cy, cz)) {
-        target->apply_mesh(Chunk_Meshes{});
+        Chunk_Meshes empty_mesh;
+        empty_mesh.urgent_update = urgent;
+        target->apply_mesh(std::move(empty_mesh));
         return;
     }
 
@@ -2165,6 +2172,7 @@ void Chunk_Manager::collect_finished_mesh_jobs() {
         // Флаг геометрии до применения: применение его сбрасывает, а повторная пометка должна остаться
         // световой, если после снимка менялся только свет.
         const bool geometry_dirty_before_apply = chunk->is_geometry_dirty();
+        result.meshes.urgent_update = result.urgent;
         chunk->apply_mesh(std::move(result.meshes));
 
         // Если данные изменились во время обычного мешинга, не запускаем ещё один

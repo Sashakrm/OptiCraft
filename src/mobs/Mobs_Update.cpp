@@ -38,16 +38,34 @@ namespace {
                     case Biome_Id::Jungle:
                     case Biome_Id::Savanna:
                     case Biome_Id::Steppe:
+                    case Biome_Id::Temperate_Rainforest:
+                    case Biome_Id::Swamp:
+                    case Biome_Id::Mangrove_Swamp:
+                    case Biome_Id::Cherry_Grove:
+                    case Biome_Id::Beech_Forest:
+                    case Biome_Id::Aspen_Grove:
+                    case Biome_Id::Meadow:
+                    case Biome_Id::Shrubland:
+                    case Biome_Id::Snowy_Taiga:
+                    case Biome_Id::Alpine_Meadow:
+                    case Biome_Id::Mushroom_Fields:
+                    case Biome_Id::Badlands:
+                    case Biome_Id::Cold_Desert:
                         return true;
                     default:
                         return false;
                 }
             case Spawn_Group::Horse:
-                return biome == Biome_Id::Plains || biome == Biome_Id::Steppe || biome == Biome_Id::Savanna;
+                return biome == Biome_Id::Plains || biome == Biome_Id::Steppe ||
+                       biome == Biome_Id::Savanna || biome == Biome_Id::Meadow ||
+                       biome == Biome_Id::Shrubland;
             case Spawn_Group::Hostile:
                 switch (biome) {
                     case Biome_Id::Ocean:
                     case Biome_Id::Shallow_Water:
+                    case Biome_Id::Cold_Ocean:
+                    case Biome_Id::Warm_Ocean:
+                    case Biome_Id::Coral_Reef:
                     case Biome_Id::Sky:
                     case Biome_Id::Solar:
                     case Biome_Id::Underground:

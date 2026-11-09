@@ -355,24 +355,78 @@ void Hud::quad_skewed(const glm::vec2& tl, const glm::vec2& tr, const glm::vec2&
 }
 
 void Hud::draw_slot_icon(const Hud_Inventory_Slot& slot, float x, float y, float size) {
-    if (!slot.as_cube) {
+    // Предметы и растения («крестики») остаются плоскими. Для shaped-блоков
+    // ниже рисуется отдельная геометрия, чтобы превью совпадало с силуэтом блока в мире.
+    if (!slot.as_cube && !slot.as_stairs && !slot.as_slab) {
         quad(x, y, size, size, slot.icon_uv, glm::vec4(1.0f));
         return;
     }
-    // Куб в квадрате size x size, вид сверху-сбоку (изометрия 2:1, как иконки блоков в Minecraft):
+
+    const float cx = x + size * 0.5f;
+    constexpr float k_shade_top = 1.0f;
+    constexpr float k_shade_left = 0.82f;
+    constexpr float k_shade_right = 0.62f;
+    const glm::vec4 top_color(k_shade_top, k_shade_top, k_shade_top, 1.0f);
+    const glm::vec4 left_color(k_shade_left, k_shade_left, k_shade_left, 1.0f);
+    const glm::vec4 right_color(k_shade_right, k_shade_right, k_shade_right, 1.0f);
+
+    if (slot.as_slab || slot.as_stairs) {
+        // Нижняя половина обычного куба: её верхняя грань находится на четверть
+        // высоты иконки ниже стандартной верхней точки, а боковые стенки короче.
+        const glm::vec2 T0{cx, y + size * 0.25f};
+        const glm::vec2 R0{x + size, y + size * 0.50f};
+        const glm::vec2 C0{cx, y + size * 0.75f};
+        const glm::vec2 L0{x, y + size * 0.50f};
+        const glm::vec2 RL{x + size, y + size * 0.75f};
+        const glm::vec2 B{cx, y + size};
+        const glm::vec2 LL{x, y + size * 0.75f};
+
+        quad_skewed(L0, C0, B, LL, slot.uv_cube_left, left_color);
+        quad_skewed(C0, R0, RL, B, slot.uv_cube_right, right_color);
+
+        if (slot.as_slab) {
+            // У плиты только ромб верхней поверхности и две половинные боковые грани.
+            quad_skewed(T0, R0, C0, L0, slot.uv_cube_top, top_color);
+            return;
+        }
+
+        // Верхняя часть занимает дальнюю половину блока. В изометрической проекции
+        // её прямоугольная площадка выглядит трапецией: дальний левый угол выше,
+        // чем ближний левый. Если поставить его на высоту C, площадка схлопнется в треугольник.
+        const glm::vec2 T{cx, y};
+        const glm::vec2 R{x + size, y + size * 0.25f};
+        const glm::vec2 C{cx + size * 0.25f, y + size * 0.375f};
+        const glm::vec2 L{cx - size * 0.25f, y + size * 0.125f};
+        const glm::vec2 TB{cx, y + size * 0.50f};
+        const glm::vec2 RB{x + size, y + size * 0.75f};
+        const glm::vec2 CB{cx + size * 0.25f, y + size * 0.875f};
+        const glm::vec2 LB{cx - size * 0.25f, y + size * 0.375f};
+
+        // Наружные боковые стенки верхнего яруса и вертикальный подступенок.
+        quad_skewed(T, R, RB, TB, slot.uv_cube_left, left_color);
+        quad_skewed(R, C, CB, RB, slot.uv_cube_right, right_color);
+        quad_skewed(L, C, CB, LB, slot.uv_cube_left,
+                    glm::vec4(0.72f, 0.72f, 0.72f, 1.0f));
+
+        // Две горизонтальные площадки ступеньки: верхняя и нижняя.
+        quad_skewed(T, R, C, L, slot.uv_cube_top, top_color);
+        quad_skewed(LB, CB, C0, L0, slot.uv_cube_top,
+                    glm::vec4(0.92f, 0.92f, 0.92f, 1.0f));
+        return;
+    }
+
+    // Полный куб в квадрате size x size, вид сверху-сбоку (изометрия 2:1):
     //          T
     //      L       R        T, R, C, L — верхняя грань
     //          C            L, C, B, LL — левая грань
     //      LL      RL       C, R, RL, B — правая грань
     //          B
-    const float cx = x + size * 0.5f;
     const glm::vec2 T{cx, y}, R{x + size, y + size * 0.25f}, C{cx, y + size * 0.5f},
                     L{x, y + size * 0.25f}, RL{x + size, y + size * 0.75f},
                     B{cx, y + size}, LL{x, y + size * 0.75f};
-    constexpr float k_shade_top = 1.0f, k_shade_left = 0.82f, k_shade_right = 0.62f;
-    quad_skewed(T, R, C, L, slot.uv_cube_top, glm::vec4(k_shade_top, k_shade_top, k_shade_top, 1.0f));
-    quad_skewed(L, C, B, LL, slot.uv_cube_left, glm::vec4(k_shade_left, k_shade_left, k_shade_left, 1.0f));
-    quad_skewed(C, R, RL, B, slot.uv_cube_right, glm::vec4(k_shade_right, k_shade_right, k_shade_right, 1.0f));
+    quad_skewed(T, R, C, L, slot.uv_cube_top, top_color);
+    quad_skewed(L, C, B, LL, slot.uv_cube_left, left_color);
+    quad_skewed(C, R, RL, B, slot.uv_cube_right, right_color);
 }
 
 // Иконки блоков лежат в другой текстуре, чем UI. Всё накопленное из UI-атласа сбрасываем,
@@ -780,8 +834,8 @@ int Hud::get_panel_page_button_at(int window_width, int window_height, const Hud
     if (!layout.page_controls) return -1;
     const Hud_Rect panel = get_panel_rect(window_width, window_height, layout);
     const float s = get_panel_scale(window_width, window_height, layout);
-    const Hud_Rect prev{panel.x + layout.page_prev_pos.x * s, panel.y + layout.page_prev_pos.y * s, 14.0f * s, 14.0f * s};
-    const Hud_Rect next{panel.x + layout.page_next_pos.x * s, panel.y + layout.page_next_pos.y * s, 14.0f * s, 14.0f * s};
+    const Hud_Rect prev{panel.x + layout.page_prev_pos.x * s, panel.y + layout.page_prev_pos.y * s, 16.0f * s, 16.0f * s};
+    const Hud_Rect next{panel.x + layout.page_next_pos.x * s, panel.y + layout.page_next_pos.y * s, 16.0f * s, 16.0f * s};
     if (prev.contains(mx, my)) return 0;
     if (next.contains(mx, my)) return 1;
     return -1;
@@ -803,7 +857,7 @@ void Hud::draw_panel_screen(int window_width, int window_height,
                   glm::vec4(0.03f, 0.03f, 0.05f, 0.62f), glm::vec4(0.03f, 0.03f, 0.05f, 0.74f));
     draw_nine_slice("panel", panel.x, panel.y, panel.w, panel.h, 4.0f, s);
 
-    const glm::vec4 label_color(0.25f, 0.25f, 0.25f, 1.0f);
+    const glm::vec4 label_color(0.22f, 0.22f, 0.21f, 1.0f);
     if (!title.empty()) {
         draw_text(title, panel.x + 8.0f * s, panel.y + 6.0f * s, s, label_color, false);
     }
@@ -850,14 +904,34 @@ void Hud::draw_panel_screen(int window_width, int window_height,
     }
 
     if (layout.page_controls) {
-        const Hud_Rect prev{panel.x + layout.page_prev_pos.x * s, panel.y + layout.page_prev_pos.y * s, 14.0f * s, 14.0f * s};
-        const Hud_Rect next{panel.x + layout.page_next_pos.x * s, panel.y + layout.page_next_pos.y * s, 14.0f * s, 14.0f * s};
-        const bool hp = prev.contains(cursor_x, cursor_y);
-        const bool hn = next.contains(cursor_x, cursor_y);
-        draw_nine_slice(hp ? "btn_hover" : "btn", prev.x, prev.y, prev.w, prev.h, 3.0f, s);
-        draw_nine_slice(hn ? "btn_hover" : "btn", next.x, next.y, next.w, next.h, 3.0f, s);
-        draw_text_centered("<", prev.x + prev.w * 0.5f, prev.y + 3.0f * s, s);
-        draw_text_centered(">", next.x + next.w * 0.5f, next.y + 3.0f * s, s);
+        // Геометрия кнопок соответствует hit-test: компактные квадратные кнопки
+        // с чёткой пиксельной окантовкой вместо растянутого девятисрезного спрайта.
+        const Hud_Rect prev{panel.x + layout.page_prev_pos.x * s, panel.y + layout.page_prev_pos.y * s, 16.0f * s, 16.0f * s};
+        const Hud_Rect next{panel.x + layout.page_next_pos.x * s, panel.y + layout.page_next_pos.y * s, 16.0f * s, 16.0f * s};
+        auto draw_page_button = [&](const Hud_Rect& r, bool hovered, const char* glyph) {
+            const glm::vec4 shadow(0.025f, 0.023f, 0.020f, 1.0f);
+            const glm::vec4 border = hovered ? glm::vec4(0.22f, 0.21f, 0.18f, 1.0f)
+                                             : glm::vec4(0.13f, 0.125f, 0.11f, 1.0f);
+            const glm::vec4 face = hovered ? glm::vec4(0.48f, 0.46f, 0.40f, 1.0f)
+                                           : glm::vec4(0.36f, 0.35f, 0.31f, 1.0f);
+            const glm::vec4 highlight = hovered ? glm::vec4(0.78f, 0.74f, 0.64f, 1.0f)
+                                                : glm::vec4(0.61f, 0.58f, 0.50f, 1.0f);
+            draw_rect(r.x, r.y + s, r.w, r.h - s, shadow);
+            draw_rect(r.x, r.y, r.w, r.h - s, border);
+            draw_rect(r.x + s, r.y + s, r.w - 2.0f * s, r.h - 3.0f * s, face);
+            // Верхняя/левая грань светлее, нижняя/правая темнее: кнопка выглядит нажимаемой,
+            // но не перетягивает внимание с самих блоков в палитре.
+            draw_rect(r.x + s, r.y + s, r.w - 2.0f * s, s, highlight);
+            draw_rect(r.x + s, r.y + s, s, r.h - 3.0f * s, highlight);
+            draw_rect(r.x + s, r.y + r.h - 2.0f * s, r.w - 2.0f * s, s,
+                      glm::vec4(0.09f, 0.085f, 0.075f, 1.0f));
+            draw_rect(r.x + r.w - 2.0f * s, r.y + s, s, r.h - 3.0f * s,
+                      glm::vec4(0.09f, 0.085f, 0.075f, 1.0f));
+            draw_text_centered(glyph, r.x + r.w * 0.5f, r.y + 4.0f * s, s,
+                               hovered ? glm::vec4(1.0f) : glm::vec4(0.93f, 0.91f, 0.84f, 1.0f), false);
+        };
+        draw_page_button(prev, prev.contains(cursor_x, cursor_y), "<");
+        draw_page_button(next, next.contains(cursor_x, cursor_y), ">");
         draw_text_centered(layout.page_text, panel.x + layout.page_text_pos.x * s,
                            panel.y + layout.page_text_pos.y * s, s, label_color, false);
     }

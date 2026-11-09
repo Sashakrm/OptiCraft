@@ -13,7 +13,16 @@ enum class Tree_Type : int {
     Birch = 3,
     Spruce = 4,
     Jungle = 5,
-    Slimewood = 6
+    Slimewood = 6,
+    Beech = 7,
+    Redwood = 8,
+    Mangrove = 9,
+    Willow = 10,
+    Skywood = 11,
+    Glowwood = 12,
+    Baobab = 13,
+    Cherry = 14,
+    Aspen = 15
 };
 
 class Tree_Generator {
@@ -34,6 +43,16 @@ public:
                                    Block_Setter setter, Fast_Rng& rng);
     static void place_jungle_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
     static void place_slimewood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_beech_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_redwood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_mangrove_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_willow_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_skywood_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_glowwood_cave_tree(int x, int z, int floor_y, int ceiling_y,
+                                         Block_Setter setter, Fast_Rng& rng);
+    static void place_baobab_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_cherry_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
+    static void place_aspen_tree(int x, int y, int z, Block_Setter setter, Fast_Rng& rng);
 };
 
 #endif

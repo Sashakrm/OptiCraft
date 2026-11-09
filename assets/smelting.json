@@ -83,6 +83,66 @@
       "output": "Copper Ingot",
       "count": 1,
       "time": 10
+    },
+    {
+      "input": "Beech Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Redwood Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Mangrove Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Willow Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Skywood Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Glowwood Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Baobab Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Palm Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Cherry Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
+    },
+    {
+      "input": "Aspen Log",
+      "output": "Charcoal",
+      "count": 1,
+      "time": 10
     }
   ],
   "fuels": [
@@ -149,6 +209,86 @@
     {
       "item": "Coal",
       "burn_time": 80
+    },
+    {
+      "item": "Beech Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Beech Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Redwood Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Redwood Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Mangrove Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Mangrove Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Willow Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Willow Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Skywood Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Skywood Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Glowwood Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Glowwood Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Baobab Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Baobab Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Palm Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Palm Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Cherry Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Cherry Planks",
+      "burn_time": 15
+    },
+    {
+      "item": "Aspen Log",
+      "burn_time": 15
+    },
+    {
+      "item": "Aspen Planks",
+      "burn_time": 15
     }
   ]
 }

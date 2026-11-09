@@ -1,12 +1,4 @@
-# Свет без пересборки геометрии: что проверить
 
-Архив содержит изменённые файлы репозитория OptiCraft (ветка main). Всё закоммичено локально, в origin не отправлено.
-
-Коммиты (локально):
-- `edd175c` Lighting: light and AO from a per-chunk volume, light-only remesh path
-- `65d3c1b` summarize_trace: columns for light and remesh counters
-
-Как применить без git: скопировать файлы из архива поверх репозитория с сохранением путей. Новый файл один: `assets/shaders/mesh_volume.comp`.
 
 ## Что изменилось
 
