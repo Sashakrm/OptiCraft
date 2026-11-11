@@ -160,6 +160,7 @@ private:
         // Световой проход: геометрия не менялась с момента geometry_version, пересобирается только объём света
         // (квады на видеокарте остаются). false — полная задача: новая геометрия и новый geometry_version.
         bool light_only = false;
+        uint8_t section_update_mask = static_cast<uint8_t>((1u << Config::chunk_section_count) - 1u);
         uint64_t geometry_version = 0;
     };
 

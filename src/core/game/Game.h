@@ -130,6 +130,7 @@ private:
     int m_aa_mode{0};
     float m_film_grain{0.0f};
     int m_vignette_level{Config::vignette_level_default};
+    bool m_meshlet_renderer_enabled{false}; // Experimental per-meshlet GPU culling + MDI path.
     void apply_vertical_distance();   // отдаёт эффективную высоту окна менеджеру чанков
     void apply_graphics_settings();   // отдаёт постобработку, виньетку и появление чанков рендереру/HUD
 
@@ -276,6 +277,13 @@ public:
     void set_film_grain(float value);
     int get_vignette_level() const { return m_vignette_level; }
     void set_vignette_level(int level);
+    bool get_meshlet_renderer_enabled() const {
+        // Renderer can disable the experimental path at runtime after an allocation/capacity
+        // failure. Report its actual state so the Options UI and saved value never become stale.
+        return m_renderer_ptr ? m_renderer_ptr->is_meshlet_renderer_enabled() : m_meshlet_renderer_enabled;
+    }
+    bool is_meshlet_renderer_available() const;
+    void set_meshlet_renderer_enabled(bool enabled);
     int get_flora_distance() const { return m_flora_distance; }
     void set_flora_distance(int chunks);
     float get_mouse_sensitivity() const { return m_input_ptr->get_mouse_sensitivity(); }

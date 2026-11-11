@@ -4,8 +4,8 @@
 // frustum/temporal-HiZ tests, reverses transparent order, and writes all indirect commands.
 layout(local_size_x = 64) in;
 
-// Candidate: x = GPU handle, y = section reachability mask, z = 4 packed kind bytes,
-// w bit 0 = flora disabled by configured distance, bits 8..11 = legacy opaque query mask.
+// Candidate: x = GPU handle, y = opaque section reachability mask, z = 4 packed kind bytes,
+// w bit 0 = flora disabled, bits 16..19 = liquid section mask, bits 20..23 = LOD sections.
 layout(std430, binding = 0) readonly buffer Candidates { uvec4 candidates[]; };
 layout(std430, binding = 1) readonly buffer SectionBounds { vec4 section_bounds[]; };
 layout(std430, binding = 2) readonly buffer Counts { uint counts[]; };
@@ -30,6 +30,7 @@ uniform mat4 u_view_projection;
 uniform vec2 u_viewport_size;
 uniform int u_use_hiz;
 uniform int u_compact_opaque;
+uniform int u_meshlet_enabled; // 1: meshlet pass owns opaque MDI; this pass only builds transparent commands
 uniform sampler2D u_hiz;
 
 const uint SECTION_COUNT = 4u;
@@ -37,6 +38,7 @@ const uint KIND_COUNT = 4u;
 const uint STREAMS_PER_CHUNK = 16u;
 const uint KIND_SOLID = 0u;
 const uint KIND_SHAPED = 1u;
+const uint KIND_LIQUID = 3u;
 
 bool aabb_in_frustum(vec3 box_min, vec3 box_max) {
     for (int i = 0; i < 6; ++i) {
@@ -124,34 +126,49 @@ void main() {
     const uint reachable_mask = candidate.y;
     const uint packed_kinds = candidate.z;
     const uint flags = candidate.w;
+    const uint liquid_reachable_mask = (flags >> 16u) & 0xFu;
+    const uint lod_section_mask = (flags >> 20u) & 0xFu;
     const vec3 origin = origins[handle].xyz;
 
-    uint frustum_visible_mask = 0u;
+    uint frustum_visible_mask = 0u;       // reachable opaque sections
+    uint liquid_frustum_visible_mask = 0u; // liquid sections, independent of opaque reachability
     uint hiz_occluded_mask = 0u;
     uint culled_sections = 0u;
     uint occluded_sections = 0u;
     for (uint section = 0u; section < SECTION_COUNT; ++section) {
         const uint section_bit = 1u << section;
         const uint section_kinds = (packed_kinds >> (section * 8u)) & 0xFFu;
-        if ((reachable_mask & section_bit) == 0u || section_kinds == 0u) continue;
+        const bool opaque_reachable = (reachable_mask & section_bit) != 0u &&
+            (section_kinds & ((1u << KIND_SOLID) | (1u << KIND_SHAPED))) != 0u;
+        const bool liquid_reachable = (liquid_reachable_mask & section_bit) != 0u &&
+            (section_kinds & (1u << KIND_LIQUID)) != 0u;
+        if ((!opaque_reachable && !liquid_reachable) || section_kinds == 0u) continue;
 
         const vec4 bounds = section_bounds[candidate_index * SECTION_COUNT + section];
-        const vec3 box_min = vec3(origin.x, bounds.x, origin.z);
-        const vec3 box_max = vec3(origin.x + 32.0, bounds.y, origin.z + 32.0);
+        // Conservative padding for shader-side vertex displacement: water waves move
+        // the top surface by up to 0.07 blocks and crossed flora sways by up to 0.09.
+        // Without this guard a section touching a frustum plane could be rejected even
+        // though some animated vertices have moved just outside its static voxel AABB.
+        const vec3 bounds_guard = vec3(0.10);
+        const vec3 box_min = vec3(origin.x, bounds.x, origin.z) - bounds_guard;
+        const vec3 box_max = vec3(origin.x + 32.0, bounds.y, origin.z + 32.0) + bounds_guard;
         if (!aabb_in_frustum(box_min, box_max)) {
             ++culled_sections;
             continue;
         }
 
-        frustum_visible_mask |= section_bit;
-        const bool has_opaque = (section_kinds & ((1u << KIND_SOLID) | (1u << KIND_SHAPED))) != 0u;
-        const bool query_occluded = (flags & (1u << (8u + section))) != 0u;
-        if (has_opaque && query_occluded) {
-            ++occluded_sections;
-        } else if (u_use_hiz != 0 && has_opaque && aabb_occluded_hiz(box_min, box_max)) {
-            hiz_occluded_mask |= section_bit;
-            ++occluded_sections;
+        if (opaque_reachable) {
+            frustum_visible_mask |= section_bit;
+            const bool is_lod_section = (lod_section_mask & section_bit) != 0u;
+            if (u_use_hiz != 0 && u_meshlet_enabled == 0 && !is_lod_section &&
+                aabb_occluded_hiz(box_min, box_max)) {
+                hiz_occluded_mask |= section_bit;
+                ++occluded_sections;
+            }
         }
+        // The same conservative section bounds can be used for liquid frustum culling,
+        // but opaque query/Hi-Z results must never erase a transparent water command.
+        if (liquid_reachable) liquid_frustum_visible_mask |= section_bit;
     }
 
     if (culled_sections != 0u) atomicAdd(stats[3], culled_sections);
@@ -162,10 +179,29 @@ void main() {
     uint opaque_sections_mask = 0u;
 
     for (uint kind = 0u; kind < KIND_COUNT; ++kind) {
+        // Meshlet mode supplies solid/shaped MDI separately. Keep only the chunk-level
+        // visibility statistics here and avoid writing duplicate opaque commands/maps.
+        if (u_meshlet_enabled != 0 && kind <= KIND_SHAPED) {
+            for (uint section = 0u; section < SECTION_COUNT; ++section) {
+                const uint section_bit = 1u << section;
+                const uint section_kinds = (packed_kinds >> (section * 8u)) & 0xFFu;
+                const uint stream = handle * STREAMS_PER_CHUNK + kind * SECTION_COUNT + section;
+                const uint quad_count = min(counts[stream], ranges[stream].y);
+                const bool visible = (frustum_visible_mask & section_bit) != 0u &&
+                    (hiz_occluded_mask & section_bit) == 0u &&
+                    (section_kinds & (1u << kind)) != 0u && quad_count != 0u;
+                if (visible) {
+                    chunk_triangles += quad_count * 2u;
+                    opaque_sections_mask |= section_bit;
+                    chunk_rendered = true;
+                }
+            }
+            continue;
+        }
         // Opaque lists are near-to-far; transparent lists are far-to-near.
         const uint destination_entry = (kind >= 2u)
             ? (u_candidate_count - 1u - candidate_index) : candidate_index;
-        uint kind_visible_mask = frustum_visible_mask;
+        uint kind_visible_mask = kind == KIND_LIQUID ? liquid_frustum_visible_mask : frustum_visible_mask;
         if (kind <= KIND_SHAPED) kind_visible_mask &= ~hiz_occluded_mask;
         order[kind * u_candidate_count + destination_entry] = uvec2(handle, kind_visible_mask);
 
@@ -179,7 +215,8 @@ void main() {
             bool visible = (kind_visible_mask & section_bit) != 0u &&
                            (section_kinds & (1u << kind)) != 0u && quad_count != 0u;
             if (kind == 2u && (flags & 1u) != 0u) visible = false;
-            if (kind <= KIND_SHAPED && (flags & (1u << (8u + section))) != 0u) visible = false;
+            // Old temporal-query bits are no longer produced. LOD sections are not
+            // rejected by the section-level Hi-Z path above.
 
             const uint max_draws_per_kind = u_candidate_count * SECTION_COUNT;
             const uint fixed_command_index = kind * max_draws_per_kind +

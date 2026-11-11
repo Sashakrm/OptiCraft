@@ -70,8 +70,22 @@ Raycast_Hit Raycast::cast(const glm::vec3& origin,
         if (block != Block_Types::Air && block != Block_Types::Water && targetable &&
             shape_has_precise_hitbox(props.shape)) {
             box_hit = false;
-            Shape_Box boxes[2];
-            const int count = shape_boxes(props.shape, chunk_manager.get_block_meta_world(x, y, z), boxes);
+            Shape_Box boxes[8];
+            uint8_t shape_meta = chunk_manager.get_block_meta_world(x, y, z);
+            if (props.shape == Block_Shape::Stairs) {
+                static constexpr glm::ivec3 dirs[4] = {{0,0,-1},{1,0,0},{0,0,1},{-1,0,0}};
+                const uint8_t facing = static_cast<uint8_t>(shape_meta & 3u);
+                const glm::ivec3 front = glm::ivec3(x, y, z) + dirs[facing];
+                const glm::ivec3 back = glm::ivec3(x, y, z) - dirs[facing];
+                const Block_Types front_type = chunk_manager.get_block_world(front.x, front.y, front.z);
+                const Block_Types back_type = chunk_manager.get_block_world(back.x, back.y, back.z);
+                const bool front_stairs = get_block_props(front_type).shape == Block_Shape::Stairs;
+                const bool back_stairs = get_block_props(back_type).shape == Block_Shape::Stairs;
+                shape_meta = stairs_effective_meta(shape_meta, front_stairs,
+                    chunk_manager.get_block_meta_world(front.x, front.y, front.z), back_stairs,
+                    chunk_manager.get_block_meta_world(back.x, back.y, back.z));
+            }
+            const int count = shape_boxes(props.shape, shape_meta, boxes);
             const glm::vec3 cell(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
             float best_t = std::numeric_limits<float>::max();
             for (int b = 0; b < count; ++b) {

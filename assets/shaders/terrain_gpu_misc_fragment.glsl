@@ -56,7 +56,9 @@ void main() {
         const vec2 flow = vec2(sin(time * 0.15) * 0.15, time * 0.35) * tile_size;
         local_uv = mod(local_uv + flow, tile_size);
         tex_color = texture(textureAtlas, tile_origin + local_uv);
-        shimmer = 0.92 + 0.08 * sin(FragPos.x * 1.3 + FragPos.z * 1.1 + time * 2.0);
+        // Keep water motion mostly in texture flow/waves. A large time-driven brightness
+        // pulse made large, overlapping water surfaces look as if their colour flickered.
+        shimmer = 0.985 + 0.015 * sin(FragPos.x * 1.3 + FragPos.z * 1.1 + time * 0.7);
         alpha_scale = 0.78;
     }
 

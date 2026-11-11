@@ -1,0 +1,154 @@
+#version 430 core
+// Fine-grained culling of persistent 32-quad meshlets.
+// One workgroup owns one (chunk handle, kind, section) stream; each lane processes one
+// meshlet and strides if the stream contains more than 32 meshlets.
+layout(local_size_x = 32) in;
+
+struct StreamCandidate { uvec4 range; uvec4 metadata; };
+layout(std430, binding = 0) readonly buffer Streams { StreamCandidate streams[]; };
+struct MeshletBounds { vec4 minimum; vec4 maximum; uvec4 metadata; };
+layout(std430, binding = 1) readonly buffer Bounds { MeshletBounds meshlets[]; };
+layout(std430, binding = 2) writeonly buffer Commands { uvec4 commands[]; };
+// Counts are indexed by GPU kind: [0] solid, [1] shaped, [3] liquid.
+layout(std430, binding = 3) buffer DrawCounts { uint draw_counts[4]; };
+
+uniform uint u_stream_count;
+uniform uint u_stream_base; // permits batching beyond GL_MAX_COMPUTE_WORK_GROUP_COUNT.x
+uniform uint u_compact;
+uniform uint u_solid_command_base;
+uniform uint u_shaped_command_base;
+uniform uint u_liquid_command_base;
+uniform vec4 u_frustum_planes[6];
+uniform mat4 u_view_projection;
+uniform vec2 u_viewport_size;
+uniform int u_use_hiz;
+uniform sampler2D u_hiz;
+
+bool aabb_in_frustum(vec3 box_min, vec3 box_max) {
+    for (int i = 0; i < 6; ++i) {
+        const vec4 plane = u_frustum_planes[i];
+        const vec3 positive = vec3(
+            plane.x >= 0.0 ? box_max.x : box_min.x,
+            plane.y >= 0.0 ? box_max.y : box_min.y,
+            plane.z >= 0.0 ? box_max.z : box_min.z);
+        if (dot(plane.xyz, positive) + plane.w < 0.0) return false;
+    }
+    return true;
+}
+
+// The engine's Hi-Z pyramid stores MAX depth for conventional GL depth.
+// Boxes crossing the eye/near plane or touching an ambiguous screen region stay visible.
+bool aabb_occluded_hiz(vec3 box_min, vec3 box_max) {
+    vec2 uv_min = vec2(1.0);
+    vec2 uv_max = vec2(0.0);
+    float nearest_depth = 1.0;
+    for (uint corner = 0u; corner < 8u; ++corner) {
+        const vec3 p = vec3(
+            (corner & 1u) != 0u ? box_max.x : box_min.x,
+            (corner & 2u) != 0u ? box_max.y : box_min.y,
+            (corner & 4u) != 0u ? box_max.z : box_min.z);
+        const vec4 clip = u_view_projection * vec4(p, 1.0);
+        if (clip.w <= 0.00001) return false;
+        const vec3 ndc = clip.xyz / clip.w;
+        const vec2 uv = ndc.xy * 0.5 + 0.5;
+        uv_min = min(uv_min, uv);
+        uv_max = max(uv_max, uv);
+        nearest_depth = min(nearest_depth, ndc.z * 0.5 + 0.5);
+    }
+    if (uv_max.x < 0.0 || uv_max.y < 0.0 || uv_min.x > 1.0 || uv_min.y > 1.0) return false;
+    const vec2 guard = vec2(2.0) / max(u_viewport_size, vec2(1.0));
+    uv_min = clamp(uv_min - guard, vec2(0.0), vec2(1.0));
+    uv_max = clamp(uv_max + guard, vec2(0.0), vec2(1.0));
+    if (any(lessThanEqual(uv_max, uv_min))) return false;
+
+    const ivec2 base_size = textureSize(u_hiz, 0);
+    const vec2 pixel_extent = (uv_max - uv_min) * u_viewport_size;
+    const vec2 texture_scale = u_viewport_size / vec2(base_size);
+    const vec2 tex_min = uv_min * texture_scale;
+    const vec2 tex_max = uv_max * texture_scale;
+    const float max_extent = max(pixel_extent.x, pixel_extent.y);
+    const int level_count = textureQueryLevels(u_hiz);
+    const int level = clamp(int(ceil(log2(max(max_extent, 1.0)))) - 1, 0, level_count - 1);
+    const ivec2 mip_size = textureSize(u_hiz, level);
+    const ivec2 p0 = clamp(ivec2(floor(tex_min * vec2(mip_size))), ivec2(0), mip_size - 1);
+    const ivec2 p1 = clamp(ivec2(floor(tex_max * vec2(mip_size))), ivec2(0), mip_size - 1);
+    if (any(greaterThan(p1 - p0, ivec2(3)))) return false;
+
+    float farthest_occluder_depth = 0.0;
+    for (int y = p0.y; y <= p1.y; ++y)
+        for (int x = p0.x; x <= p1.x; ++x)
+            farthest_occluder_depth = max(farthest_occluder_depth,
+                texelFetch(u_hiz, ivec2(x, y), level).r);
+    return nearest_depth > farthest_occluder_depth + 0.004;
+}
+
+shared uint s_group_visible_count;
+shared uint s_group_draw_base;
+
+void main() {
+    const uint stream_index = u_stream_base + gl_WorkGroupID.x;
+    if (stream_index >= u_stream_count) return;
+    const StreamCandidate stream = streams[stream_index];
+    const uint handle = stream.range.x;
+    const uint first_quad = stream.range.z;
+    const uint kind = stream.metadata.y;
+    const uint section = stream.metadata.x;
+    const uint fixed_command_offset = stream.metadata.z;
+    const uint meshlet_count = stream.metadata.w;
+    // range.w bit 0 marks a coarse LOD stream. Hi-Z is skipped for LOD to avoid
+    // false rejection of thin, expanded coarse faces; final full-res depth still
+    // hides the pixels that are actually behind opaque terrain.
+    const bool is_lod_stream = (stream.range.w & 1u) != 0u;
+    const uint command_base = kind == 0u ? u_solid_command_base :
+                             (kind == 1u ? u_shaped_command_base : u_liquid_command_base);
+    // Alpha blending is order-dependent. Keep liquid commands at their fixed offsets,
+    // even when opaque Meshlet commands use atomic compaction: workgroup scheduling is
+    // intentionally nondeterministic and must never reorder overlapping water surfaces.
+    const bool compact_stream = (u_compact != 0u) && (kind != 3u);
+
+    // One workgroup owns a single chunk/kind/section stream. In compact mode, threads
+    // append into a shared-memory counter and reserve ONE global range per 32 meshlets.
+    // This replaces one global atomic per visible meshlet with at most one per workgroup batch.
+    for (uint batch_base = 0u; batch_base < meshlet_count; batch_base += gl_WorkGroupSize.x) {
+        const uint meshlet_index = batch_base + gl_LocalInvocationIndex;
+        const bool in_range = meshlet_index < meshlet_count;
+        const uint descriptor_index = first_quad / 32u + meshlet_index;
+        const uint quad_first = first_quad + meshlet_index * 32u;
+        uint quad_count = 0u;
+        bool visible = false;
+
+        if (in_range) {
+            const MeshletBounds bounds = meshlets[descriptor_index];
+            quad_count = bounds.metadata.x;
+            visible = quad_count != 0u &&
+                aabb_in_frustum(bounds.minimum.xyz, bounds.maximum.xyz);
+            if (visible && u_use_hiz != 0 && kind != 3u && !is_lod_stream)
+                visible = !aabb_occluded_hiz(bounds.minimum.xyz, bounds.maximum.xyz);
+        }
+
+        uint local_slot = 0u;
+        if (compact_stream) {
+            if (gl_LocalInvocationIndex == 0u) s_group_visible_count = 0u;
+            barrier();
+            if (visible) local_slot = atomicAdd(s_group_visible_count, 1u);
+            barrier();
+            if (gl_LocalInvocationIndex == 0u)
+                s_group_draw_base = atomicAdd(draw_counts[kind], s_group_visible_count);
+            barrier();
+        }
+
+        if (in_range) {
+            if (!compact_stream) {
+                const uint command_index = command_base + fixed_command_offset + meshlet_index;
+                commands[command_index] = uvec4(visible ? quad_count * 6u : 0u,
+                                                1u, quad_first * 6u, handle * 4u + section);
+            } else if (visible) {
+                const uint command_index = command_base + s_group_draw_base + local_slot;
+                commands[command_index] = uvec4(quad_count * 6u, 1u,
+                                                quad_first * 6u, handle * 4u + section);
+            }
+        }
+        // The next batch reuses the shared counter/base. All lanes must finish reading them first.
+        if (compact_stream) barrier();
+    }
+}

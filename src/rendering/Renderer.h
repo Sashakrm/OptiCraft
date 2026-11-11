@@ -58,6 +58,13 @@ private:
     // Потоков квадов на чанк: вид * 4 + секция. Один поток — непрерывный участок пула.
     static constexpr int kGpuStreams = kGpuKindCount * Config::chunk_section_count;
 
+    struct Gpu_Section_Snapshot {
+        float min_y = 0.0f;
+        float max_y = 0.0f;
+        uint8_t kinds = 0;
+        bool has_geometry = false;
+    };
+
     struct Chunk_GL_Resources {
         uint64_t mesh_version = 0;
         std::array<Section_Occlusion_State, Config::chunk_section_count> occlusion{};
@@ -67,14 +74,35 @@ private:
         // Версия геометрии, по которой лежат квады в пуле (Chunk_Meshes::geometry_version). Световой проход
         // (light_only) совпадает с ней — квады не пересоздаются, обновляется только световой объём.
         uint64_t gpu_geometry_version = 0;
+        uint8_t gpu_lod_stride = 1;
         // По потокам: первый квад и ёмкость в квадах (0 = потока нет); желаемая ёмкость после readback'а.
         std::array<uint32_t, kGpuStreams> gpu_first{};
         std::array<uint32_t, kGpuStreams> gpu_cap{};
         std::array<uint32_t, kGpuStreams> gpu_wanted{};
         bool gpu_regrow = false;   // счётчики показали, что ёмкости не хватило: чанк мешится заново
         std::array<bool, kGpuStreams> gpu_capacity_observed{}; // не сжимаем первый allocation каждого потока
-        bool gpu_flora_skipped = false; // состав GPU-меша зависит от дистанции прорисовки флоры
-        // Время первого появления текущей GPU-резиденции. Хранится в Origins.w, поэтому
+        bool gpu_flora_skipped = false; // состав активного GPU-меша зависит от дистанции флоры
+        // Metadata belongs to the active GPU generation, not to the newest CPU snapshot.
+        // This lets the previous complete mesh remain correctly culled/drawn while a COW
+        // replacement is being built asynchronously.
+        std::array<Gpu_Section_Snapshot, Config::chunk_section_count> gpu_sections{};
+        bool gpu_sections_valid = false;
+        // Copy-on-write меш: пока GPU строит новую версию, старая остаётся активной и продолжает
+        // рисоваться. Pending-диапазоны не видны draw-проходу до успешного readback без overflow.
+        int gpu_pending_handle = -1;
+        uint64_t gpu_pending_version = 0;
+        uint64_t gpu_pending_geometry_version = 0;
+        uint8_t gpu_pending_lod_stride = 1;
+        std::array<uint32_t, kGpuStreams> gpu_pending_first{};
+        std::array<uint32_t, kGpuStreams> gpu_pending_cap{};
+        std::array<uint32_t, kGpuStreams> gpu_pending_wanted{};
+        bool gpu_pending_regrow = false;
+        std::array<bool, kGpuStreams> gpu_pending_capacity_observed{};
+        bool gpu_pending_flora_skipped = false;
+        float gpu_pending_appearance_start_time = 0.0f;
+        std::array<Gpu_Section_Snapshot, Config::chunk_section_count> gpu_pending_sections{};
+        bool gpu_pending_sections_valid = false;
+        // Время первого появления текущей активной GPU-резиденции. Хранится в Origins.w, поэтому
         // не требует отдельного SSBO и не меняет формат quad/payload.
         float appearance_start_time = 0.0f;
     };
@@ -136,7 +164,9 @@ private:
     void poll_gpu_phase_timers();
     void gpu_phase_stamp(int stamp);
     void record_gpu_mesher_sample(double elapsed_ms, uint32_t chunk_count);
-    void build_gpu_hiz(const glm::mat4& view_projection);
+    void build_gpu_hiz(const glm::mat4& view_projection, bool force_current_depth = false);
+    void recull_gpu_frame_with_current_depth(const std::vector<const Renderable_Chunk*>& chunks,
+                                             bool spectator, const glm::mat4& view_projection);
     void draw_gpu_kind(int kind);
 
     // Reads back last frame's query (if the result is ready) and updates state.visible.
@@ -169,14 +199,19 @@ private:
     // Legacy GL_ANY_SAMPLES_PASSED path only. GPU temporal Hi-Z culling above is independent
     // and uses a conservative previous-frame depth pyramid. The query path stays off by default:
     // its old self-occlusion behavior caused visible flicker and is not needed by GPU Hi-Z.
-    bool m_occlusion_enabled = false;
+    // Enables current-frame GPU depth/Hi-Z visibility. Legacy previous-frame section queries
+    // are no longer used because their delayed results can hide newly exposed terrain.
+    bool m_occlusion_enabled = true;
 
     // Параметры GPU-мешера. Единица пула — блок из kGpuBlockQuads квадов (16 байт каждый).
     static constexpr int kGpuBatchChunks = 512;
     static constexpr uint32_t kGpuBlockQuads = 32;
     static constexpr uint32_t kGpuInitialPoolBlocks = 16384;  // 512 К квадов = 8 МБ, дальше пул растёт
     // Стартовая ёмкость потока по виду (квады); при переполнении увеличивается по точному readback-счётчику.
-    static constexpr std::array<uint32_t, kGpuKindCount> kGpuInitialQuads = {1024, 128, 2048, 1024};
+    // Liquid sections commonly need one 32x32 surface plus shoreline/side faces. The larger
+    // starting range avoids showing a truncated ocean section while its first async readback
+    // discovers that the smaller range overflowed.
+    static constexpr std::array<uint32_t, kGpuKindCount> kGpuInitialQuads = {1024, 128, 2048, 4096};
     // Hard ceiling for ordinary streaming uploads. Runtime throttling lowers this further
     // when the previous asynchronous GPU timer shows that the chunk pass is already late.
     static constexpr size_t kGpuFrameBudgetBytes = 4u * 1024u * 1024u;
@@ -188,6 +223,7 @@ private:
         std::vector<glm::ivec3> positions;
         std::vector<uint64_t> versions;
         std::vector<int> handles;
+        std::vector<uint8_t> pending_geometry; // 1 = COW-кандидат, 0 = light-only active update
         // Метки GL_TIMESTAMP до и после компьют-диспетчеризации этого батча: по ним считается, сколько
         // миллисекунд GPU стоит один чанк, и от этого зависит размер следующих батчей.
         GLuint stamps[2] = {0, 0};
@@ -220,14 +256,40 @@ private:
         double mesher_ms = 0.0, mesher_max_ms = 0.0;
         // Последнее состояние планировщика мешера (сколько чанков ждёт загрузки и какой был размер батча).
         uint32_t pending_chunks = 0, last_batch_chunks = 0;
-        // Батч: сколько чанков прошли световым путём (квады не пересобирались) и сколько — полным.
-        uint32_t light_chunks = 0, full_chunks = 0;
+        // Батч: световые обновления, локальные секционные пересборки и полные замены геометрии.
+        uint32_t light_chunks = 0, partial_chunks = 0, full_chunks = 0;
     };
     // Свободные участки пула (в блоках): начало -> длина. Соседние участки сливаются при освобождении.
     struct Gpu_Pool_Allocator {
         std::map<uint32_t, uint32_t> free_runs;
         uint32_t total_blocks = 0;
     };
+    // 32 quads form one culling cluster. The descriptor buffer mirrors the quad pool:
+    // descriptor index = firstQuad / 32, so freeing/reusing a quad-pool block reuses its bounds slot.
+    struct alignas(16) Gpu_Meshlet_Bounds {
+        glm::vec4 minimum{0.0f};
+        glm::vec4 maximum{0.0f};
+        glm::uvec4 metadata{0u}; // x = actual quad count (0..32)
+    };
+    struct alignas(16) Gpu_Meshlet_Build_Candidate {
+        glm::uvec4 data{}; // handle, stream index, first quad, quad offset in stream
+    };
+    struct alignas(16) Gpu_Meshlet_Stream {
+        glm::uvec4 range{};    // handle, stream index, first quad, bit 0 = LOD (skip conservative Hi-Z)
+        glm::uvec4 metadata{}; // section, kind (0 solid / 1 shaped), fixed command offset, meshlet count
+    };
+    static_assert(sizeof(Gpu_Meshlet_Bounds) == 48);
+    static_assert(sizeof(Gpu_Meshlet_Build_Candidate) == 16);
+    static_assert(sizeof(Gpu_Meshlet_Stream) == 32);
+    struct Gpu_Meshlet_Draw_List {
+        uint32_t command_offset = 0; // command record offset, not byte offset
+        uint32_t max_commands = 0;
+    };
+    void build_gpu_meshlet_bounds(const std::vector<Gpu_Meshlet_Build_Candidate>& candidates);
+    void rebuild_all_gpu_meshlet_bounds();
+    void prepare_gpu_meshlet_frame(const std::vector<const Renderable_Chunk*>& opaque_order,
+                                   const glm::mat4& view_projection, bool use_hiz, bool spectator);
+
     // Список отрисовки одного вида за кадр: записи (ручка, маска секций) лежат в общем SSBO порядка.
     struct Gpu_Frame_List {
         uint32_t order_offset = 0;
@@ -256,6 +318,7 @@ private:
     int m_gpu_mesh_shader_mode = 0; // 0 classic, 1 EXT, 2 NV
     GLint m_gpu_loc_cull_candidate_count = -1;
     GLint m_gpu_loc_cull_mesh_mode = -1;
+    GLint m_gpu_loc_cull_meshlet_enabled = -1;
     GLint m_gpu_loc_cull_planes = -1;
     GLint m_gpu_loc_cull_view_projection = -1;
     GLint m_gpu_loc_cull_viewport_size = -1;
@@ -319,6 +382,39 @@ private:
     unsigned int m_gpu_cmd_ssbo = 0;        // GPU-generated DrawArrays/MeshTasks indirect commands
     unsigned int m_gpu_cmd_meta_ssbo = 0;   // per-kind indirect counts + compact-to-source draw map
     unsigned int m_gpu_cull_stats_ssbo = 0; // GPU counters; async-copied to readback ring
+
+    // Optional per-meshlet path layered over the existing compact 16-byte quad pool.
+    // The normal renderer remains untouched when this switch is off.
+    bool m_meshlet_renderer_enabled = false;
+    bool m_meshlet_renderer_ready = false;
+    bool m_meshlet_bounds_dirty = true;
+    bool m_meshlet_compact_commands = false;
+    unsigned int m_gpu_meshlet_build_program = 0;
+    unsigned int m_gpu_meshlet_cull_program = 0;
+    unsigned int m_gpu_meshlet_bounds_ssbo = 0; // one 48-byte descriptor per 32-quad pool block
+    unsigned int m_gpu_meshlet_build_ssbo = 0;
+    unsigned int m_gpu_meshlet_streams_ssbo = 0;
+    unsigned int m_gpu_meshlet_commands_ssbo = 0;
+    unsigned int m_gpu_meshlet_counts_ssbo = 0; // indirect draw counts indexed by GPU kind (solid=0, shaped=1, liquid=3)
+    size_t m_gpu_meshlet_bounds_capacity_bytes = 0;
+    size_t m_gpu_meshlet_build_capacity = 0;
+    size_t m_gpu_meshlet_streams_capacity = 0;
+    size_t m_gpu_meshlet_commands_capacity = 0; // command records
+    std::array<Gpu_Meshlet_Draw_List, kGpuKindCount> m_gpu_meshlet_draw_lists{};
+    GLint m_gpu_loc_meshlet_build_count = -1;
+    GLint m_gpu_loc_meshlet_build_base = -1;
+    GLint m_gpu_loc_meshlet_stream_count = -1;
+    GLint m_gpu_loc_meshlet_stream_base = -1;
+    GLint m_gpu_loc_meshlet_compact = -1;
+    GLint m_gpu_loc_meshlet_solid_base = -1;
+    GLint m_gpu_loc_meshlet_shaped_base = -1;
+    GLint m_gpu_loc_meshlet_liquid_base = -1;
+    GLint m_gpu_loc_meshlet_planes = -1;
+    GLint m_gpu_loc_meshlet_view_projection = -1;
+    GLint m_gpu_loc_meshlet_viewport = -1;
+    GLint m_gpu_loc_meshlet_use_hiz = -1;
+    GLint m_gpu_loc_meshlet_hiz = -1;
+
     size_t m_gpu_candidates_capacity = 0;   // кандидатов
     size_t m_gpu_bounds_capacity = 0;       // vec4 bounds
     size_t m_gpu_order_capacity = 0;        // записей
@@ -329,6 +425,13 @@ private:
     size_t m_gpu_cull_stats_write = 0;
     // Previous-frame hierarchical Z. It is used only while the view, viewport and
     // resident mesh set remain unchanged; otherwise it is invalidated conservatively.
+    // Half-resolution depth-only target for current-frame camera-ray visibility. It keeps
+    // the visibility prepass cheap on integrated GPUs while the MAX Hi-Z pyramid remains
+    // conservative (a coarse/clear sample simply prevents an occlusion decision).
+    unsigned int m_gpu_ray_depth_fbo = 0;
+    unsigned int m_gpu_ray_depth_texture = 0;
+    int m_gpu_ray_depth_width = 0;
+    int m_gpu_ray_depth_height = 0;
     unsigned int m_gpu_hiz_depth_texture = 0;
     unsigned int m_gpu_hiz_texture = 0;
     unsigned int m_gpu_hiz_fbo = 0;
@@ -351,6 +454,7 @@ private:
     int m_gpu_hiz_candidate_viewport[4] = {0, 0, 0, 0};
     int m_gpu_hiz_stable_frames = 0;
     bool m_gpu_hiz_candidate_valid = false;
+    uint32_t m_gpu_frame_candidate_count = 0;
     int m_gpu_handle_capacity = 0;
     int m_gpu_handle_high_water = 0;        // сколько ручек выдано максимум (индекс + 1)
     std::vector<int> m_gpu_free_handles;
@@ -371,7 +475,7 @@ private:
     std::array<Gpu_Frame_List, kGpuKindCount> m_gpu_lists{};
 
 public:
-    void set_occlusion_enabled(bool enabled) { m_occlusion_enabled = enabled; }
+    void set_occlusion_enabled(bool enabled) { m_occlusion_enabled = enabled; } // toggles current-frame GPU visibility
     // Изометрический снимок: чанки грузятся на GPU все сразу, кадр ждёт счётчиков квадов (без этого часть
     // чанков доехала бы до видеокарты в следующих кадрах, а снимок должен быть полным).
     void set_gpu_sync_residency(bool enabled) { m_gpu_sync_residency = enabled; }
@@ -380,6 +484,14 @@ public:
     bool debug_gpu_section_quads(const glm::ivec3& chunk_position, int section, std::vector<glm::uvec4>& out,
                                  int kind = 0);
     bool is_occlusion_enabled() const { return m_occlusion_enabled; }
+    void set_meshlet_renderer_enabled(bool enabled) {
+        if (enabled && !m_meshlet_renderer_ready) enabled = false;
+        if (m_meshlet_renderer_enabled == enabled) return;
+        m_meshlet_renderer_enabled = enabled;
+        if (enabled) m_meshlet_bounds_dirty = true; // rebuild descriptors for already resident chunks
+    }
+    bool is_meshlet_renderer_enabled() const { return m_meshlet_renderer_enabled; }
+    bool is_meshlet_renderer_available() const { return m_meshlet_renderer_ready; }
 
     Renderer();
     ~Renderer();

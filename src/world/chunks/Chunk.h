@@ -5,6 +5,7 @@
 #ifndef OPTICRAFT_CHUNK_H
 #define OPTICRAFT_CHUNK_H
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -167,6 +168,9 @@ inline void chunk_ring_coords(int index, int& x, int& y, int& z) {
 // Всё, что CPU хранит о меше чанка. Вершин и квадов здесь нет: их строит видеокарта (см. Renderer).
 struct Chunk_Meshes {
     std::array<Chunk_Section_Range, Config::chunk_section_count> sections;
+    // Bit per vertical section. On a partial edit, compute meshing and GPU range replacement
+    // touch only these sections; all other section streams remain resident and unchanged.
+    uint8_t section_update_mask = static_cast<uint8_t>((1u << Config::chunk_section_count) - 1u);
     // Объединение видов геометрии всех секций (0 — рисовать нечего).
     uint8_t gpu_kinds = 0;
     // 1 = full detail, 2 = medium LOD, 4 = distant LOD.
@@ -592,6 +596,7 @@ private:
     // Растёт при каждой пометке грязности (см. mark_mesh_dirty): задача пересборки запоминает его
     // на моменте снимка, и если к её применению он вырос, правка легла уже после снимка.
     uint64_t m_dirty_epoch = 0;
+    uint8_t m_dirty_section_mask = static_cast<uint8_t>((1u << Config::chunk_section_count) - 1u);
     uint64_t m_mesh_seq_issued = 0;
     // Уникальный номер ОБЪЕКТА (выдаётся в конструкторе из глобального счётчика, с 1). Позиция
     // для этого не годится: выгрузили и загрузили заново — позиция та же, объект уже другой.
@@ -642,7 +647,9 @@ public:
     void touch_mesh_version();
 
     Block_Types get_block(int x, int y, int z) const;
-    void set_block(int x, int y, int z, Block_Types type);
+    // Returns true when the visible geometry needs remeshing. Replacing a fully enclosed
+    // opaque cube can update world data without dirtying any mesh section.
+    bool set_block(int x, int y, int z, Block_Types type);
     uint8_t get_meta(int x, int y, int z) const;
     // Меняет только метаданные (блок остаётся тем же): помечает чанк изменённым и
     // требующим перестройки меша.
@@ -688,10 +695,33 @@ public:
     // в квады либо откат): геометрию блоков это не меняет, но флаг грязности поднимаем, чтобы задача прошла.
     void mark_mesh_dirty(bool light_reason = false) {
         m_is_mesh_dirty = true;
-        if (!light_reason) m_geometry_dirty = true;
+        if (!light_reason) {
+            m_geometry_dirty = true;
+            m_dirty_section_mask = static_cast<uint8_t>((1u << Config::chunk_section_count) - 1u);
+        }
         ++m_dirty_epoch;
         s_dirty_events.fetch_add(1, std::memory_order_relaxed);
     }
+
+    // Block edits normally invalidate one 8-block-high section. A block on a section's
+    // horizontal seam can also expose/hide a vertical face in its neighbour section, so include
+    // that adjacent section. Chunk-border neighbours are still invalidated by Chunk_Manager.
+    void mark_section_mesh_dirty(int local_y) {
+        m_is_mesh_dirty = true;
+        m_geometry_dirty = true;
+        const int section = std::clamp(local_y / Config::chunk_section_height,
+                                       0, Config::chunk_section_count - 1);
+        m_dirty_section_mask |= static_cast<uint8_t>(1u << section);
+        if (local_y % Config::chunk_section_height == 0 && section > 0)
+            m_dirty_section_mask |= static_cast<uint8_t>(1u << (section - 1));
+        if (local_y % Config::chunk_section_height == Config::chunk_section_height - 1 &&
+            section + 1 < Config::chunk_section_count)
+            m_dirty_section_mask |= static_cast<uint8_t>(1u << (section + 1));
+        ++m_dirty_epoch;
+        s_dirty_events.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    uint8_t get_dirty_section_mask() const { return m_dirty_section_mask; }
     // Свет изменился. Ближний чанк с одной солид-геометрией пересобирает только световой объём: квады не
     // трогаем. Иначе свет запечён в квады (дальний LOD, чанк с жидкостью/флорой/формами, откат) — полная пересборка.
     void mark_light_dirty() {

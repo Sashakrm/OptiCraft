@@ -465,12 +465,15 @@ void Game::load_options() {
             else if (key == "antialiasing") m_aa_mode = std::clamp(std::stoi(value), 0, Config::antialiasing_mode_count - 1);
             else if (key == "film_grain") m_film_grain = std::clamp(std::stof(value), 0.0f, 1.0f);
             else if (key == "vignette") m_vignette_level = std::clamp(std::stoi(value), 0, Config::vignette_level_count - 1);
+            else if (key == "meshlet_renderer") m_meshlet_renderer_enabled = std::stoi(value) != 0;
             else if (key == "language") Localization::get().set_language(value);
         } catch (...) {}
     }
     Hud::set_gui_scale_setting(m_gui_scale_setting);
     m_renderer_ptr->set_flora_render_distance(m_flora_distance);
     m_renderer_ptr->set_render_distance(m_render_distance);
+    m_renderer_ptr->set_meshlet_renderer_enabled(m_meshlet_renderer_enabled);
+    m_meshlet_renderer_enabled = m_renderer_ptr->is_meshlet_renderer_enabled();
     apply_graphics_settings();
 }
 
@@ -486,6 +489,7 @@ void Game::save_options() const {
          << "antialiasing=" << m_aa_mode << "\n"
          << "film_grain=" << m_film_grain << "\n"
          << "vignette=" << m_vignette_level << "\n"
+         << "meshlet_renderer=" << (get_meshlet_renderer_enabled() ? 1 : 0) << "\n"
          << "language=" << Localization::get().get_language() << "\n";
 }
 
@@ -533,6 +537,20 @@ void Game::set_film_grain(float value) {
 void Game::set_vignette_level(int level) {
     m_vignette_level = std::clamp(level, 0, Config::vignette_level_count - 1);
     apply_graphics_settings();
+}
+
+bool Game::is_meshlet_renderer_available() const {
+    return m_renderer_ptr && m_renderer_ptr->is_meshlet_renderer_available();
+}
+
+void Game::set_meshlet_renderer_enabled(bool enabled) {
+    if (!m_renderer_ptr || !m_renderer_ptr->is_meshlet_renderer_available()) {
+        m_meshlet_renderer_enabled = false;
+    } else {
+        m_renderer_ptr->set_meshlet_renderer_enabled(enabled);
+        m_meshlet_renderer_enabled = m_renderer_ptr->is_meshlet_renderer_enabled();
+    }
+    save_options();
 }
 
 void Game::set_render_distance(int chunks) {

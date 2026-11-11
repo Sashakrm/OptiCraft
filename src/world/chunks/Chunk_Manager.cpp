@@ -955,6 +955,7 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                                                        mesh_job.lod_stride);
             meshes.geometry_version = mesh_job.geometry_version;
             meshes.light_only = mesh_job.light_only;
+            meshes.section_update_mask = mesh_job.light_only ? 0u : mesh_job.section_update_mask;
 
             Mesh_Result done{mesh_job.position, mesh_job.generation_id, std::move(meshes),
                              mesh_job.priority, mesh_job.dirty_epoch, mesh_job.instance_id,
@@ -1450,6 +1451,10 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent, in
     job.lod_stride = static_cast<uint8_t>(capture_active() ? 1 :
         (lod_stride > 0 ? (lod_stride >= 4 ? 4 : (lod_stride >= 2 ? 2 : 1))
                         : desired_lod_stride(cx, cy, cz, target->get_meshes().lod_stride)));
+    // Нужен и для выбора полного/секционного обновления, и для приоритета задачи.
+    // При первом меше старого LOD ещё нет, поэтому это не переход LOD.
+    const bool first_mesh = target->get_mesh_version() == 0;
+    const bool lod_transition = !first_mesh && job.lod_stride != target->get_meshes().lod_stride;
     // Счётчик пометок снимаем вместе со снимком данных: правка после этого момента его изменит.
     job.dirty_epoch = target->get_dirty_epoch();
     job.instance_id = target->get_instance_id();
@@ -1464,6 +1469,10 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent, in
         target->get_meshes().geometry_version != 0 && target->get_meshes().lod_stride == 1 &&
         job.lod_stride == 1 && (target->get_meshes().gpu_kinds & static_cast<uint8_t>(~1u)) == 0u;
     job.light_only = light_candidate;
+    const uint8_t all_sections = static_cast<uint8_t>((1u << Config::chunk_section_count) - 1u);
+    job.section_update_mask = light_candidate ? 0u : target->get_dirty_section_mask();
+    if (!light_candidate && (target->get_mesh_version() == 0 || lod_transition || job.section_update_mask == 0u))
+        job.section_update_mask = all_sections;
     job.geometry_version = light_candidate ? target->get_meshes().geometry_version
                                            : Chunk::allocate_geometry_version();
     {
@@ -1589,8 +1598,6 @@ void Chunk_Manager::enqueue_mesh_rebuild(int cx, int cy, int cz, bool urgent, in
     }
     }
 
-    const bool first_mesh = target->get_mesh_version() == 0;
-    const bool lod_transition = !first_mesh && job.lod_stride != target->get_meshes().lod_stride;
     job.priority = mesh_job_priority(position, first_mesh, lod_transition, urgent);
 
     const int priority = job.priority;
@@ -2441,10 +2448,10 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
     // Зафиксировать старый top ДО изменения блока: от него зависит диапазон, который
     // придётся перелить после правки. Кэш остаётся прежним до обработки отложенной задачи.
     if (sky_opacity_changed) (void)sunlight_height_at(wx, wz);
-    chunk->set_block(lx, ly, lz, type);
+    const bool geometry_changed = chunk->set_block(lx, ly, lz, type);
     if (meta != 0) chunk->set_meta(lx, ly, lz, meta);
     sync_block_entity(wx, wy, wz, old_type, type);
-    request_urgent_mesh_rebuild(cx, cy, cz);
+    if (geometry_changed || meta != 0) request_urgent_mesh_rebuild(cx, cy, cz);
 
     // Правленая клетка видна мешам тех соседей, в чьей 3x3x3 окрестности она лежит: для граней —
     // шесть соседей, для AO — ещё рёбра и углы. Пересобираем каждого загруженного из них.
@@ -2541,13 +2548,14 @@ void Chunk_Manager::set_blocks_world_batch(const std::vector<std::pair<glm::ivec
                 it->second.max_y = std::max(it->second.max_y, pos.y);
             }
         }
-        chunk->set_block(lx, ly, lz, type);
+        const bool geometry_changed = chunk->set_block(lx, ly, lz, type);
         sync_block_entity(pos.x, pos.y, pos.z, old_type, type);
         chunk->mark_modified();
         chunks_to_save.insert(chunk);
 
-        // Меш: как в set_block_world, но запрос на пересборку — один на чанк (дедуп в очереди).
-        request_urgent_mesh_rebuild(cx, cy, cz);
+        // A fully enclosed opaque-cube replacement is invisible and does not dirty the
+        // section. All other edits rebuild only their marked section mask.
+        if (geometry_changed) request_urgent_mesh_rebuild(cx, cy, cz);
         if (lx == 0 || lx == Config::chunk_size - 1 || ly == 0 || ly == Config::chunk_height - 1 ||
             lz == 0 || lz == Config::chunk_size - 1) {
             for (int dz = -1; dz <= 1; ++dz)
@@ -3675,8 +3683,10 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
     bool spectator
 ) {
     OC_ZONE("ChunkMgr::get_renderable_chunks");
-    // The frustum is intentionally evaluated on the GPU by Renderer::prepare_gpu_frame.
-    (void)frustum;
+    (void)spectator;
+    // CPU performs only a whole-chunk frustum test. GPU section/meshlet bounds belong to
+    // the active COW generation and are more accurate; CPU-side section filtering based on
+    // a newer not-yet-uploaded mesh can otherwise hide the previous complete generation.
 
     std::vector<Renderable_Chunk> result;
     result.reserve(m_loaded_cache.size() / 2 + 16);
@@ -3713,51 +3723,34 @@ std::vector<Renderable_Chunk> Chunk_Manager::get_renderable_chunks(
         return a.position.x < b.position.x;
     };
 
-    // Глаз в непроходимой клетке (камень: /tp в стену, застревание): обзора из воздуха нет, отсечение здесь не
-    // применяется, и кадр рисуется как без него. Иначе кадр менялся бы: дальние поверхности, видные сквозь камень,
-    // пропадали бы, а это уже видимое на экране.
-    bool eye_in_solid = false;
-    if (camera_position) {
-        const int wx = static_cast<int>(std::floor(camera_position->x));
-        const int wy = static_cast<int>(std::floor(camera_position->y));
-        const int wz = static_cast<int>(std::floor(camera_position->z));
-        const int cx = Math_Helpers::floor_div(wx, Config::chunk_size);
-        const int cy = Math_Helpers::floor_div(wy, Config::chunk_height);
-        const int cz = Math_Helpers::floor_div(wz, Config::chunk_size);
-        if (const Chunk* eye_chunk = get_chunk(cx, cy, cz)) {
-            eye_in_solid = block_occludes_view(eye_chunk->get_block(
-                wx - cx * Config::chunk_size, wy - cy * Config::chunk_height, wz - cz * Config::chunk_size));
-        }
-    }
-    // Достижимость от камеры; состояние обхода переиспользуется между кадрами (см. Reach_Scratch).
-    static thread_local Reach_Scratch reach;
-    // В режиме наблюдателя камера проходит сквозь стены, поэтому геометрия за
-    // непрозрачными секциями тоже должна оставаться видимой.
-    const bool reach_enabled = !spectator && camera_position && !eye_in_solid &&
-        build_section_reach(loaded, *camera_position, m_chunk_set_epoch, this, reach);
-
     for (const auto& [key, chunk] : loaded) {
-        if (chunk->is_empty()) continue;
+        const Chunk_Meshes& meshes = chunk->get_meshes();
+        if (chunk->is_empty() && !meshes.gpu_upload_pending) continue;
         // Захват области рисует только чанки плана (обычные чанки вокруг игрока, лежащие
         // вне плана, — глубокое подземелье/небо — в кадр не попадают).
         if (capture_active() && !capture_plan_contains(key)) continue;
 
-        const Chunk_Meshes& meshes = chunk->get_meshes();
         Renderable_Chunk renderable{key, &meshes, chunk->get_mesh_version()};
-        bool has_visible_section = false;
+        bool has_any_geometry = false;
         for (size_t section_index = 0; section_index < meshes.sections.size(); ++section_index) {
             const Chunk_Section_Range& section = meshes.sections[section_index];
             if (!section.has_geometry) continue;
-
-            // Здесь оставляем только семантическую достижимость секции через открытые
-            // пространства пещер. Проверку AABB против камеры/фрустума выполняет GPU
-            // в gpu_cull_commands.comp — CPU не должен заранее решать, какие секции рисовать.
-            const bool reached = !reach_enabled || is_reached(reach, key, static_cast<int>(section_index));
-            const bool eligible = spectator || reached;
-            renderable.section_visible[section_index] = eligible;
-            has_visible_section = has_visible_section || eligible;
+            renderable.section_visible[section_index] = true; // informational only; GPU tests real bounds
+            has_any_geometry = true;
         }
-        if (!has_visible_section) continue;
+        // Preserve the chunk in the frame list while a just-edited empty snapshot is pending:
+        // Renderer can continue drawing its old active generation until the GPU fence commits.
+        if (!has_any_geometry && !meshes.gpu_upload_pending) continue;
+
+        const glm::vec3 chunk_min(
+            static_cast<float>(key.x * Config::chunk_size) - 0.12f,
+            static_cast<float>(key.y * Config::chunk_height) - 0.12f,
+            static_cast<float>(key.z * Config::chunk_size) - 0.12f);
+        const glm::vec3 chunk_max(
+            chunk_min.x + static_cast<float>(Config::chunk_size) + 0.24f,
+            static_cast<float>(key.y * Config::chunk_height + Config::chunk_height) + 0.12f,
+            chunk_min.z + static_cast<float>(Config::chunk_size) + 0.24f);
+        if (frustum && !frustum->intersects_aabb(chunk_min, chunk_max)) continue;
 
         const int wanted_lod = desired_lod_stride(key.x, key.y, key.z, meshes.lod_stride);
         if (wanted_lod != meshes.lod_stride &&

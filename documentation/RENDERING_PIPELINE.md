@@ -13,39 +13,77 @@ the NVIDIA pipeline uses the corresponding `_nv` files. The entry points are loa
 runtime because the project's GLAD baseline is OpenGL 4.3. If neither extension is usable,
 rendering falls back to `glMultiDrawArraysIndirect` and the original vertex-pulling shaders.
 
-## GPU-driven frame preparation
+## GPU-driven frame preparation and current-frame camera-ray visibility
 
-CPU frame preparation no longer rejects chunks by the camera frustum and no longer assembles
-per-section indirect commands. It sends the GPU only:
+CPU frame preparation now performs only a whole-chunk AABB/frustum test. It does not
+reject individual sections using portal/air-connectivity reachability: that traversal could
+incorrectly mark exposed mountain or water sections unreachable. CPU submits active GPU
+handles and per-section metadata snapshots that belong to the currently committed COW mesh
+generation.
 
-- resident chunk handles;
-- the section reachability mask produced by the world/portal connectivity traversal;
-- section Y bounds and per-section geometry kinds;
-- small per-frame flags (for example the flora distance limit).
+The GPU performs a half-resolution opaque depth-only prepass into a separate depth target.
+For every raster sample, hardware depth testing records the nearest opaque surface along
+that camera-view ray. The compute pipeline copies this depth into a MAX Hi-Z pyramid. The
+MAX reduction is conservative: a screen tile with a clear/far sample cannot prove that a
+meshlet is hidden. Opaque section/meshlet AABBs are rejected only when their nearest depth
+is behind every sample in the covered Hi-Z region. Water never consumes opaque Hi-Z and
+keeps a fixed far-to-near command order.
 
-`gpu_cull_commands.comp` performs the camera-frustum test for each section AABB, optionally
-performs temporal Hi-Z occlusion for opaque sections, reverses the transparent candidate order,
-and writes the four per-kind order lists plus indirect commands. The draw path consumes those
-SSBOs directly with `glMultiDrawArraysIndirect` or `glMultiDrawMeshTasksIndirectEXT/NV`.
-There is no CPU readback of the visible lists or commands.
+The half-resolution ray-depth target is only a culling source. It is not the scene's final
+depth buffer. The full-resolution colour pass returns to the main framebuffer and performs
+its own normal `GL_LESS` depth test with depth writes enabled. This distinction matters:
+using `GL_LEQUAL` with depth writes disabled after rendering depth into a separate FBO left
+the main depth buffer unpopulated and allowed overlapping terrain/water to draw incorrectly.
+The final full-resolution depth test resolves the exact visible pixels; Hi-Z only avoids
+submitting fully hidden coarse bounds.
 
-The Hi-Z pyramid is built on the GPU from the opaque depth buffer. It uses maximum-depth
-reduction: a tile can reject an opaque section only when every covered depth sample is closer
-than the nearest point of the section bounds. Clear pixels remain depth 1.0, so holes do not
-become occluders. The pyramid is reused only when the view-projection matrix, viewport and
-resident mesh/reachability signature match the frame that produced it. Camera motion, viewport
-changes, mesh uploads or candidate changes invalidate it. This intentionally conservative
-policy sacrifices some culling opportunities rather than risking stale-depth popping. The
-legacy `GL_ANY_SAMPLES_PASSED` query path remains optional and is disabled by default.
+The current method is hardware raster/depth-based camera-ray visibility, not a separate
+software ray marcher through every voxel. For a given screen sample, the depth test finds
+the first opaque hit; objects fully behind proven occluders can be culled conservatively.
+Water remains transparent and is not allowed to occlude later water commands through
+opaque Hi-Z.
+
+## Experimental per-meshlet rendering path (0.10.5)
+
+An opt-in `GPU Meshlet` mode is layered over the existing quad pool. The compute greedy mesher and
+its 16-byte quad format are unchanged. A second build pass writes one persistent world-space AABB
+per 32-quad pool block; solid and shaped records use different decoders because `mesh_misc.comp`
+stores shaped box coordinates in `rec.z/rec.w`, not in the greedy-face width/height bits. Liquid uses
+a conservative whole-cell AABB with a small vertical animation margin. Descriptors are rebuilt only
+for geometry uploads or once when the mode is first enabled.
+
+A frame pass uploads records for resident solid/shaped/liquid streams, then one workgroup per stream checks
+its Meshlets against the camera frustum and (for detailed opaque streams only) the current-frame
+conservative Hi-Z pyramid. Coarse LOD streams skip Hi-Z rejection to avoid speckled holes. It writes `DrawArraysIndirectCommand` records directly into three command ranges (solid,
+shaped and liquid); the liquid range is assembled back-to-front and is never query/Hi-Z culled. When the
+indirect-count API is available, visible commands are appended with shared-memory aggregation and
+the GPU also provides the count; otherwise fixed-count MDI submits zero-count commands for culled
+Meshlets. The old chunk culler still owns flora and chunk-level stats, but skips writing duplicate
+solid/shaped commands while Meshlet mode is active. The Meshlet stream record marks coarse LOD streams so they skip Hi-Z; the old asynchronous
+per-section occlusion-query path is not used for gameplay visibility. Meshlet command preparation runs
+before the legacy culler; if buffer allocation/capacity validation fails, Standard mode is restored
+before the legacy opaque command lists are generated in that same frame.
+
+The mode is toggled in in-world Options and persisted as `meshlet_renderer=0|1`. It uses classic
+vertex-pulling shaders for solid, shaped and liquid MDI. Liquid has an independent command range,
+keeps far-to-near chunk ordering, bypasses opaque Hi-Z/query rejection and retains alpha blending
+without depth writes. Flora remains on the legacy path. Native EXT/NV task/mesh draws remain part of
+the Standard mode and are not mixed with the Meshlet command stream. See
+[`MESHLET_RENDERER.md`](MESHLET_RENDERER.md) for SSBO layouts, dispatch bindings, barriers, known
+limits and the A/B test protocol.
 
 ## What still belongs to the CPU
 
 The renderer is GPU-driven after candidate upload, but it is not a fully autonomous GPU world
 engine. CPU work remains for world simulation, chunk residency and streaming, block/palette/light
-payload packing, section connectivity/reachability, mesh-version bookkeeping, prioritizing the
+payload packing, chunk-level frustum filtering, mesh-version bookkeeping, prioritizing the
 resident candidate list and issuing OpenGL commands. Chunk generation remains in the existing
 Chunk_Manager workers. The renderer's persistent CPU worker pool parallelizes distance
-calculation and stable sorting; it never calls OpenGL from background threads. `load_around()`
+calculation and stable sorting; it never calls OpenGL from background threads. Geometry edits carry
+an 8-block-high section mask through the mesh job and GPU upload. The greedy/misc compute shaders
+skip untouched sections; their quad ranges, counters and Meshlet bounds remain resident. First
+meshes, LOD transitions and buffer regrowth still rebuild the full chunk. A swap between two full
+opaque cubes can avoid remeshing altogether when all six adjacent cells occlude it. `load_around()`
 keeps a persistent sorted column backlog, so freeing in-flight slots drains the backlog instead
 of rebuilding and sorting the full render-distance square each time. In-flight requests, main-thread
 chunk handoff, dirty remeshing and GPU uploads have smaller budgets; upload batches shrink further
@@ -87,7 +125,14 @@ levels. It is a safe distance-selected mesh rebuild, not a zero-cost GPU LOD swi
 ## Context and validation
 
 Window creation tries OpenGL 4.6, then 4.5, then 4.3 core. Compute meshing, GPU frustum/Hi-Z
-culling and indirect commands require OpenGL 4.3. EXT/NV mesh shading is optional. The source
-archive was statically reviewed, but this environment does not have the OpenGL development
-libraries/headers or a GLSL compiler, so a full native build and driver-side shader validation
-must still be performed on a machine with the project's graphics dependencies.
+culling, Meshlet AABB construction and indirect commands require OpenGL 4.3. EXT/NV mesh shading
+is optional and is used only by the Standard renderer path when the runtime extension and entry
+points are present. In this development environment the new Compute programs and the existing
+classic vertex/fragment pairs were compiled and linked on a surfaceless Mesa OpenGL 4.5 context;
+synthetic dispatch tests checked solid/shaped AABBs and fixed/compact MDI output. A complete C++ game
+build could not be confirmed because OpenGL/GLFW/GLM development dependencies are absent here.
+No Intel UHD runtime performance result is claimed; the in-game A/B test must be performed on the
+target machine.
+
+
+The camera-ray visibility pass is a raster depth prepass, not a software voxel ray marcher: each covered screen sample stores the nearest opaque surface along its camera direction. It runs at half resolution; conservative MAX Hi-Z rejects only bounds proven behind every depth sample in the selected region. LOD streams and liquid skip Hi-Z rejection, while the final full-resolution depth test resolves pixel visibility.

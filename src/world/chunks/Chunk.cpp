@@ -398,10 +398,77 @@ namespace {
 
     // Рабочие буферы подготовки — свои у каждого потока (мешинг идёт в воркерах), чтобы не
     // аллоцировать ~100 КБ на каждую задачу.
+    // Полное octree занятости для 32^3 клеток: 1 + 8 + 64 + 512 + 4096
+    // внутренних узлов и 32768 листьев. Индексы каждого уровня лежат подряд.
+    // Значение узла — OR занятости всех его потомков, поэтому занятая область
+    // никогда не может ошибочно превратиться в Air при построении coarse LOD.
+    constexpr size_t kLodOctreeNodeCount = 37449;
+    constexpr size_t lod_octree_level_offset(int size) {
+        return size == 32 ? 0u : size == 16 ? 1u : size == 8 ? 9u :
+               size == 4 ? 73u : size == 2 ? 585u : 4681u;
+    }
+    size_t lod_octree_index(int x, int y, int z, int size) {
+        const int nodes_per_axis = kN / size;
+        return lod_octree_level_offset(size) +
+               (static_cast<size_t>(y / size) * nodes_per_axis + (z / size)) * nodes_per_axis +
+               (x / size);
+    }
+
+    bool lod_octree_intersects(const std::array<uint8_t, kLodOctreeNodeCount>& tree,
+                               int node_x, int node_y, int node_z, int node_size,
+                               int query_min_x, int query_min_y, int query_min_z,
+                               int query_max_x, int query_max_y, int query_max_z) {
+        if (node_x >= query_max_x || node_y >= query_max_y || node_z >= query_max_z ||
+            node_x + node_size <= query_min_x || node_y + node_size <= query_min_y ||
+            node_z + node_size <= query_min_z) return false;
+        if (!tree[lod_octree_index(node_x, node_y, node_z, node_size)]) return false;
+        if ((query_min_x <= node_x && node_x + node_size <= query_max_x) &&
+            (query_min_y <= node_y && node_y + node_size <= query_max_y) &&
+            (query_min_z <= node_z && node_z + node_size <= query_max_z)) return true;
+        if (node_size == 1) return true;
+
+        const int child_size = node_size / 2;
+        for (int dy = 0; dy < 2; ++dy)
+            for (int dz = 0; dz < 2; ++dz)
+                for (int dx = 0; dx < 2; ++dx)
+                    if (lod_octree_intersects(tree,
+                            node_x + dx * child_size, node_y + dy * child_size,
+                            node_z + dz * child_size, child_size,
+                            query_min_x, query_min_y, query_min_z,
+                            query_max_x, query_max_y, query_max_z)) return true;
+        return false;
+    }
+
+    void build_lod_occupancy_octree(const Block_ID* blocks, const Mesh_Tables& tab,
+                                    std::array<uint8_t, kLodOctreeNodeCount>& tree) {
+        constexpr size_t kLeafOffset = 4681u;
+        const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
+        for (size_t i = 0; i < kVoxels; ++i) {
+            const Block_ID id = blocks[i];
+            tree[kLeafOffset + i] = static_cast<uint8_t>(id != air && (tab.flags[id] & kFlagGreedy) != 0u);
+        }
+        for (int size = 2; size <= kN; size *= 2) {
+            const int child_size = size / 2;
+            for (int y = 0; y < kH; y += size)
+                for (int z = 0; z < kN; z += size)
+                    for (int x = 0; x < kN; x += size) {
+                        uint8_t occupied = 0;
+                        for (int dy = 0; dy < 2; ++dy)
+                            for (int dz = 0; dz < 2; ++dz)
+                                for (int dx = 0; dx < 2; ++dx)
+                                    occupied = static_cast<uint8_t>(occupied | tree[lod_octree_index(
+                                        x + dx * child_size, y + dy * child_size,
+                                        z + dz * child_size, child_size)]);
+                        tree[lod_octree_index(x, y, z, size)] = occupied;
+                    }
+        }
+    }
+
     struct Mesh_Scratch {
         std::array<Block_ID, kVoxels> blocks;      // id блоков чанка, плоско (y, z, x)
         std::array<Block_ID, kVoxels> lod_blocks;  // coarse-копия только для greedy-мешера
         std::array<uint8_t, kVoxels> lod_meta;   // метаданные выбранного представителя coarse-группы
+        std::array<uint8_t, kLodOctreeNodeCount> lod_occupancy_octree{};
         std::array<uint8_t, kVoxels> light;        // упакованный свет, плоско
         std::array<uint8_t, kVoxels> meta;         // метаданные блоков, плоско
         // Грани соседей за границей чанка: блоки, метаданные и свет, ячейка (a,b) -> b*32+a.
@@ -772,15 +839,14 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     blocks.unpack_meta(S.meta.data());
 
     // Дальний LOD уменьшает только горизонтальную детализацию X/Z и сохраняет
-    // вертикальное разрешение Y. Старый вариант сворачивал объём 2x2x2 / 4x4x4
-    // в один блок при заполнении всего 25% объёма; на склонах и под водой это
-    // превращало тонкий слой грунта в массивные вертикальные столбы. Теперь
-    // представитель выбирается отдельно для каждого Y-слоя по X/Z-группе.
+    // вертикальное разрешение Y. Представитель выбирается отдельно для каждого
+    // Y-слоя по X/Z-группе, а octree проверяет, что занятая область не стала Air.
     // Внешняя полоса по X/Z остаётся точной — переход к соседнему чанку не зависит
     // от LOD соседа. Канава/пещера по вертикали не заполняется искусственно.
     if (lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u) {
         S.lod_blocks.fill(static_cast<Block_ID>(Block_Types::Air));
         S.lod_meta.fill(0);
+        build_lod_occupancy_octree(S.blocks.data(), tab, S.lod_occupancy_octree);
 
         for (int y = 0; y < kH; ++y) {
             for (int z = 0; z < kN; ++z) {
@@ -795,55 +861,121 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
             }
         }
 
-        std::array<Block_ID, 16> ids{};
-        std::array<uint8_t, 16> metas{};
-        std::array<uint8_t, 16> counts{};
+        // Keep a coarse material vote for each X/Z cell. Material is selected by vote,
+        // but occupancy is decided independently by the octree: even one terrain voxel
+        // in the represented column slice prevents that LOD cell from becoming Air.
+        constexpr size_t kLodCellCount = static_cast<size_t>(kN * kN);
+        std::array<Block_ID, kLodCellCount> representatives{};
+        std::array<uint8_t, kLodCellCount> representative_metas{};
+        const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
         for (int y = 0; y < kH; ++y) {
+            representatives.fill(air);
+            representative_metas.fill(0);
+
             for (int z = lod_stride; z < kN - lod_stride; z += lod_stride) {
                 for (int x = lod_stride; x < kN - lod_stride; x += lod_stride) {
-                    ids.fill(static_cast<Block_ID>(Block_Types::Air));
-                    metas.fill(0);
-                    counts.fill(0);
+                    std::array<Block_ID, 16> ids{};
+                    std::array<uint8_t, 16> metas{};
+                    std::array<uint8_t, 16> counts{};
+                    ids.fill(air);
                     int unique_count = 0;
 
+                    // Air participates in the vote. Non-terrain blocks (water, flora,
+                    // shaped blocks) count as empty for this solid-only LOD proxy.
                     for (int dz = 0; dz < lod_stride; ++dz) {
                         for (int dx = 0; dx < lod_stride; ++dx) {
                             const size_t index = (static_cast<size_t>(y) * kN + (z + dz)) * kN + (x + dx);
-                            const Block_ID id = S.blocks[index];
-                            if (id == static_cast<Block_ID>(Block_Types::Air) ||
-                                (tab.flags[id] & kFlagGreedy) == 0u) continue;
+                            const Block_ID source_id = S.blocks[index];
+                            const bool terrain_block = source_id != air &&
+                                (tab.flags[source_id] & kFlagGreedy) != 0u;
+                            const Block_ID id = terrain_block ? source_id : air;
+                            const uint8_t meta = terrain_block ? S.meta[index] : 0u;
 
-                            const uint8_t meta = S.meta[index];
                             int candidate = 0;
                             while (candidate < unique_count &&
                                    (ids[candidate] != id || metas[candidate] != meta)) ++candidate;
                             if (candidate == unique_count) {
                                 ids[unique_count] = id;
                                 metas[unique_count] = meta;
-                                counts[unique_count] = 0;
                                 ++unique_count;
                             }
                             ++counts[candidate];
                         }
                     }
 
-                    Block_ID representative = static_cast<Block_ID>(Block_Types::Air);
-                    uint8_t representative_meta = 0;
-                    if (unique_count > 0) {
-                        int best = 0;
-                        for (int i = 1; i < unique_count; ++i) {
-                            if (counts[i] > counts[best]) best = i;
-                        }
-                        representative = ids[best];
-                        representative_meta = metas[best];
+                    int best = 0;
+                    int best_terrain = -1;
+                    for (int i = 1; i < unique_count; ++i) {
+                        const bool candidate_is_air = ids[i] == air;
+                        const bool best_is_air = ids[best] == air;
+                        if (counts[i] > counts[best] ||
+                            (counts[i] == counts[best] && candidate_is_air && !best_is_air)) best = i;
+                    }
+                    for (int i = 0; i < unique_count; ++i) {
+                        if (ids[i] == air) continue;
+                        if (best_terrain < 0 || counts[i] > counts[best_terrain]) best_terrain = i;
                     }
 
-                    // Only X/Z are expanded; Y remains exactly one block high.
+                    const size_t cell = static_cast<size_t>(z) * kN + x;
+                    Block_ID representative = unique_count != 0 ? ids[best] : air;
+                    uint8_t representative_meta = unique_count != 0 ? metas[best] : 0u;
+                    // The octree is authoritative for occupancy. In addition to the
+                    // represented coarse cell, query a one-voxel X/Z halo around it.
+                    // A very thin ridge/wall sitting just across a sampling boundary must
+                    // not turn its neighbouring LOD sample into Air: that creates isolated
+                    // pinholes when the GPU greedy mesher expands the coarse cell.
+                    const int query_min_x = std::max(0, x - 1);
+                    const int query_min_z = std::max(0, z - 1);
+                    const int query_max_x = std::min(kN, x + lod_stride + 1);
+                    const int query_max_z = std::min(kN, z + lod_stride + 1);
+                    const bool occupied = lod_octree_intersects(S.lod_occupancy_octree,
+                        0, 0, 0, kN, query_min_x, y, query_min_z,
+                        query_max_x, y + 1, query_max_z);
+                    if (occupied && representative == air) {
+                        if (best_terrain >= 0) {
+                            representative = ids[best_terrain];
+                            representative_meta = metas[best_terrain];
+                        } else {
+                            // The current coarse cell is empty, but its halo is occupied.
+                            // Borrow the nearest real terrain material at this Y layer.
+                            // Only one horizontal voxel of halo is used, so this closes
+                            // tiny LOD gaps without filling vertical caves or broad valleys.
+                            int nearest_distance = std::numeric_limits<int>::max();
+                            for (int nz = query_min_z; nz < query_max_z; ++nz) {
+                                for (int nx = query_min_x; nx < query_max_x; ++nx) {
+                                    const size_t source_index =
+                                        (static_cast<size_t>(y) * kN + nz) * kN + nx;
+                                    const Block_ID source_id = S.blocks[source_index];
+                                    if (source_id == air ||
+                                        (tab.flags[source_id] & kFlagGreedy) == 0u) continue;
+                                    const int distance = std::abs(nx - (x + lod_stride / 2)) +
+                                                         std::abs(nz - (z + lod_stride / 2));
+                                    if (distance < nearest_distance) {
+                                        nearest_distance = distance;
+                                        representative = source_id;
+                                        representative_meta = S.meta[source_index];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    representatives[cell] = representative;
+                    representative_metas[cell] = representative_meta;
+                }
+            }
+
+            // Occupancy preservation no longer depends on a material continuing into a
+            // neighbouring coarse cell. The octree OR above guarantees that even a thin
+            // wall or ridge cannot turn into an air hole at an LOD boundary.
+            // Expand only X/Z; Y remains exactly one block high.
+            for (int z = lod_stride; z < kN - lod_stride; z += lod_stride) {
+                for (int x = lod_stride; x < kN - lod_stride; x += lod_stride) {
+                    const size_t cell = static_cast<size_t>(z) * kN + x;
                     for (int dz = 0; dz < lod_stride; ++dz) {
                         for (int dx = 0; dx < lod_stride; ++dx) {
                             const size_t index = (static_cast<size_t>(y) * kN + (z + dz)) * kN + (x + dx);
-                            S.lod_blocks[index] = representative;
-                            S.lod_meta[index] = representative_meta;
+                            S.lod_blocks[index] = representatives[cell];
+                            S.lod_meta[index] = representative_metas[cell];
                         }
                     }
                 }
@@ -980,7 +1112,7 @@ Gpu_Mesh_Tables gpu_mesh_tables() {
     out.shape_index.assign(8 * 256 * 2, 0u);
     for (uint32_t shape = 1; shape <= 5; ++shape) {
         for (uint32_t meta = 0; meta < 256; ++meta) {
-            Shape_Box boxes[2];
+            Shape_Box boxes[8];
             const int count = shape_boxes(static_cast<Block_Shape>(shape), static_cast<uint8_t>(meta), boxes);
             const size_t at = (static_cast<size_t>(shape) * 256 + meta) * 2;
             out.shape_index[at] = static_cast<uint32_t>(count);
@@ -1009,6 +1141,7 @@ uint64_t Chunk::allocate_geometry_version() {
 void Chunk::apply_mesh(Chunk_Meshes meshes) {
     if (!same_connectivity(m_meshes, meshes)) g_connectivity_epoch.fetch_add(1, std::memory_order_relaxed);
     m_meshes = std::move(meshes);
+    m_dirty_section_mask = 0u;
     m_is_mesh_dirty = false;
     m_geometry_dirty = false;
     m_mesh_version = ++g_mesh_version_counter;
@@ -1046,21 +1179,53 @@ void Chunk::set_meta(int x, int y, int z, uint8_t value) {
         z < 0 || z >= Config::chunk_size) {
         return;
     }
+    if (m_blocks.get_meta(x, y, z) == value) return;
     m_blocks.set_meta(x, y, z, value);
-    mark_mesh_dirty();
+    mark_section_mesh_dirty(y);
     // Метаданные (например, направление печи или состояние блока) тоже являются
     // частью сохранения чанка: не сбрасываем этот флаг до записи в Region_File.
     m_is_modified = true;
 }
 
-void Chunk::set_block(int x, int y, int z, Block_Types type) {
+bool Chunk::set_block(int x, int y, int z, Block_Types type) {
     if (x < 0 || x >= Config::chunk_size ||
         y < 0 || y >= Config::chunk_height ||
         z < 0 || z >= Config::chunk_size) {
-        return;
+        return false;
     }
 
     const Block_Types slot = m_blocks.get(x, y, z);
+    if (slot == type) return false;
+
+    // A change between two full opaque cubes is invisible when all six adjacent cells
+    // are also full opaque cubes. Keep the block/palette/save state up to date, but do
+    // not schedule a mesh job: no face can become exposed to air and the section's GPU
+    // streams remain byte-for-byte valid. At a chunk border we conservatively remesh;
+    // Chunk_Manager owns neighbour snapshots and can then update the adjacent chunk too.
+    const auto is_full_opaque_cube = [](Block_Types block) {
+        const Block_Properties& props = get_block_props(block);
+        return props.is_opaque && props.mesh_type == Block_Mesh_Type::Solid &&
+               props.mesh_style == Block_Mesh_Style::Block &&
+               props.shape == Block_Shape::None && props.state == Block_State::Solid;
+    };
+    bool fully_hidden_replacement = is_full_opaque_cube(slot) && is_full_opaque_cube(type);
+    if (fully_hidden_replacement) {
+        static constexpr int kDirs[6][3] = {
+            {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
+        };
+        for (const auto& d : kDirs) {
+            const int nx = x + d[0], ny = y + d[1], nz = z + d[2];
+            // Outside this chunk is treated as potentially visible; never guess about an
+            // unloaded neighbour or skip a border update.
+            if (nx < 0 || nx >= Config::chunk_size || ny < 0 || ny >= Config::chunk_height ||
+                nz < 0 || nz >= Config::chunk_size ||
+                !block_occludes_view(m_blocks.get(nx, ny, nz))) {
+                fully_hidden_replacement = false;
+                break;
+            }
+        }
+    }
+
     const bool was_air = (slot == Block_Types::Air);
     const bool now_air = (type == Block_Types::Air);
     if (was_air && !now_air) ++m_layer_block_count[y];
@@ -1085,10 +1250,11 @@ void Chunk::set_block(int x, int y, int z, Block_Types type) {
     }
 
     m_blocks.set(x, y, z, type);
-    mark_mesh_dirty();
+    if (!fully_hidden_replacement) mark_section_mesh_dirty(y);
     // Любая игровая правка блока делает чанк кандидатом на сохранение при выгрузке,
     // Chunk_Manager::save_all() или очистке/смене мира.
     m_is_modified = true;
+    return !fully_hidden_replacement;
 }
 
 uint8_t Chunk::get_light(int x, int y, int z) const {

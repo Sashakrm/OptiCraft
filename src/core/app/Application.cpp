@@ -648,7 +648,8 @@ namespace {
         static constexpr int k_idx_language = 9;
         static constexpr int k_idx_generation = 10;   // только внутри мира
         static constexpr int k_idx_mode = 11;         // только внутри мира
-        int done_index() const { return in_game() ? 12 : 10; }
+        static constexpr int k_idx_renderer = 12;     // экспериментальный GPU Meshlet путь
+        int done_index() const { return in_game() ? 13 : 10; }
 
         static constexpr int k_vertical_positions = Config::vertical_render_max - Config::vertical_render_min + 2;
 
@@ -711,6 +712,10 @@ namespace {
                 screen.widgets.push_back(Hud_Widget::button(tr("options.world", {game.get_generation_folder()})));
                 screen.widgets.push_back(Hud_Widget::button(
                     tr("options.mode", {tr(game.get_game_mode() == Game_Mode::Survival ? "mode.survival" : "mode.creative")})));
+                const std::string renderer_state = !game.is_meshlet_renderer_available()
+                    ? tr("options.renderer_unavailable")
+                    : tr(game.get_meshlet_renderer_enabled() ? "options.renderer_meshlet" : "options.renderer_standard");
+                screen.widgets.push_back(Hud_Widget::button(tr("options.renderer", {renderer_state})));
             }
             screen.widgets.push_back(Hud_Widget::button(tr("common.done")));
             return screen;
@@ -779,6 +784,8 @@ namespace {
             } else if (in_game() && index == k_idx_mode) {
                 game.on_inventory_closed();
                 game.toggle_game_mode();
+            } else if (in_game() && index == k_idx_renderer) {
+                game.set_meshlet_renderer_enabled(!game.get_meshlet_renderer_enabled());
             } else if (index == done_index()) {
                 m_application.request_pop();
             }

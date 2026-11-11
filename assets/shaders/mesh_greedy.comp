@@ -218,6 +218,7 @@ void main() {
     if ((info.y & KIND_SOLID) == 0u) return;
 
     const uint sec = item / 144u;
+    if ((headers[hb].y & (1u << sec)) == 0u) return;
     const uint rem = item - sec * 144u;
     const bool pos = rem < 72u;
     // Изометрический снимок: отрицательные грани не видны с камеры и не строятся (как only_positive_faces).

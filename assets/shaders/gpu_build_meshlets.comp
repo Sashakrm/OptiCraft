@@ -1,0 +1,109 @@
+#version 430 core
+// Build persistent per-meshlet bounds from the existing 16-byte greedy-quad pool.
+// The quad allocator uses 32-quad blocks, so descriptor index == firstQuad / 32.
+// This pass runs only when a chunk's geometry changes (or when Meshlet mode is enabled).
+layout(local_size_x = 64) in;
+
+// {chunkHandle, streamIndex, firstQuad, streamOffsetInQuads}
+layout(std430, binding = 0) readonly buffer BuildCandidates { uvec4 candidates[]; };
+layout(std430, binding = 1) readonly buffer Counts { uint counts[]; };
+layout(std430, binding = 2) readonly buffer Quads { uvec4 quads[]; };
+layout(std430, binding = 3) readonly buffer Origins { vec4 origins[]; };
+struct MeshletBounds { vec4 minimum; vec4 maximum; uvec4 metadata; };
+layout(std430, binding = 4) writeonly buffer Bounds { MeshletBounds meshlets[]; };
+
+uniform uint u_candidate_count;
+uniform uint u_candidate_base; // permits batching beyond GL_MAX_COMPUTE_WORK_GROUP_COUNT.x
+const uint QUADS_PER_MESHLET = 32u;
+
+void main() {
+    const uint index = u_candidate_base + gl_GlobalInvocationID.x;
+    if (index >= u_candidate_count) return;
+
+    const uvec4 candidate = candidates[index];
+    const uint handle = candidate.x;
+    const uint stream = candidate.y;
+    const uint first_quad = candidate.z;
+    const uint stream_offset = candidate.w;
+    const uint descriptor_index = first_quad / QUADS_PER_MESHLET;
+
+    const uint stream_count = counts[stream];
+    // The engine has four kinds per handle: solid, shaped, flora and liquid.
+    // Solid, shaped and liquid use the persistent Meshlet path. Flora keeps legacy crossed quads.
+    const uint kind = (stream % 16u) / 4u;
+    if (stream_offset >= stream_count || (kind != 0u && kind != 1u && kind != 3u)) {
+        meshlets[descriptor_index].minimum = vec4(0.0);
+        meshlets[descriptor_index].maximum = vec4(0.0);
+        meshlets[descriptor_index].metadata = uvec4(0u);
+        return;
+    }
+
+    const uint quad_count = min(QUADS_PER_MESHLET, stream_count - stream_offset);
+    const vec3 chunk_origin = origins[handle].xyz;
+    vec3 world_min = vec3(3.402823e38);
+    vec3 world_max = vec3(-3.402823e38);
+
+    for (uint i = 0u; i < quad_count; ++i) {
+        const uvec4 record = quads[first_quad + i];
+        const uint w0 = record.x;
+        const vec3 cell = vec3(float(w0 & 31u),
+                               float((w0 >> 5u) & 31u),
+                               float((w0 >> 10u) & 31u));
+        vec3 lo;
+        vec3 hi;
+        if (kind == 3u) {
+            // Water vertices are animated in the misc vertex shader. Bound the entire source
+            // cell and add a vertical guard so wave displacement never escapes its Meshlet.
+            lo = cell + vec3(0.0, -0.08, 0.0);
+            hi = cell + vec3(1.0, 1.08, 1.0);
+        } else if (kind == 1u) {
+            // mesh_misc.comp encodes a shape-box face as six 7-bit coordinates
+            // in rec.z/rec.w, each expressed in 1/64 block units. The same box
+            // may contribute up to six face records; unioning them reconstructs
+            // the true box AABB without assuming the solid greedy-face layout.
+            const uvec4 record = quads[first_quad + i];
+            lo = vec3(float(record.z & 127u),
+                      float((record.z >> 7u) & 127u),
+                      float((record.z >> 14u) & 127u)) / 64.0;
+            hi = vec3(float((record.z >> 21u) & 127u),
+                      float(record.w & 127u),
+                      float((record.w >> 7u) & 127u)) / 64.0;
+            lo += cell;
+            hi += cell;
+        } else {
+            const uint axis = (w0 >> 15u) & 3u;
+            const bool positive = ((w0 >> 17u) & 1u) != 0u;
+            const float width = float(((w0 >> 18u) & 31u) + 1u);
+            const float height = float(((w0 >> 23u) & 31u) + 1u);
+            const float normal_extent = float(1u << ((w0 >> 29u) & 3u));
+
+            lo = cell;
+            hi = cell + vec3(1.0);
+            if (axis == 0u) {
+                lo.x = cell.x + (positive ? normal_extent : 0.0);
+                hi.x = lo.x;
+                hi.y = cell.y + height;
+                hi.z = cell.z + width;
+            } else if (axis == 1u) {
+                lo.y = cell.y + (positive ? normal_extent : 0.0);
+                hi.y = lo.y;
+                hi.x = cell.x + width;
+                hi.z = cell.z + height;
+            } else {
+                lo.z = cell.z + (positive ? normal_extent : 0.0);
+                hi.z = lo.z;
+                hi.x = cell.x + width;
+                hi.y = cell.y + height;
+            }
+            // Give planar faces conservative thickness to avoid precision-induced false culls.
+            lo[axis] -= 0.002;
+            hi[axis] += 0.002;
+        }
+        world_min = min(world_min, lo + chunk_origin);
+        world_max = max(world_max, hi + chunk_origin);
+    }
+
+    meshlets[descriptor_index].minimum = vec4(world_min, 0.0);
+    meshlets[descriptor_index].maximum = vec4(world_max, 0.0);
+    meshlets[descriptor_index].metadata = uvec4(quad_count, handle, stream, 0u);
+}
