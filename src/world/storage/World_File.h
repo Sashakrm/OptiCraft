@@ -1,8 +1,7 @@
 #ifndef OPTICRAFT_WORLD_FILE_H
 #define OPTICRAFT_WORLD_FILE_H
 
-#include "utils/Config.h"
-
+#include "utils/configs/Config_World.h"
 #include <cstdint>
 #include <filesystem>
 #include <string>

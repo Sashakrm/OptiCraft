@@ -1,5 +1,5 @@
+#include "utils/configs/Config_World.h"
 #include "world/dimensions/Dimension.h"
-#include "utils/Config.h"
 #include <array>
 
 int Dimension_Info::flat_top_y() const {

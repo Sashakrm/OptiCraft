@@ -1,6 +1,6 @@
+#include "utils/configs/Config_Physics.h"
 #include "physics/Liquid_Physics.h"
 
-#include "utils/Config.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Types.h"
 

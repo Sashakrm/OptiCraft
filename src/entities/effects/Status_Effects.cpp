@@ -1,8 +1,7 @@
+#include "utils/configs/Config_Effects.h"
 #include "entities/effects/Status_Effects.h"
 
 #include <algorithm>
-
-#include "utils/Config.h"
 
 std::optional<Potion_Info> potion_of(Block_Types type) {
     switch (type) {

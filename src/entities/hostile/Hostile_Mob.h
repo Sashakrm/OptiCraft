@@ -23,8 +23,6 @@
 #include <string>
 #include "mobs/Mob.h"
 #include "physics/Liquid_Physics.h"
-#include "utils/Config.h"
-
 class Chunk_Manager;
 
 enum class Hostile_Kind { Zombie, Skeleton, Spider };

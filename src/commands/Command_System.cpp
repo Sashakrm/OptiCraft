@@ -1,8 +1,8 @@
+#include "utils/configs/Config_World.h"
 #include "commands/Command_System.h"
 
 #include "core/game/Game.h"
 #include "world/blocks/Block_Types.h"
-#include "utils/Config.h"
 #include "world/dimensions/Dimension.h"
 
 #include <cstdint>

@@ -2,10 +2,9 @@
 // Created by noktemor on 28.03.2026.
 //
 
+#include "utils/configs/Config_Camera.h"
 #include "utils/profiling/Profiler.h"
 #include "input/Input_Manager.h"
-#include "utils/Config.h"
-
 Input_Manager::Input_Manager(GLFWwindow* window_ptr)
     : m_window_ptr(window_ptr)
     , m_is_first_mouse(true)

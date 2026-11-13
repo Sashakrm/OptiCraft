@@ -1,3 +1,6 @@
+#include "utils/configs/Config_Mobs.h"
+#include "utils/configs/Config_Physics.h"
+#include "utils/configs/Config_Player.h"
 #include "entities/animals/Horse.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Types.h"

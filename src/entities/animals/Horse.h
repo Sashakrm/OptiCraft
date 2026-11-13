@@ -18,6 +18,7 @@
 #ifndef OPTICRAFT_HORSE_H
 #define OPTICRAFT_HORSE_H
 
+#include "utils/configs/Config_Mobs.h"
 #include <glm/glm.hpp>
 #include "entities/effects/Status_Effects.h"
 #include <random>
@@ -26,8 +27,6 @@
 #include "entities/animals/Breeding.h"
 #include "physics/Liquid_Physics.h"
 #include "world/blocks/Block_Types.h"
-#include "utils/Config.h"
-
 class Chunk_Manager;
 
 // Что лошадь должна знать об игроке, когда на ней НЕ сидят (страх/слежение за хозяином).

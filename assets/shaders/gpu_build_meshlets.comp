@@ -54,8 +54,11 @@ void main() {
         if (kind == 3u) {
             // Water vertices are animated in the misc vertex shader. Bound the entire source
             // cell and add a vertical guard so wave displacement never escapes its Meshlet.
+            // Верх воды дальних чанков может быть слитой полосой по X: record.y >> 16 = длина - 1
+            // (см. mesh_misc.comp), остальные грани дают 0 и остаются одной клеткой.
+            const float run = float((record.y >> 16u) & 31u);
             lo = cell + vec3(0.0, -0.08, 0.0);
-            hi = cell + vec3(1.0, 1.08, 1.0);
+            hi = cell + vec3(1.0 + run, 1.08, 1.0);
         } else if (kind == 1u) {
             // mesh_misc.comp encodes a shape-box face as six 7-bit coordinates
             // in rec.z/rec.w, each expressed in 1/64 block units. The same box

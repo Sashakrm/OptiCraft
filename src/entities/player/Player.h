@@ -6,6 +6,8 @@
 #define OPTICRAFT_PLAYER_H
 
 
+#include "utils/configs/Config_Physics.h"
+#include "utils/configs/Config_Player.h"
 #include <glm/glm.hpp>
 #include "input/Input_Manager.h"
 #include "world/chunks/Chunk_Manager.h"

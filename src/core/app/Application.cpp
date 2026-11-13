@@ -2,13 +2,15 @@
 // Created by noktemor on 28.03.2026.
 //
 
+#include "utils/configs/Config_Camera.h"
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_World.h"
 #include "utils/profiling/Profiler.h"
 #include "core/app/Application.h"
 #include <cstdlib>
 
 #include "core/game/Game.h"
 #include "hud/Hud.h"
-#include "utils/Config.h"
 #include "utils/text/Localization.h"
 
 #include <GLFW/glfw3.h>
@@ -649,7 +651,8 @@ namespace {
         static constexpr int k_idx_generation = 10;   // только внутри мира
         static constexpr int k_idx_mode = 11;         // только внутри мира
         static constexpr int k_idx_renderer = 12;     // экспериментальный GPU Meshlet путь
-        int done_index() const { return in_game() ? 13 : 10; }
+        static constexpr int k_idx_difficulty = 13;
+        int done_index() const { return in_game() ? 14 : 10; }
 
         static constexpr int k_vertical_positions = Config::vertical_render_max - Config::vertical_render_min + 2;
 
@@ -716,6 +719,7 @@ namespace {
                     ? tr("options.renderer_unavailable")
                     : tr(game.get_meshlet_renderer_enabled() ? "options.renderer_meshlet" : "options.renderer_standard");
                 screen.widgets.push_back(Hud_Widget::button(tr("options.renderer", {renderer_state})));
+                screen.widgets.push_back(Hud_Widget::button(tr("options.difficulty", {tr(game.get_difficulty() == 0 ? "options.level_low" : game.get_difficulty() == 1 ? "options.level_mid" : "options.level_high")})));
             }
             screen.widgets.push_back(Hud_Widget::button(tr("common.done")));
             return screen;
@@ -784,6 +788,8 @@ namespace {
             } else if (in_game() && index == k_idx_mode) {
                 game.on_inventory_closed();
                 game.toggle_game_mode();
+            } else if (in_game() && index == k_idx_difficulty) {
+                game.set_difficulty((game.get_difficulty() + 1) % 3);
             } else if (in_game() && index == k_idx_renderer) {
                 game.set_meshlet_renderer_enabled(!game.get_meshlet_renderer_enabled());
             } else if (index == done_index()) {

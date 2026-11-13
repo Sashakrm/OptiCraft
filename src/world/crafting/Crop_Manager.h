@@ -13,6 +13,7 @@
 #ifndef OPTICRAFT_CROP_MANAGER_H
 #define OPTICRAFT_CROP_MANAGER_H
 
+#include "utils/configs/Config_Farming.h"
 #include <glm/glm.hpp>
 #include <random>
 #include <string>

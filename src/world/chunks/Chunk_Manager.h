@@ -5,6 +5,7 @@
 #ifndef OPTICRAFT_CHUNK_MANAGER_H
 #define OPTICRAFT_CHUNK_MANAGER_H
 
+#include "utils/configs/Config_World.h"
 #include <algorithm>
 #include <array>
 #include <unordered_set>
@@ -210,6 +211,10 @@ private:
     struct Sunlight_Height_Column {
         // Абсолютный Y верхнего блока, непрозрачного для солнечного света; world_min_y-1 = пусто.
         std::array<int16_t, Config::chunk_size * Config::chunk_size> top{};
+        // Высоты рельефа из генератора — они не меняются, поэтому считаются один раз на колонку. Раньше каждый
+        // пересчёт колонки (а он идёт после прихода каждого её чанка) заново делал 1024 вызова get_height.
+        std::array<int16_t, Config::chunk_size * Config::chunk_size> generated{};
+        bool generated_valid = false;
     };
     // Кэш 2D heightmap на каждую загруженную/обновлявшуюся X/Z-колонку. Заполняется из
     // локальных карт высот чанков + базовой высоты генератора, а не повторным проходом по Y.

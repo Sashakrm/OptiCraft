@@ -1,6 +1,9 @@
 //
 // Created by noktemor on 11.02.2026.
 //
+#include "utils/configs/Config_Camera.h"
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_World.h"
 #include "utils/profiling/Profiler.h"
 #include <cstddef>
 #include <cstdio>
@@ -10,7 +13,6 @@
 #include <cmath>
 #include "rendering/Renderer.h"
 #include "utils/logging/Logger.h"
-#include "utils/Config.h"
 #include "rendering/Frustum.h"
 
 #include <algorithm>
@@ -552,6 +554,15 @@ bool Renderer::initialize_gpu_mesher() {
         if (shader && shader->get_id() != 0) glGetProgramiv(shader->get_id(), GL_LINK_STATUS, &ok);
         return ok == GL_TRUE;
     };
+    // Облегчённый предпроход глубины необязателен: при ошибке сборки рендер продолжает работать на
+    // полном шейдере terrain (render_chunks проверяет указатель).
+    m_gpu_depth_shader_ptr = new Shader("assets/shaders/terrain_gpu_depth_vertex.glsl",
+                                        "assets/shaders/terrain_gpu_depth_fragment.glsl");
+    if (!linked(m_gpu_depth_shader_ptr)) {
+        LOG_WARN("Depth-only prepass shader unavailable; Hi-Z prepass uses the full terrain shader");
+        delete m_gpu_depth_shader_ptr;
+        m_gpu_depth_shader_ptr = nullptr;
+    }
     if (m_gpu_greedy_program == 0 || m_gpu_misc_program == 0 || m_gpu_volume_program == 0 || m_gpu_cull_program == 0 ||
         !linked(m_gpu_terrain_shader_ptr) || !linked(m_gpu_misc_shader_ptr)) {
         LOG_ERROR("GPU mesher shader setup failed");
@@ -865,9 +876,11 @@ void Renderer::shutdown_gpu_mesher() {
     if (m_gpu_mesh_misc_program != 0) glDeleteProgram(m_gpu_mesh_misc_program);
     delete m_gpu_terrain_shader_ptr;
     delete m_gpu_misc_shader_ptr;
+    delete m_gpu_depth_shader_ptr;
 
     m_gpu_terrain_shader_ptr = nullptr;
     m_gpu_misc_shader_ptr = nullptr;
+    m_gpu_depth_shader_ptr = nullptr;
     m_gpu_greedy_program = m_gpu_misc_program = m_gpu_cull_program = 0;
     m_gpu_volume_program = 0;
     m_gpu_volume_ssbo = 0;
@@ -1385,6 +1398,7 @@ void Renderer::release_gpu_chunk(Chunk_GL_Resources& resources) {
     resources.gpu_pending_wanted.fill(0u);
     resources.gpu_regrow = false;
     resources.gpu_pending_regrow = false;
+    resources.gpu_pending_in_flight = false;
     resources.gpu_capacity_observed.fill(false);
     resources.gpu_pending_capacity_observed.fill(false);
     resources.gpu_flora_skipped = false;
@@ -1393,6 +1407,51 @@ void Renderer::release_gpu_chunk(Chunk_GL_Resources& resources) {
     resources.gpu_sections_valid = false;
     resources.gpu_pending_sections = {};
     resources.gpu_pending_sections_valid = false;
+}
+
+// Отбрасывает ожидающее поколение: его квады (кроме общих с активным) и ручка возвращаются в пул, активное
+// поколение остаётся нарисованным. Если readback ждал большей ёмкости (gpu_pending_regrow), нужные значения
+// переходят в gpu_wanted: следующая постановка возьмёт их и не переполнится второй раз.
+void Renderer::drop_pending_gpu_generation(Chunk_GL_Resources& res) {
+    if (res.gpu_pending_handle < 0) return;
+    for (int j = 0; j < kGpuStreams; ++j) {
+        const bool shared = res.gpu_handle >= 0 &&
+            res.gpu_pending_first[j] == res.gpu_first[j] &&
+            res.gpu_pending_cap[j] == res.gpu_cap[j] && res.gpu_pending_cap[j] != 0u;
+        if (!shared && res.gpu_pending_cap[j] != 0u)
+            free_quads(res.gpu_pending_first[j], res.gpu_pending_cap[j]);
+    }
+    const size_t base = static_cast<size_t>(res.gpu_pending_handle) * kGpuStreams;
+    const std::array<glm::uvec2, kGpuStreams> zero_ranges{};
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_ranges_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(base * sizeof(glm::uvec2)),
+                    sizeof(zero_ranges), zero_ranges.data());
+    std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(base), kGpuStreams, 0u);
+    m_gpu_free_handles.push_back(res.gpu_pending_handle);
+
+    if (res.gpu_pending_regrow) {
+        bool any = false;
+        for (int j = 0; j < kGpuStreams; ++j) {
+            if (res.gpu_pending_wanted[j] > res.gpu_wanted[j]) res.gpu_wanted[j] = res.gpu_pending_wanted[j];
+            any = any || res.gpu_pending_wanted[j] != 0u;
+        }
+        // Активному поколению нужна полная пересборка с этими ёмкостями (световой проход на месте их не даст).
+        if (any && res.gpu_handle >= 0) res.gpu_regrow = true;
+    }
+
+    res.gpu_pending_handle = -1;
+    res.gpu_pending_in_flight = false;
+    res.gpu_pending_first.fill(0u);
+    res.gpu_pending_cap.fill(0u);
+    res.gpu_pending_wanted.fill(0u);
+    res.gpu_pending_version = 0;
+    res.gpu_pending_geometry_version = 0;
+    res.gpu_pending_regrow = false;
+    res.gpu_pending_capacity_observed.fill(false);
+    res.gpu_pending_sections = {};
+    res.gpu_pending_sections_valid = false;
+    res.gpu_pending_flora_skipped = false;
+    res.gpu_pending_appearance_start_time = 0.0f;
 }
 
 
@@ -1439,6 +1498,7 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
                     // A pending generation has its own handle/ranges. The active mesh is never
                     // overwritten while this compute batch is running, so it remains drawable.
                     if (res.gpu_pending_handle != handle || res.gpu_pending_version != rb.versions[i]) continue;
+                    res.gpu_pending_in_flight = false;   // readback разобран: дальше commit, сброс или повтор с новой ёмкостью
                     bool regrow = false;
                     for (int j = 0; j < kGpuStreams; ++j) {
                         const uint32_t quads = words[i * kGpuStreams + j];
@@ -1503,34 +1563,7 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
                         } else {
                             // CPU built a newer snapshot while this upload was in flight.
                             // Drop the stale pending generation; collect_pending will queue the newest one.
-                            for (int j = 0; j < kGpuStreams; ++j) {
-                                const bool shared = res.gpu_handle >= 0 &&
-                                    res.gpu_pending_first[j] == res.gpu_first[j] &&
-                                    res.gpu_pending_cap[j] == res.gpu_cap[j] && res.gpu_pending_cap[j] != 0u;
-                                if (!shared && res.gpu_pending_cap[j] != 0u)
-                                    free_quads(res.gpu_pending_first[j], res.gpu_pending_cap[j]);
-                            }
-                            const size_t stale_base = static_cast<size_t>(res.gpu_pending_handle) * kGpuStreams;
-                            const std::array<glm::uvec2, kGpuStreams> zero_ranges{};
-                            glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_gpu_ranges_ssbo);
-                            glBufferSubData(GL_SHADER_STORAGE_BUFFER,
-                                static_cast<GLintptr>(stale_base * sizeof(glm::uvec2)),
-                                sizeof(zero_ranges), zero_ranges.data());
-                            std::fill_n(m_gpu_stream_counts.begin() + static_cast<std::ptrdiff_t>(stale_base),
-                                        kGpuStreams, 0u);
-                            m_gpu_free_handles.push_back(res.gpu_pending_handle);
-                            res.gpu_pending_handle = -1;
-                            res.gpu_pending_first.fill(0u);
-                            res.gpu_pending_cap.fill(0u);
-                            res.gpu_pending_wanted.fill(0u);
-                            res.gpu_pending_version = 0;
-                            res.gpu_pending_geometry_version = 0;
-                            res.gpu_pending_regrow = false;
-                            res.gpu_pending_capacity_observed.fill(false);
-                            res.gpu_pending_sections = {};
-                            res.gpu_pending_sections_valid = false;
-                            res.gpu_pending_flora_skipped = false;
-                            res.gpu_pending_appearance_start_time = 0.0f;
+                            drop_pending_gpu_generation(res);
                         }
                     }
                     continue;
@@ -1568,8 +1601,23 @@ void Renderer::poll_gpu_readbacks(bool wait_for_oldest) {
     }
 }
 
-void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batch) {
+void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& requested) {
     OC_ZONE("Renderer::submit_gpu_batch");
+    // Чанк, у которого предыдущее поколение всё ещё строится (или ждёт другую версию меша), в батч не берём.
+    // Раньше такой чанк пропускался прямо в цикле ниже: его заголовок оставался нулевым (ручка 0), а массивы
+    // readback'а смещались относительно индексов батча. collect_pending такие чанки не отдаёт; это страховка.
+    std::vector<const Renderable_Chunk*> batch;
+    batch.reserve(requested.size());
+    for (const Renderable_Chunk* candidate : requested) {
+        const Chunk_Meshes& m = *candidate->meshes;
+        const Chunk_GL_Resources& r = m_chunk_gl_cache[candidate->position];
+        const bool kept = m.light_only && m.geometry_version != 0 && r.gpu_handle >= 0 &&
+            r.gpu_geometry_version == m.geometry_version && !r.gpu_regrow &&
+            r.gpu_flora_skipped == candidate->flora_skip_render;
+        if (!kept && r.gpu_pending_handle >= 0 && r.gpu_pending_version != candidate->mesh_version) continue;
+        batch.push_back(candidate);
+    }
+    if (batch.empty()) return;
     const size_t n = batch.size();
     m_gpu_headers_cpu.assign(n * kGpuHeaderStride, glm::uvec4(0u));
     m_gpu_payload_cpu.clear();
@@ -1607,11 +1655,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         bool created_pending = false;
         bool pending_geometry = !geometry_kept;
         if (pending_geometry) {
-            if (res.gpu_pending_handle >= 0 && res.gpu_pending_version != chunk.mesh_version) {
-                // A previous generation is still in flight. Do not overwrite it or reuse
-                // its handle until its fence is observed; the latest snapshot will be queued later.
-                continue;
-            }
+            // (Чанки с ещё не разобранным поколением другой версии отфильтрованы в начале функции.)
             if (res.gpu_pending_handle < 0) {
                 res.gpu_pending_handle = acquire_gpu_handle();
                 created_pending = true;
@@ -1622,6 +1666,18 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
                 res.gpu_pending_appearance_start_time = res.gpu_handle >= 0
                     ? res.appearance_start_time : static_cast<float>(glfwGetTime());
                 res.gpu_pending_wanted.fill(0u);
+                if (res.gpu_handle >= 0 && res.gpu_regrow) {
+                    // Читающий проход светового обновления заметил, что ёмкости активного поколения не те
+                    // (переполнение или сильное раздутие), и записал нужные в gpu_wanted. Следующая
+                    // постановка идёт уже полной пересборкой в новую ручку, у которой свои wanted: без
+                    // переноса они обнулялись, поток снова получал начальную ёмкость, а флаг gpu_regrow
+                    // активного поколения не сбрасывался никогда, и чанк пересобирался КАЖДЫЙ кадр.
+                    for (int j = 0; j < kGpuStreams; ++j)
+                        res.gpu_pending_wanted[j] = res.gpu_wanted[j] != 0u ? res.gpu_wanted[j] : res.gpu_cap[j];
+                } else if (res.gpu_handle < 0) {
+                    // Активного поколения нет: ёмкости, которые просило отброшенное ожидающее, берём из gpu_wanted.
+                    for (int j = 0; j < kGpuStreams; ++j) res.gpu_pending_wanted[j] = res.gpu_wanted[j];
+                }
                 res.gpu_pending_regrow = false;
                 res.gpu_pending_capacity_observed.fill(false);
                 res.gpu_pending_first.fill(0u);
@@ -1706,8 +1762,16 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
             }
         }
         upload_wanted.fill(0u);
-        if (pending_geometry) res.gpu_pending_regrow = false;
-        else res.gpu_regrow = false;
+        if (pending_geometry) {
+            res.gpu_pending_regrow = false;
+            // Новое поколение уже получило нужные ёмкости (см. перенос wanted при его создании), поэтому
+            // отметка "активному поколению нужна пересборка" выполнена. Раньше она сбрасывалась только у
+            // обновлений на месте, а такой флаг как раз их и отключает: чанк навсегда оставался устаревшим.
+            res.gpu_regrow = false;
+            res.gpu_wanted.fill(0u);
+        } else {
+            res.gpu_regrow = false;
+        }
 
         if (meshes.urgent_update && pending_geometry) res.gpu_pending_appearance_start_time = -1.0f;
 
@@ -1754,6 +1818,7 @@ void Renderer::submit_gpu_batch(const std::vector<const Renderable_Chunk*>& batc
         else if (partial_geometry) ++m_gpu_stats.partial_chunks;
         else ++m_gpu_stats.full_chunks;
 
+        if (pending_geometry) res.gpu_pending_in_flight = true;
         rb.positions.push_back(chunk.position);
         rb.versions.push_back(chunk.mesh_version);
         rb.handles.push_back(upload_handle);
@@ -2215,15 +2280,23 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
                 release_gpu_chunk(res);
                 continue;
             }
+            if (res.gpu_pending_handle >= 0) {
+                // Never overwrite an in-flight pending handle.
+                if (res.gpu_pending_in_flight) continue;
+                // Readback разобран, а поколение не принято: ему не хватило ёмкости. Если оно относится к
+                // текущему снимку CPU — ставим его ещё раз, уже с нужными ёмкостями.
+                if (res.gpu_pending_version == chunk.mesh_version) {
+                    if (res.gpu_pending_regrow) pending.push_back(chunk_ptr);
+                    continue;
+                }
+                // А если за время ожидания CPU собрал более свежий меш (свет после появления чанка, правка,
+                // смена LOD), поколение устарело. Раньше оно оставалось навсегда: чанк не попадал в очередь, пока
+                // жива его ручка, и так и висел со старым мешем — например, тёмным, с нулевым светом на момент
+                // первого меша, пока его не выгрузят.
+                drop_pending_gpu_generation(res);
+            }
             const bool active_stale = res.gpu_handle < 0 || res.gpu_version != chunk.mesh_version ||
                 res.gpu_regrow || res.gpu_flora_skipped != chunk.flora_skip_render;
-            if (res.gpu_pending_handle >= 0) {
-                // Never overwrite an in-flight pending handle. If it belongs to the current
-                // CPU snapshot, queue it again only after readback marked an overflow.
-                if (res.gpu_pending_version == chunk.mesh_version && res.gpu_pending_regrow)
-                    pending.push_back(chunk_ptr);
-                continue;
-            }
             if (active_stale) pending.push_back(chunk_ptr);
         }
         return pending;
@@ -2322,6 +2395,11 @@ void Renderer::prepare_gpu_frame(const std::vector<const Renderable_Chunk*>& opa
         m_gpu_stats.pending_chunks = static_cast<uint32_t>(pending.size());
         m_gpu_stats.last_batch_chunks = static_cast<uint32_t>(batch.size());
         if (!batch.empty()) submit_gpu_batch(batch);
+    } else if (pending.empty()) {
+        // Очередь пуста: в статистике должен быть ноль, а не последнее ненулевое значение (раньше счётчики
+        // «зависали» на значениях последнего непустого кадра, и по логу казалось, что чанки всё ещё ждут).
+        m_gpu_stats.pending_chunks = 0;
+        m_gpu_stats.last_batch_chunks = 0;
     }
 
     // Visibility is determined from this frame's opaque depth prepass below.
@@ -3028,6 +3106,22 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
         }
     };
 
+    // Предпроход глубины рисуется облегчённой парой шейдеров (terrain_gpu_depth_*): ему нужна только
+    // глубина, а полный terrain-шейдер считал бы на каждом фрагменте свет из объёма, AO и выборку
+    // текстуры, результат которых маска цвета тут же выбрасывала. Геометрия и discard появления чанка
+    // те же, поэтому Hi-Z получается тем же. В режиме настоящих mesh-шейдеров и при ошибке сборки
+    // облегчённой пары остаётся прежний полный шейдер.
+    const auto bind_depth_prepass_program = [&]() {
+        if (m_gpu_depth_shader_ptr && !(m_gpu_mesh_shader_ready && !m_meshlet_renderer_enabled)) {
+            m_gpu_depth_shader_ptr->use();
+            m_gpu_depth_shader_ptr->set_mat4("view_projection", view_projection);
+            m_gpu_depth_shader_ptr->set_float("time", time);
+            m_gpu_depth_shader_ptr->set_float("appearDuration", m_chunk_fade_seconds);
+        } else {
+            bind_solid_program();
+        }
+    };
+
     // Current-frame GPU ray visibility. The first pass writes only depth: for each pixel,
     // the hardware depth test records the nearest opaque block along that camera ray.
     // The GPU builds a conservative MAX Hi-Z pyramid from those first hits, then tests
@@ -3103,10 +3197,11 @@ void Renderer::render_chunks(const std::vector<Renderable_Chunk>& chunks,
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
             glClearDepth(1.0);
             glClear(GL_DEPTH_BUFFER_BIT);
-            bind_solid_program();
+            // Только полные кубы: блоки формы (ступени, плиты) почти не перекрывают обзор, а их проход
+            // потребовал бы фрагментного шейдера с выборкой текстуры. Меньше окклюдеров — это лишь
+            // более осторожный Hi-Z (никогда не ложное скрытие).
+            bind_depth_prepass_program();
             draw_gpu_kind(kKindSolid);
-            bind_misc_program();
-            draw_gpu_kind(kKindShaped);
 
             // Build and consume the pyramid while the half-resolution viewport/FBO is
             // still bound; culling uses the same pixel scale as the captured depth map.

@@ -1,8 +1,7 @@
+#include "utils/configs/Config_World.h"
 #include "utils/profiling/Profiler.h"
 #include "world/logic/Logic_Manager.h"
 #include "world/chunks/Chunk_Manager.h"
-#include "utils/Config.h"
-
 #include <algorithm>
 
 namespace {

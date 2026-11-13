@@ -12,6 +12,7 @@
 #ifndef OPTICRAFT_ISOMETRIC_CAPTURE_H
 #define OPTICRAFT_ISOMETRIC_CAPTURE_H
 
+#include "utils/configs/Config_Capture.h"
 #include <atomic>
 #include <cstdint>
 #include <memory>

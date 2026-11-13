@@ -1,6 +1,8 @@
 //
 // Изометрический снимок мира — см. Isometric_Capture.h.
 //
+#include "utils/configs/Config_Capture.h"
+#include "utils/configs/Config_World.h"
 #include "rendering/capture/Isometric_Capture.h"
 
 #include <glad/gl.h>
@@ -20,7 +22,6 @@
 
 #include "rendering/Frustum.h"
 #include "rendering/Renderer.h"
-#include "utils/Config.h"
 #include "utils/logging/Logger.h"
 #include "world/chunks/Chunk_Manager.h"
 

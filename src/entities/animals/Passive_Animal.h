@@ -17,7 +17,6 @@
 #include "entities/animals/Breeding.h"
 #include "mobs/Mob.h"
 #include "physics/Liquid_Physics.h"
-#include "utils/Config.h"
 #include "world/blocks/Block_Types.h"
 
 class Chunk_Manager;

@@ -5,6 +5,8 @@
 #ifndef OPTICRAFT_CHUNK_H
 #define OPTICRAFT_CHUNK_H
 
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_World.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -17,8 +19,6 @@
 #include <unordered_map>
 #include <glm/glm.hpp>
 #include "world/blocks/Block_Types.h"
-#include "utils/Config.h"
-
 struct Chunk_Vertex {
     float x, y, z;
     float u, v;

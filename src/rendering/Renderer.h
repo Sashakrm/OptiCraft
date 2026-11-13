@@ -5,6 +5,8 @@
 #ifndef OPTICRAFT_RENDERER_H
 #define OPTICRAFT_RENDERER_H
 
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_World.h"
 #include <glad/gl.h>
 #include <array>
 #include <algorithm>
@@ -18,7 +20,6 @@
 #include "rendering/Shader.h"
 #include "world/chunks/Chunk.h"
 #include "world/chunks/Chunk_Manager.h"
-#include "utils/Config.h"
 #include "math/Hash_Utils.h"
 #include "rendering/atlas/Texture_Atlas.h"
 #include "rendering/atlas/Atlas_Registry.h"
@@ -90,6 +91,10 @@ private:
         // Copy-on-write меш: пока GPU строит новую версию, старая остаётся активной и продолжает
         // рисоваться. Pending-диапазоны не видны draw-проходу до успешного readback без overflow.
         int gpu_pending_handle = -1;
+        // Истина с момента постановки ожидающего поколения на GPU до разбора его readback'а. После разбора
+        // поколение либо принято (commit), либо отброшено, либо ждёт новой постановки с большей ёмкостью
+        // (gpu_pending_regrow) — и только в последнем случае ручка остаётся занятой без работы на GPU.
+        bool gpu_pending_in_flight = false;
         uint64_t gpu_pending_version = 0;
         uint64_t gpu_pending_geometry_version = 0;
         uint8_t gpu_pending_lod_stride = 1;
@@ -147,6 +152,9 @@ private:
     void grow_gpu_pool(uint32_t extra_blocks);
     int acquire_gpu_handle();
     void release_gpu_chunk(Chunk_GL_Resources& resources);
+    // Отбрасывает только ожидающее поколение (активное остаётся нарисованным); нужные ему ёмкости переходят
+    // к следующей постановке.
+    void drop_pending_gpu_generation(Chunk_GL_Resources& resources);
     uint32_t allocate_quads(uint32_t quads);
     void free_quads(uint32_t first, uint32_t quads);
     // Забирает готовые readback'и счётчиков квадов (FIFO). wait_for_oldest — ждать самый старый.
@@ -356,6 +364,9 @@ private:
     GLint m_gpu_loc_mesh_tile_size_misc = -1;
     Shader* m_gpu_terrain_shader_ptr = nullptr;   // непрозрачные кубы
     Shader* m_gpu_misc_shader_ptr = nullptr;      // блоки формы, флора, жидкость
+    // Облегчённый предпроход глубины для Hi-Z (только позиция + discard появления чанка, без света и текстур).
+    // nullptr — шейдер не собрался: тогда предпроход идёт полным шейдером terrain, как раньше.
+    Shader* m_gpu_depth_shader_ptr = nullptr;
     int m_gpu_loc_greedy_chunk_count = -1;
     int m_gpu_loc_greedy_bake_all = -1;
     int m_gpu_loc_misc_chunk_count = -1;

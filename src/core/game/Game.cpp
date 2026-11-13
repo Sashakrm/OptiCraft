@@ -2,6 +2,13 @@
 // Created by noktemor on 11.02.2026.
 //
 
+#include "utils/configs/Config_Capture.h"
+#include "utils/configs/Config_Effects.h"
+#include "utils/configs/Config_Mobs.h"
+#include "utils/configs/Config_Player.h"
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_Window.h"
+#include "utils/configs/Config_World.h"
 #include "utils/profiling/Profiler.h"
 #include "core/game/Game.h"
 #include "world/structures/Dungeon_Layout.h"
@@ -19,7 +26,6 @@
 #include "utils/logging/Logger.h"
 #include "world/crafting/Smelting.h"
 #include "world/logic/Logic_Manager.h"
-#include "utils/Config.h"
 #include "rendering/atlas/Atlas_Registry.h"
 #include "rendering/Frustum.h"
 #include <iostream>
@@ -454,6 +460,7 @@ void Game::load_options() {
         try {
             if (key == "gui_scale") m_gui_scale_setting = std::clamp(std::stoi(value), 0, 4);
             else if (key == "mouse_sensitivity") m_input_ptr->set_mouse_sensitivity(std::clamp(std::stof(value), 0.05f, 1.0f));
+            else if (key == "difficulty") m_difficulty = std::clamp(std::stoi(value), 0, 2);
             else if (key == "render_distance") m_render_distance = std::clamp(std::stoi(value), Config::render_distance_min, Config::render_distance_max);
             else if (key == "flora_distance") m_flora_distance = std::clamp(std::stoi(value), 2, Config::flora_render_distance_max);
             else if (key == "vertical_distance") {
@@ -482,6 +489,7 @@ void Game::save_options() const {
     if (!file) return;
     file << "gui_scale=" << m_gui_scale_setting << "\n"
          << "mouse_sensitivity=" << m_input_ptr->get_mouse_sensitivity() << "\n"
+         << "difficulty=" << m_difficulty << "\n"
          << "render_distance=" << m_render_distance << "\n"
          << "flora_distance=" << m_flora_distance << "\n"
          << "vertical_distance=" << m_vertical_distance_setting << "\n"
@@ -764,7 +772,7 @@ void Game::setup_world_objects(const glm::vec3* saved_position) {
     m_player_ptr = std::make_unique<Player>();
     m_inventory_ptr = std::make_unique<Inventory>();
     m_inventory_ptr->set_mode(m_game_mode);
-    m_mobs.set_hostiles_enabled(m_game_mode == Game_Mode::Survival);
+    m_mobs.set_hostiles_enabled(true);
     {
         std::ifstream inv(m_world_file.get_path().parent_path() / "inventory.txt");
         if (inv) {
@@ -1275,6 +1283,8 @@ void Game::register_tick_systems() {
 
 Mob_Player_View Game::mob_view() const {
     Mob_Player_View view;
+    view.spawn_radius = static_cast<float>(m_render_distance * Config::chunk_size) * 2.0f / 3.0f;
+    view.difficulty = m_difficulty;
     view.position = m_player_ptr->get_position();
     view.eye_height = m_player_ptr->get_eye_height();
     view.alive = m_player_ptr->is_alive();
@@ -1836,7 +1846,7 @@ void Game::apply_game_mode(Game_Mode mode, bool spectator) {
     m_game_mode = mode;
     m_spectator = !survival && spectator;   // наблюдатель — это Creative с полётом сквозь блоки
     m_inventory_ptr->set_mode(m_game_mode);
-    m_mobs.set_hostiles_enabled(survival);
+    m_mobs.set_hostiles_enabled(true);
     m_player_ptr->set_fall_damage_enabled(survival);
     m_player_ptr->set_hunger_enabled(survival);
     // Творческий режим: ходим по земле, полёт — двойным прыжком (или /fly). Наблюдатель летает всегда, сквозь блоки.

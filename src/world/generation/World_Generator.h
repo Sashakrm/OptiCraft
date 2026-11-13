@@ -1,9 +1,9 @@
 #ifndef OPTICRAFT_WORLD_GENERATOR_H
 #define OPTICRAFT_WORLD_GENERATOR_H
 
+#include "utils/configs/Config_World.h"
 #include "world/blocks/Block_Types.h"
 #include "world/dimensions/Dimension.h"
-#include "utils/Config.h"
 #include "OpenSimplex2S.h"
 #include "math/Fast_Rng.h"
 #include "world/generation/Cave_Network.h"

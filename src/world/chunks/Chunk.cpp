@@ -2,6 +2,7 @@
 // Created by noktemor on 11.02.2026.
 //
 
+#include "utils/configs/Config_World.h"
 #include "world/chunks/Chunk.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Types.h"
@@ -525,18 +526,35 @@ namespace {
         return *work;
     }
 
+    // Один источник значений для общей палитры 16-битных каналов.
+    struct Palette_Source {
+        const Block_ID* values;
+        size_t count;
+    };
+
     // Собирает палитру 16-битных значений (блоки): unique id + номер.
-    // Вызывается РАЗ на чанк перед pack_channel_16. Палитра = все уникальные id,
-    // встречающиеся в собственных блоках чанка (канал 0). Блоки на границах и
-    // в LOD — подмножество этой палитры, поэтому она покрывает все 16-битные каналы.
-    void prepare_block_palette(const Block_ID* values, size_t count, Mesh_Work& W) {
+    // Вызывается РАЗ на чанк перед pack_channel_16.
+    //
+    // Палитра = все уникальные id из ВСЕХ 16-битных каналов чанка: собственные блоки (канал 0),
+    // грани соседей (3-8), кольцо рёбер и углов (15) и LOD-прокси (23). Раньше палитра строилась
+    // только по собственным блокам, в расчёте на то, что остальные каналы — «подмножество». Это
+    // неверно: сосед может содержать блок, которого нет в самом чанке (песок у берега, гравий,
+    // водоросли), а LOD-прокси заполняется Air там, где в чанке была вода или флора, — и если Air
+    // нет среди собственных блоков (чанк морского дна: вода + песок + камень), индекс был
+    // `0 - 1 = 0xFFFFFFFF`. Такое значение через `|=` забивало единицами остаток битового потока:
+    // у чанка получались случайные блоки в LOD-прокси и мусорные границы (дыры, плиты, швы).
+    void prepare_block_palette(const Palette_Source* sources, size_t source_count, Mesh_Work& W) {
         std::fill(W.index16.begin(), W.index16.end(), 0);
         W.palette16.clear();
-        for (size_t i = 0; i < count; ++i) {
-            const uint16_t id = values[i];
-            if (W.index16[id] == 0) {
-                W.index16[id] = static_cast<uint16_t>(W.palette16.size() + 1);  // 1-based
-                W.palette16.push_back(id);
+        for (size_t s = 0; s < source_count; ++s) {
+            const Block_ID* values = sources[s].values;
+            const size_t count = sources[s].count;
+            for (size_t i = 0; i < count; ++i) {
+                const uint16_t id = values[i];
+                if (W.index16[id] == 0) {
+                    W.index16[id] = static_cast<uint16_t>(W.palette16.size() + 1);  // 1-based
+                    W.palette16.push_back(id);
+                }
             }
         }
         std::sort(W.palette16.begin(), W.palette16.end());
@@ -600,10 +618,9 @@ namespace {
     }
 
     // 16-битный путь: палитра из W (prepare_block_palette дозвана), номер = index16[id] - 1.
-    // Если значение не в палитре (idx_tab[id] == 0), оно не встречается в канале —
-    // это невозможно для 16-битных каналов, так как prepare_block_palette собрана
-    // на основе собственных блоков чанка, а все остальные 16-битные каналы
-    // (border, ring, lod) используют подмножество тех же id.
+    // Палитра собрана по всем 16-битным каналам чанка (см. prepare_block_palette), поэтому
+    // любое значение здесь в ней есть. Страховка на случай ошибки вызывающего: id вне палитры
+    // получает индекс 0, а не 0xFFFFFFFF, который через `|=` испортил бы соседние значения.
     void pack_channel_16(const Block_ID* values, size_t count,
                          const Mesh_Work& W,
                          std::vector<uint32_t>& out,
@@ -635,7 +652,8 @@ namespace {
 
         const uint16_t* idx_tab = W.index16.data();
         for (size_t i = 0; i < count; ++i) {
-            const uint32_t idx = static_cast<uint32_t>(idx_tab[values[i]] - 1);
+            const uint32_t slot = idx_tab[values[i]];
+            const uint32_t idx = slot != 0u ? slot - 1u : 0u;
             const size_t bit = i * bits;
             const size_t w = words_start + (bit >> 5);
             const unsigned s = static_cast<unsigned>(bit & 31);
@@ -1043,11 +1061,20 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     // ---------------------------------------------------------------------------
     //  Быстрая упаковка каналов (один проход на канал, без аллокаций)
     // ---------------------------------------------------------------------------
-    // Палитра 16-битных значений собирается ОДИН раз на чанк (по собственным блокам).
-    // Все остальные 16-битные каналы (border, ring, lod) используют подмножество тех
-    // же id, поэтому та же палитра и index16 работают для всех без повторного поиска.
+    // Палитра 16-битных значений собирается ОДИН раз на чанк по ВСЕМ 16-битным каналам
+    // (собственные блоки, грани соседей, кольцо, LOD-прокси): id соседа или Air из LOD-прокси
+    // может отсутствовать среди собственных блоков (см. prepare_block_palette).
     Mesh_Work& W = mesh_work();
-    prepare_block_palette(S.blocks.data(), kVoxels, W);
+    const bool has_lod_proxy = lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u;
+    {
+        const Palette_Source sources[4] = {
+            {S.blocks.data(), kVoxels},
+            {S.border_block.data(), S.border_block.size()},
+            {S.ring_block.data(), S.ring_block.size()},
+            {S.lod_blocks.data(), kVoxels},
+        };
+        prepare_block_palette(sources, has_lod_proxy ? 4u : 3u, W);
+    }
 
     meshes.gpu_words.clear();
 
@@ -1085,12 +1112,15 @@ Chunk_Meshes build_chunk_gpu_mesh(const Chunk_Block_Grid& blocks,
     pack_channel_8(S.ring_meta.data(), Chunk_Ring::kSize, W, meshes.gpu_words, meshes.gpu_channels[22]);
 
     // Каналы 23-24: LOD (если lod_stride > 1 и есть solid).
-    if (lod_stride > 1 && (meshes.gpu_kinds & kKindSolid) != 0u) {
+    if (has_lod_proxy) {
         pack_channel_16(S.lod_blocks.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[23]);
         pack_channel_8(S.lod_meta.data(), kVoxels, W, meshes.gpu_words, meshes.gpu_channels[24]);
     } else {
-        const Block_ID air = static_cast<Block_ID>(Block_Types::Air);
-        pack_channel_16(&air, 1, W, meshes.gpu_words, meshes.gpu_channels[23]);
+        // Заглушка: канал не читается (lod_stride == 1), но заголовок должен быть корректным.
+        // Однородный канал (0 бит) хранит значение прямо в первом слове и не зависит от палитры.
+        meshes.gpu_channels[23] = {static_cast<uint32_t>(meshes.gpu_words.size()),
+                                   static_cast<uint32_t>(meshes.gpu_words.size()) + 1u, 0u};
+        meshes.gpu_words.push_back(static_cast<uint32_t>(Block_Types::Air));
         const uint8_t zero = 0;
         pack_channel_8(&zero, 1, W, meshes.gpu_words, meshes.gpu_channels[24]);
     }

@@ -5,6 +5,8 @@
 #ifndef OPTICRAFT_BLOCK_TYPES_H
 #define OPTICRAFT_BLOCK_TYPES_H
 
+#include "utils/configs/Config_Player.h"
+#include "utils/configs/Config_World.h"
 #include <string>
 #include <cstdint>
 #include <array>

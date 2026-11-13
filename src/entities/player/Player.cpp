@@ -2,8 +2,9 @@
 // Created by noktemor on 11.02.2026.
 //
 
+#include "utils/configs/Config_Physics.h"
+#include "utils/configs/Config_Player.h"
 #include "entities/player/Player.h"
-#include "utils/Config.h"
 #include "physics/Liquid_Physics.h"
 #include "world/blocks/Block_Types.h"
 #include "world/blocks/Block_Shapes.h"

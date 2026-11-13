@@ -1,6 +1,7 @@
 #ifndef OPTICRAFT_BLOCK_INTERACTION_H
 #define OPTICRAFT_BLOCK_INTERACTION_H
 
+#include "utils/configs/Config_Player.h"
 #include <glm/glm.hpp>
 #include <optional>
 #include <vector>

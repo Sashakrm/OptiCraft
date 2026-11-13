@@ -53,6 +53,7 @@
   "iso.busy": "Предыдущий изометрический снимок ещё сохраняется",
 
   "options.title": "Настройки",
+  "options.difficulty": "Сложность: {0}",
   "options.render_distance": "Дальность",
   "options.flora_distance": "Дальн. растений",
   "options.sensitivity": "Чувствит.",

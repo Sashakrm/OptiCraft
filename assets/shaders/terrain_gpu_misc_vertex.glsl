@@ -103,8 +103,12 @@ void main() {
                 p = base + vec3(plane, fv * h, fu);
                 tc_param = vec2(fu, fv * h);
             } else if (axis == 1u) {     // ±Y: u вдоль X, v вдоль Z (V перевёрнут, как в push_face_impl)
-                p = base + vec3(fu, plane * h, fv);
-                tc_param = vec2(fu, 1.0 - fv);
+                // Верх воды дальних чанков может быть слитой полосой клеток по X: rec.y >> 16 = длина - 1
+                // (см. mesh_misc.comp; у остальных граней 0, то есть одна клетка). Текстура воды
+                // повторяется по клеткам через mod() в фрагментном шейдере.
+                const float run_len = float(((rec.y >> 16u) & 31u) + 1u);
+                p = base + vec3(fu * run_len, plane * h, fv);
+                tc_param = vec2(fu * run_len, 1.0 - fv);
             } else {                     // ±Z
                 p = base + vec3(fu, fv * h, plane);
                 tc_param = vec2(fu, fv * h);

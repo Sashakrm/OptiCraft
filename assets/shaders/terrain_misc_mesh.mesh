@@ -122,8 +122,10 @@ void main() {
                     p += vec3(plane, fv * h, fu);
                     tc_param = vec2(fu, fv * h);
                 } else if (axis == 1u) {
-                    p += vec3(fu, plane * h, fv);
-                    tc_param = vec2(fu, 1.0 - fv);
+                    // Слитая полоса верха воды: rec.y >> 16 = длина - 1 (см. mesh_misc.comp).
+                    const float run_len = float(((rec.y >> 16u) & 31u) + 1u);
+                    p += vec3(fu * run_len, plane * h, fv);
+                    tc_param = vec2(fu * run_len, 1.0 - fv);
                 } else {
                     p += vec3(fu, fv * h, plane);
                     tc_param = vec2(fu, fv * h);

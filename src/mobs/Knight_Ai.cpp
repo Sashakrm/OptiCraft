@@ -1,3 +1,4 @@
+#include "utils/configs/Config_World.h"
 #include "mobs/Knight_Ai.h"
 
 #include <algorithm>
@@ -8,7 +9,6 @@
 
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Types.h"
-#include "utils/Config.h"
 #include "rendering/Shader.h"
 #include "utils/logging/Logger.h"
 

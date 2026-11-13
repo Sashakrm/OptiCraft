@@ -22,6 +22,7 @@
 #ifndef OPTICRAFT_CHUNK_TABLE_H
 #define OPTICRAFT_CHUNK_TABLE_H
 
+#include "utils/configs/Config_World.h"
 #include "world/chunks/Chunk.h"
 #include "world/chunks/Chunk_Slot_Pool.h"
 #include <cstdint>

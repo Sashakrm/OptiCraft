@@ -1,6 +1,9 @@
 //
 // Created by noktemor on 15.10.2026.
 //
+#include "utils/configs/Config_Mobs.h"
+#include "utils/configs/Config_Physics.h"
+#include "utils/configs/Config_Player.h"
 #include "entities/hostile/Hostile_Mob.h"
 #include "world/chunks/Chunk_Manager.h"
 #include <algorithm>

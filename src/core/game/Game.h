@@ -7,6 +7,8 @@
 
 #define GLFW_INCLUDE_NONE
 
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_World.h"
 #include "core/app/Window.h"
 #include "world/logic/Logic_Manager.h"
 #include <cstdint>
@@ -122,6 +124,7 @@ private:
 
     // Текущая дальность прорисовки в чанках. Стартует с Config::chunk_load_radius
     // и меняется из меню настроек.
+    int m_difficulty{1};
     int m_render_distance{Config::chunk_load_radius};
     int m_flora_distance{Config::flora_render_distance_chunks};
     // Графика (меню настроек, options.txt). Значения по умолчанию совпадают с прежним видом игры.
@@ -263,6 +266,8 @@ public:
     void cycle_game_mode();
 
     // --- Настройки (меню) ------------------------------------------------------
+    int get_difficulty() const { return m_difficulty; }
+    void set_difficulty(int value) { m_difficulty = value; save_options(); }
     int get_render_distance() const { return m_render_distance; }
     void set_render_distance(int chunks);
     // Дальность по высоте: 0 = «Авто» (считается от горизонтальной), иначе полуширина в чанках.

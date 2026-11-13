@@ -5,6 +5,9 @@
 //
 // Mobs_Update.cpp — реализация модуля мобов. Описание назначения и компромиссов — в Mobs_Update.h.
 //
+#include "utils/configs/Config_Mobs.h"
+#include "utils/configs/Config_Player.h"
+#include "utils/configs/Config_World.h"
 #include "utils/profiling/Profiler.h"
 #include "mobs/Mobs_Update.h"
 
@@ -13,7 +16,6 @@
 #include <cmath>
 #include <random>
 
-#include "utils/Config.h"
 #include "utils/logging/Logger.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "rendering/Shader.h"
@@ -99,9 +101,18 @@ namespace {
 
         const int bx = static_cast<int>(std::floor(x));
         const int bz = static_cast<int>(std::floor(z));
-        const int top = static_cast<int>(std::floor(center.y)) + 12;
-        const int bottom = static_cast<int>(std::floor(center.y)) - 24;
+        const int player_y = static_cast<int>(std::floor(center.y));
+        const World_Generator* generator = chunks.world_generator();
+        const int surface_y = generator ? generator->get_height(bx, bz) : player_y;
+        // При полёте ищем поверхность, если она далеко ниже игрока.
+        const int search_y = surface_y < player_y - 24 ? surface_y : player_y;
+        const int top = std::min(Config::world_max_y - 2, search_y + 12);
+        const int bottom = std::max(Config::world_min_y, search_y - 24);
         for (int y = top; y >= bottom; --y) {
+            const auto chunk = chunks.get_chunk_coords_for_world(bx, y, bz);
+            const auto head_chunk = chunks.get_chunk_coords_for_world(bx, y + 2, bz);
+            if (!chunks.is_chunk_loaded(chunk.x, chunk.y, chunk.z) ||
+                !chunks.is_chunk_loaded(head_chunk.x, head_chunk.y, head_chunk.z)) continue;
             const Block_Types ground = chunks.get_block_world(bx, y, bz);
             if (grass_only ? ground != Block_Types::Grass : !get_block_props(ground).is_solid) continue;
             const Block_Properties& above1 = get_block_props(chunks.get_block_world(bx, y + 1, bz));
@@ -239,6 +250,25 @@ std::vector<std::unique_ptr<Passive_Animal>>& Mobs_Update::passive_list(Passive_
 
 Mob_Result Mobs_Update::update_tick(float dt, const Mob_Player_View& player, Chunk_Manager& chunks) {
     Mob_Result result;
+    m_spawn_radius = player.spawn_radius;
+    m_difficulty = player.difficulty;
+    m_night = player.night;
+    const float limit = m_spawn_radius * 1.5f;
+    const auto far = [&](const auto& mob) {
+        const auto d = mob->get_position() - player.position;
+        return d.x * d.x + d.z * d.z > limit * limit;
+    };
+    // Сброс прицела до удаления объектов, на которые он может указывать.
+    m_target_kind = Target_Kind::None;
+    m_target_pig = nullptr; m_target_passive = nullptr;
+    m_target_horse = nullptr; m_target_hostile = nullptr;
+    const auto prune = [&](auto& list) {
+        list.erase(std::remove_if(list.begin(), list.end(), far), list.end());
+    };
+    prune(m_pigs); prune(m_cows); prune(m_sheep); prune(m_hostiles);
+    m_horses.erase(std::remove_if(m_horses.begin(), m_horses.end(),
+        [&](const auto& horse) { return horse.get() != m_ridden_horse && far(horse); }), m_horses.end());
+    update_hostiles(dt, player, chunks, result);
     if (!m_knights.empty()) {
         Knight_Player_View knight_view;
         knight_view.position = player.position;
@@ -937,7 +967,11 @@ bool Mobs_Update::summon_boss(Boss_Kind kind, const glm::vec3& around, Chunk_Man
             const int bottom = std::max(Config::world_min_y, static_cast<int>(std::floor(around.y)) - 24);
 
             for (int y = top; y >= bottom; --y) {
-                const Block_Types ground = chunks.get_block_world(bx, y, bz);
+                const auto chunk = chunks.get_chunk_coords_for_world(bx, y, bz);
+            const auto head_chunk = chunks.get_chunk_coords_for_world(bx, y + 2, bz);
+            if (!chunks.is_chunk_loaded(chunk.x, chunk.y, chunk.z) ||
+                !chunks.is_chunk_loaded(head_chunk.x, head_chunk.y, head_chunk.z)) continue;
+            const Block_Types ground = chunks.get_block_world(bx, y, bz);
                 if (!get_block_props(ground).is_solid) continue;
 
                 bool clear_column = true;
@@ -1219,8 +1253,8 @@ void Mobs_Update::spawn_missing_pigs(const glm::vec3& player_position, Chunk_Man
     for (int i = 0; i < missing; ++i) {
         std::optional<glm::vec3> spawn_position;
         for (int attempt = 0; attempt < k_spawn_attempts && !spawn_position; ++attempt) {
-            spawn_position = find_ground_spawn(player_position, Config::pig_spawn_radius_min,
-                                               Config::pig_spawn_radius_max, Spawn_Group::Animal, true,
+            spawn_position = find_ground_spawn(player_position, std::min(16.0f, m_spawn_radius * 0.7f),
+                                               m_spawn_radius, Spawn_Group::Animal, true,
                                                1.0f, chunks, s_rng);
         }
         if (!spawn_position) break; // подходящего места пока нет — следующий кадр
@@ -1247,7 +1281,7 @@ void Mobs_Update::spawn_missing_passive(Passive_Kind kind, const glm::vec3& play
     for (int i = 0; i < missing; ++i) {
         std::optional<glm::vec3> spawn_position;
         for (int attempt = 0; attempt < k_spawn_attempts && !spawn_position; ++attempt) {
-            spawn_position = find_ground_spawn(player_position, st.spawn_radius_min, st.spawn_radius_max,
+            spawn_position = find_ground_spawn(player_position, std::min(16.0f, m_spawn_radius * 0.7f), m_spawn_radius,
                                                Spawn_Group::Animal, true, 1.0f, chunks, s_rng);
         }
         if (!spawn_position) break;
@@ -1300,12 +1334,14 @@ void Mobs_Update::spawn_missing_hostiles(Hostile_Kind kind, const glm::vec3& pla
     for (const auto& hostile : m_hostiles) {
         if (hostile->kind() == kind) ++count;
     }
-    if (count >= st.min_count) return;
+    const int target_count = !m_night ? st.min_count :
+        (m_difficulty == 0 ? std::max(1, st.min_count / 2) : st.min_count * m_difficulty);
+    if (count >= target_count) return;
     if (m_hostile_respawn_cooldown[index] > 0.0f) return;
 
     // Одна попытка за тик: точка в кольце вокруг игрока, поверхность под ней и биом.
     const std::optional<glm::vec3> spawn_position = find_ground_spawn(
-        player_position, st.spawn_radius_min, st.spawn_radius_max, Spawn_Group::Hostile, false, 1.0f, chunks, s_rng);
+        player_position, std::min(16.0f, m_spawn_radius * 0.7f), m_spawn_radius, Spawn_Group::Hostile, false, 1.0f, chunks, s_rng);
     if (!spawn_position) return; // незагруженный чанк или неподходящий биом — в другой раз
     if (!natural_spawn_allowed(st.label, *spawn_position)) return;
 
@@ -1341,7 +1377,7 @@ void Mobs_Update::spawn_missing_horses(const glm::vec3& player_position, Chunk_M
 
     // Одна попытка за кадр: лошадь встаёт на траву (два свободных блока над ней) в подходящем биоме.
     const std::optional<glm::vec3> spawn_position = find_ground_spawn(
-        player_position, Config::horse_spawn_radius_min, Config::horse_spawn_radius_max,
+        player_position, std::min(16.0f, m_spawn_radius * 0.7f), m_spawn_radius,
         Spawn_Group::Horse, true, 1.02f, chunks, s_rng);
     if (!spawn_position) return;
 

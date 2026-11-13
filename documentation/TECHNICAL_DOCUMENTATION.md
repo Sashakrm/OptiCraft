@@ -12,7 +12,7 @@ OptiCraft --- воксельный 3D-движок/игровой прототи
 
 -   32×32×32 воксельными чанками;
 -   процедурной генерацией мира на OpenSimplex2S;
--   климатическими полями и 23 биомами;
+-   климатическими полями и 39 биомами;
 -   3D-пещерами и подземными биомами;
 -   плавающими небесными островами;
 -   детерминированной генерацией деревьев и декораций;
@@ -20,7 +20,7 @@ OptiCraft --- воксельный 3D-движок/игровой прототи
 -   сохранением изменённых чанков;
 -   асинхронной генерацией и пересборкой мешей;
 -   мешем, разбитым на Y-секции;
--   GPU frustum culling и консервативный temporal Hi-Z occlusion culling, а также CPU-обход связности секций;
+-   GPU frustum culling и консервативным Hi-Z occlusion culling; CPU проверяет frustum чанков;
 -   отдельными проходами для обычных блоков, флоры и жидкости;
 -   блоковым освещением;
 -   физикой игрока, raycast и редактированием блоков;
@@ -49,14 +49,14 @@ OptiCraft --- воксельный 3D-движок/игровой прототи
 
 По умолчанию, если тип сборки не указан, CMake выбирает `Release`.
 
-Опция:
+Опции (обе включены по умолчанию):
 
 ``` text
--DOPTICRAFT_NATIVE_ARCH=ON
+-DOPTICRAFT_NATIVE_ARCH=OFF
+-DOPTICRAFT_LTO=OFF
 ```
 
-добавляет `-march=native` на поддерживаемых non-MSVC сборках. Это
-ускоряет вычисления, но снижает переносимость бинарника на старые CPU.
+Первая отключает `-march=native` для переносимой сборки, вторая отключает LTO в Release. Tracy управляется опциями `OPTICRAFT_TRACY` и `OPTICRAFT_TRACY_PROFILER` в CMake.
 
 ### Сборка
 
@@ -144,14 +144,14 @@ Raycast.
 
 ### `src/utils/`
 
-`Config.h`; `logging/` --- `Logger.*`; `text/` --- `Json.*`,
+`configs/Config_*.h` (настройки по подсистемам); `logging/` --- `Logger.*`; `text/` --- `Json.*`,
 `Localization.*`, `Utf8.h`.
 
 ------------------------------------------------------------------------
 
 ## 4. Конфигурация мира
 
-Все основные константы находятся в `src/utils/Config.h`.
+Все основные константы находятся в `src/utils/configs/`.
 
   Параметр                           Значение
   ------------------------------ ------------
@@ -462,7 +462,7 @@ if world_y > surface_height:
 
 ## 11. Биомы
 
-Основной `World_Generator` регистрирует 23 биома:
+В `Biome_Id` определены 39 биомов:
 
 1.  Ocean
 2.  Shallow Water
@@ -487,6 +487,22 @@ if world_y > surface_height:
 21. Underground
 22. Deep Underground
 23. Flooded Underground
+24. Temperate Rainforest
+25. Swamp
+26. Mangrove Swamp
+27. Cherry Grove
+28. Beech Forest
+29. Aspen Grove
+30. Meadow
+31. Shrubland
+32. Badlands
+33. Cold Desert
+34. Snowy Taiga
+35. Alpine Meadow
+36. Cold Ocean
+37. Warm Ocean
+38. Coral Reef
+39. Mushroom Fields
 
 Обычные наземные биомы выбираются по расстоянию климатической колонки до
 диапазонов шести параметров:
@@ -1516,7 +1532,7 @@ damage    = 2 HP per block above safe height
 
 ### Голод и лечение
 
-Модель как в Minecraft 1.8 (`Player::update_hunger`, константы в `Config.h`): еда 0..20, насыщение,
+Модель как в Minecraft 1.8 (`Player::update_hunger`, константы в `src/utils/configs/Config_Player.h`): еда 0..20, насыщение,
 истощение. Естественное лечение зависит от сытости: при полной еде и насыщении быстрое
 (раз в 0.5 с, лечит `min(насыщение, 6) / 6` HP и столько же тратит истощения), при еде >= 18
 обычное (+1 HP раз в 4 с), ниже --- здоровье не восстанавливается. Еду едят удержанием ПКМ
@@ -1636,7 +1652,7 @@ Settings является push-state поверх Playing, поэтому игр
 1.  вычисляется sky color;
 2.  строятся view/projection и плоскости frustum;
 3.  Chunk_Manager возвращает resident candidates с reachability masks; GPU compute проверяет
-    секционные AABB по frustum/temporal Hi-Z и записывает indirect draw/task команды;
+    секционные AABB по frustum/Hi-Z текущего кадра и записывает indirect draw/task команды;
 5.  рисуются sun/moon;
 6.  рисуется world geometry;
 7.  при необходимости рисуется underwater overlay;
@@ -1700,7 +1716,7 @@ assets/worldgen/Islands/*
 `assets/worldgen/Classic/*.biome` и `assets/worldgen/Islands/*.biome`
 сохранены в assets.
 
-Однако основной `World_Generator` для текущего выбора 23 биомов
+Однако основной `World_Generator` для текущего выбора биомов
 использует встроенные `Biome_Definition`, а не парсер `Biome` этих
 файлов.
 
@@ -1879,7 +1895,7 @@ Renderer invalidates/upload cache
 
 При сопровождении проекта следует считать источниками истины:
 
-1.  `src/utils/Config.h` --- размеры и основные runtime constants.
+1.  `src/utils/configs/` --- размеры и основные runtime constants.
 2.  `src/world/generation/World_Generator.cpp/.h` --- текущая процедурная
     генерация.
 3.  `src/world/chunks/Chunk.cpp/.h` --- layout чанка и mesh builder.
@@ -2059,13 +2075,12 @@ streaming limits и mesh section calculations.
 -   пассивные: `Pig` (`Pig_AI`), `Passive_Animal` (корова, овца);
 -   лошадь: `Horse` (`Horse_AI`), приручение, езда, дикая лошадь пугается игрока;
 -   враги: `Hostile_Mob` с видом `Hostile_Kind` (`Zombie`, `Skeleton`, `Spider`). Параметры — в
-    `hostile_stats()` (`src/entities/hostile/Hostile_Mob.cpp`) и в `Config.h` (`*_attack_damage`,
+    `hostile_stats()` (`src/entities/hostile/Hostile_Mob.cpp`) и в `src/utils/configs/Config_Mobs.h` (`*_attack_damage`,
     `*_run_speed`, `*_detect_range`, `min_*_count`, `*_spawn_radius_*`).
 
 Враги:
 
--   спавнятся только в Survival (`Mobs_Update::set_hostiles_enabled`, ставится `Game` при
-    создании мира и переключении режима);
+-   появляются независимо от режима игры при подходящих биоме и освещении;
 -   видят игрока дистанцией `detect_range` (вдвое меньше, если он крадётся) и лучом через блоки;
     тревога поднимает врагов рядом;
 -   пауки видят игрока только ночью (`Mob_Player_View::night`);
@@ -2075,6 +2090,13 @@ streaming limits и mesh section calculations.
     mob_speed_bonus_per_speed)`, без потолка;
 -   паук в `Hostile_Context.prey_valid` (ближайшая живая лошадь в `spider_detect_range`) гонится за
     лошадью, а не за игроком, и бьёт её, когда она в досягаемости.
+
+Естественное появление и удаление:
+
+- Радиус поиска равен двум третям горизонтальной дальности прорисовки в блоках; точки выбираются в кольце от `min(16, 0.7 × радиус)` до этого радиуса. Для появления нужны загруженные чанки, поверхность, свободное место и подходящий биом; врагам также нужен уровень света не выше 3.
+- За пределами полной горизонтальной дальности прорисовки обычные животные и враги удаляются без дропа; лошадь под игроком сохраняется. Боссы и рыцари этой очисткой не затрагиваются. Лимиты вида освобождаются для новых мобов.
+- При высоком полёте поиск ориентируется на высоту сгенерированного рельефа, но появление всё равно требует загруженной поверхности. Изменённый рельеф или постройки могут отличаться от этой оценки.
+- Сложность в настройках внутри мира сохраняется в `options.txt` как общая настройка игры. Ночью низкая задаёт половину обычного лимита каждого вида врагов (минимум один), средняя — обычный, высокая — двойной. Днём используется обычный лимит; уменьшение лимита не удаляет существующих врагов.
 
 Лошадь и паук:
 
@@ -2098,7 +2120,7 @@ streaming limits и mesh section calculations.
     трезубца ещё `impulse_speed` (на суше), `impulse_speed_water` (в жидкости, если не задан — как
     `impulse_speed`) и `impulse_cooldown` (если не задан — `Config::tool_impulse_cooldown`);
 -   импульс срабатывает по ПКМ только в Survival и тратит 1 прочность (`Game::handle_tool_impulse`);
--   после удара моб неуязвим 0,4–0,5 с (`*_invulnerable_seconds` в `Config.h`): перезарядка оружия
+-   после удара моб неуязвим 0,4–0,5 с (`*_invulnerable_seconds` в `Config_Mobs.h`): перезарядка оружия
     меньше этого времени даёт пропущенные удары, при этом прочность всё равно тратится.
 
 Физика (общая для наземных мобов):

@@ -53,6 +53,7 @@
   "iso.busy": "The previous isometric view is still being saved",
 
   "options.title": "Options",
+  "options.difficulty": "Difficulty: {0}",
   "options.render_distance": "Render Dist",
   "options.flora_distance": "Flora Dist",
   "options.sensitivity": "Sensitivity",

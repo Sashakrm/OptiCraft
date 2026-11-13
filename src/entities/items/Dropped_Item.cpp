@@ -1,3 +1,7 @@
+#include "utils/configs/Config_Effects.h"
+#include "utils/configs/Config_Items.h"
+#include "utils/configs/Config_Mobs.h"
+#include "utils/configs/Config_World.h"
 #include "entities/items/Dropped_Item.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/blocks/Block_Types.h"

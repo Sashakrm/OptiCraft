@@ -10,9 +10,9 @@
 #ifndef OPTICRAFT_BREEDING_H
 #define OPTICRAFT_BREEDING_H
 
+#include "utils/configs/Config_Farming.h"
+#include "utils/configs/Config_Mobs.h"
 #include <algorithm>
-#include "utils/Config.h"
-
 struct Breeding_State {
     float grow_left = 0.0f;      // > 0 — детёныш; секунд до взросления
     float love_left = 0.0f;      // > 0 — готов к размножению (накормлен)

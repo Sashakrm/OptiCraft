@@ -5,6 +5,7 @@
 #ifndef OPTICRAFT_HASH_UTILS_H
 #define OPTICRAFT_HASH_UTILS_H
 
+#include "utils/configs/Config_World.h"
 #include <glm/glm.hpp>
 #include <cstddef>
 #include <functional>

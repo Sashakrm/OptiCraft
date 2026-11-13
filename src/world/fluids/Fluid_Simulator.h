@@ -17,6 +17,7 @@
 #ifndef OPTICRAFT_FLUID_SIMULATOR_H
 #define OPTICRAFT_FLUID_SIMULATOR_H
 
+#include "utils/configs/Config_World.h"
 #include "math/Hash_Utils.h"
 #include "world/blocks/Block_Types.h"
 

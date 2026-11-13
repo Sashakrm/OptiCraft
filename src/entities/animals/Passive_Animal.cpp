@@ -1,3 +1,5 @@
+#include "utils/configs/Config_Mobs.h"
+#include "utils/configs/Config_Physics.h"
 #include "entities/animals/Passive_Animal.h"
 #include "world/chunks/Chunk_Manager.h"
 #include <algorithm>

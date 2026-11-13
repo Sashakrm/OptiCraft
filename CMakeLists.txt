@@ -175,7 +175,17 @@ target_sources(${PROJECT_NAME} PRIVATE
         ${SRC_DIR}/rendering/atlas/Texture_Atlas.h
         ${SRC_DIR}/rendering/atlas/Atlas_Registry.h
 
-        ${SRC_DIR}/utils/Config.h
+        ${SRC_DIR}/utils/configs/Config_Camera.h
+        ${SRC_DIR}/utils/configs/Config_Capture.h
+        ${SRC_DIR}/utils/configs/Config_Effects.h
+        ${SRC_DIR}/utils/configs/Config_Farming.h
+        ${SRC_DIR}/utils/configs/Config_Items.h
+        ${SRC_DIR}/utils/configs/Config_Mobs.h
+        ${SRC_DIR}/utils/configs/Config_Physics.h
+        ${SRC_DIR}/utils/configs/Config_Player.h
+        ${SRC_DIR}/utils/configs/Config_Render.h
+        ${SRC_DIR}/utils/configs/Config_Window.h
+        ${SRC_DIR}/utils/configs/Config_World.h
         ${SRC_DIR}/math/Hash_Utils.h
         ${SRC_DIR}/utils/logging/Logger.h
         ${SRC_DIR}/math/Math_Helpers.h

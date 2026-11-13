@@ -1,6 +1,6 @@
 #include "core/game/Game.h"
 #include "utils/logging/Logger.h"
-#include "utils/Config.h"
+#include "utils/configs/Config_Window.h"
 
 
 int main() {

@@ -2,9 +2,9 @@
 // Created by noktemor on 28.03.2026.
 //
 
+#include "utils/configs/Config_Render.h"
 #include <glad/gl.h>
 #include "core/app/Window.h"
-#include "utils/Config.h"
 #include "utils/logging/Logger.h"
 
 

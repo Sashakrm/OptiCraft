@@ -242,7 +242,7 @@ SESSION_MODE=survival tools/profiling/capture_session.sh                        
 
 ### 9.6 Лимит мешера (Config)
 
-GPU-мешер больше не ограничен «64 чанка на кадр и 8 батчей в полёте». Параметры в `Config.h`:
+GPU-мешер больше не ограничен «64 чанка на кадр и 8 батчей в полёте». Параметры в `src/utils/configs/Config_Render.h`:
 
 - `gpu_mesher_target_ms` (2.0) — целевое время GPU на один батч; размер батча = `target / ms_per_chunk`, не больше 64;
 - `gpu_mesher_max_batches_in_flight` (2) — сколько батчей одновременно ждёт выполнения на GPU;

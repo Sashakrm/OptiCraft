@@ -15,12 +15,12 @@
 #ifndef OPTICRAFT_DROPPED_ITEM_H
 #define OPTICRAFT_DROPPED_ITEM_H
 
+#include "utils/configs/Config_Items.h"
 #include <functional>
 #include <glm/glm.hpp>
 #include <random>
 #include <vector>
 #include "entities/player/Inventory.h" // Item_Stack
-#include "utils/Config.h"
 #include "world/chunks/Chunk.h"        // Chunk_Vertex
 
 class Chunk_Manager;

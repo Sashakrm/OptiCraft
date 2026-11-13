@@ -67,6 +67,8 @@ struct Mob_Player_View {
     bool night = false;         // ночь: пауки нападают на игрока только ночью
     float sky_brightness = 1.0f; // 0..1: яркость неба по времени суток (под открытым небом свет = 15 * это)
     int night_light_floor = 0;   // ночной минимум света (8 при полной луне), см. Day_Night_Cycle
+    float spawn_radius = 50.0f;
+    int difficulty = 1;
     float horizontal_speed = 0.0f; // блоков/с: от скорости зависит урон удара по мобу
 };
 
@@ -111,7 +113,7 @@ public:
     void shutdown();     // выход из игры: clear() + сброс кэша моделей (порядок важен, см. выше)
     void reset_timers(); // новый мир: таймеры возрождения и атаки в ноль
 
-    // Враги появляются только в Survival. Выключение убирает уже бегающих врагов.
+    // Выключение спавна врагов также убирает уже существующих.
     void set_hostiles_enabled(bool enabled);
 
     // Какой биом в точке мира (Game отдаёт World_Generator). Нужен правилам спавна по биомам:
@@ -175,6 +177,9 @@ public:
     void render(const Shader& shader, const glm::mat4& view, const glm::mat4& projection, float ambient) const;
 
 private:
+    float m_spawn_radius = 50.0f;
+    int m_difficulty = 1;
+    bool m_night = false;
     enum class Target_Kind { None, Pig, Passive, Horse, Hostile, Boss, Knight };
 
     void spawn_missing_pigs(const glm::vec3& player_position, Chunk_Manager& chunks);

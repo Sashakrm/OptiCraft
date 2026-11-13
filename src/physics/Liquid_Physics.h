@@ -18,9 +18,8 @@
 #ifndef OPTICRAFT_LIQUID_PHYSICS_H
 #define OPTICRAFT_LIQUID_PHYSICS_H
 
+#include "utils/configs/Config_Physics.h"
 #include <glm/glm.hpp>
-
-#include "utils/Config.h"
 
 class Chunk_Manager;
 

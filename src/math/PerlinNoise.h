@@ -5,12 +5,11 @@
 #ifndef OPTICRAFT_PERLINNOISE_H
 #define OPTICRAFT_PERLINNOISE_H
 
+#include "utils/configs/Config_World.h"
 #include <vector>
 #include <cmath>
 #include <cstdint>
 #include <random>
-#include <utils/Config.h>
-
 class PerlinNoise {
 public:
     explicit PerlinNoise(std::uint32_t seed = Config::seed) {

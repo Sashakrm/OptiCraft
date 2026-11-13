@@ -3,11 +3,12 @@
 //
 
 
+#include "utils/configs/Config_Render.h"
+#include "utils/configs/Config_World.h"
 #include "utils/profiling/Profiler.h"
 #include "world/chunks/Chunk_Manager.h"
 #include "world/crafting/Smelting.h"
 #include "utils/logging/Logger.h"
-#include "utils/Config.h"
 #include "math/Math_Helpers.h"
 #include "rendering/atlas/Texture_Atlas.h"
 #include "rendering/Frustum.h"
@@ -62,6 +63,82 @@ namespace {
         const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(rx)) << 32) |
                                 static_cast<uint32_t>(rz);
         return static_cast<int64_t>(packed);
+    }
+
+    // Первичный небесный свет нового чанка. Вызывается на воркере, пока чанк принадлежит только ему.
+    //
+    // Раньше чанк приходил на главный поток с нулевым светом: первый меш рисовался тёмным, свет догонялся
+    // отложенным пересчётом колонки (две колонки за кадр, ближайшие первыми) и ещё одной сборкой меша. Пока до
+    // чанка не доходила очередь, участок оставался тёмным — появление чанка шло раньше его освещения.
+    // Теперь свет приходит вместе с чанком, поэтому первый меш уже освещён, а пересчёт колонки на главном потоке
+    // только уточняет его там, где оценка не совпала (см. recompute_sky_lighting).
+    //
+    // Правило то же, что у recompute_sky_lighting: клетка открыта небу (15), если она выше самого высокого блока
+    // колонки, не пропускающего солнце. Высота берётся из генератора (пока чанк с поверхностью не загружен, так
+    // делает и главный поток) и из собственной карты высот чанка. known_open_sky — чанк целиком выше рельефа.
+    void init_chunk_sky_light(Chunk& chunk, const World_Generator& generator, bool known_open_sky) {
+        const Dimension_Info& dim = generator.get_dimension();
+        if (!dim.has_sky_light) return;
+        std::array<bool, 6> faces{};
+        if (known_open_sky) {
+            chunk.set_all_sky_light(15u, faces);
+            return;
+        }
+        const int base_y = chunk.get_chunk_y() * Config::chunk_height;
+        const int chunk_top = base_y + Config::chunk_height - 1;
+        const int empty_height = Config::world_min_y - 1;
+        const int start_x = chunk.get_chunk_x() * Config::chunk_size;
+        const int start_z = chunk.get_chunk_z() * Config::chunk_size;
+        std::array<int, Config::chunk_size * Config::chunk_size> top{};
+        int min_top = std::numeric_limits<int>::max();
+        int max_top = std::numeric_limits<int>::min();
+        for (int z = 0; z < Config::chunk_size; ++z) {
+            for (int x = 0; x < Config::chunk_size; ++x) {
+                int column_top = empty_height;
+                if (dim.ground) {
+                    column_top = std::clamp(generator.get_height(start_x + x, start_z + z),
+                                            empty_height, Config::world_max_y);
+                }
+                const int local_top = chunk.get_column_top_opaque(x, z);
+                if (local_top >= 0) column_top = std::max(column_top, base_y + local_top);
+                top[static_cast<size_t>(z) * Config::chunk_size + x] = column_top;
+                min_top = std::min(min_top, column_top);
+                max_top = std::max(max_top, column_top);
+            }
+        }
+        if (min_top >= chunk_top) return;   // весь чанк ниже самой низкой поверхности: свет 0
+        if (max_top < base_y) {             // весь чанк выше самой высокой
+            chunk.set_all_sky_light(15u, faces);
+            return;
+        }
+        for (int z = 0; z < Config::chunk_size; ++z) {
+            for (int x = 0; x < Config::chunk_size; ++x) {
+                const int column_top = top[static_cast<size_t>(z) * Config::chunk_size + x];
+                for (int ly = 0; ly < Config::chunk_height; ++ly) {
+                    const int wy = base_y + ly;
+                    if (wy < Config::world_min_y || wy > Config::world_max_y) continue;
+                    if (wy > column_top) chunk.set_sky_light(x, ly, z, 15u);
+                }
+            }
+        }
+        chunk.compact_light();
+    }
+
+    // Есть ли ненулевой свет в слое чанка, обращённом к соседу с этой стороны (порядок: -X, +X, -Y, +Y, -Z, +Z).
+    // Меш соседа читает именно эти клетки.
+    bool light_face_nonzero(const Chunk_Light_Grid& light, int face) {
+        if (light.is_uniform()) return light.get(0, 0, 0) != 0;
+        const int axis = face >> 1;
+        const int fixed = (face & 1) ? Config::chunk_size - 1 : 0;
+        for (int a = 0; a < Config::chunk_size; ++a) {
+            for (int b = 0; b < Config::chunk_size; ++b) {
+                int x = fixed, y = a, z = b;
+                if (axis == 1) { x = a; y = fixed; z = b; }
+                else if (axis == 2) { x = a; y = b; z = fixed; }
+                if (light.get(x, y, z) != 0) return true;
+            }
+        }
+        return false;
     }
 
     // --- Освещение: общие быстрые примитивы для recompute_lighting и recompute_sky_lighting ---
@@ -572,6 +649,7 @@ void Chunk_Manager::disk_reader_loop() {
             chunk->recalculate_metadata();
             chunk->clear_modified();
             chunk->set_texture_atlas(atlas);
+            init_chunk_sky_light(*chunk, *generator, false);
 
             m_completed_jobs.push({job.position, job.generation_id, std::move(chunk)});
         }
@@ -750,6 +828,7 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                 generator->generate_prepared_chunk(build_job.prepared, build_job.prepared_index,
                     *build_job.chunk);
                 build_job.chunk->finish_generation(false, true);
+                init_chunk_sky_light(*build_job.chunk, *generator, false);
                 const auto region = Region_File::get(
                     world_file.get_region_path(generation_folder));
                 save_and_publish(build_job.job, std::move(build_job.chunk), region);
@@ -780,6 +859,7 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                                               generation_folder, chunk->get_blocks_mutable())) {
                         chunk->recalculate_metadata();
                         chunk->clear_modified();
+                        init_chunk_sky_light(*chunk, *generator, false);
                         m_completed_jobs.push({job.position, job.generation_id, std::move(chunk)});
                         continue;
                     }
@@ -788,6 +868,7 @@ void Chunk_Manager::worker_loop(bool mesh_dedicated) {
                                                            job.position.z)) {
                         chunk->get_blocks_mutable().fill(Block_Types::Air);
                         chunk->finish_generation(true);
+                        init_chunk_sky_light(*chunk, *generator, true);
                         save_and_publish(job, std::move(chunk), region);
                     } else {
                         fresh.push_back({job, std::move(chunk)});
@@ -2025,6 +2106,22 @@ void Chunk_Manager::collect_finished_chunks() {
                 }
             }
         }
+
+        // Небесный свет приходит вместе с чанком (init_chunk_sky_light), поэтому recompute_sky_lighting его уже не
+        // меняет и не помечает соседей: меши соседей брали у общей грани нулевой свет, пока этого чанка не было.
+        // Помечаем здесь: каждый загруженный сосед, на чью грань падает свет нового чанка, пересоберёт свет.
+        {
+            static constexpr glm::ivec3 kFaceOffset[6] = {
+                {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
+            };
+            const Chunk_Light_Grid& new_light = new_chunk->get_light_grid();
+            for (int face = 0; face < 6; ++face) {
+                Chunk* neighbor = get_chunk(result.position.x + kFaceOffset[face].x,
+                                            result.position.y + kFaceOffset[face].y,
+                                            result.position.z + kFaceOffset[face].z);
+                if (neighbor && light_face_nonzero(new_light, face)) neighbor->mark_light_dirty();
+            }
+        }
     }
 
     }
@@ -2449,9 +2546,17 @@ bool Chunk_Manager::set_block_world(int wx, int wy, int wz, Block_Types type, ui
     // придётся перелить после правки. Кэш остаётся прежним до обработки отложенной задачи.
     if (sky_opacity_changed) (void)sunlight_height_at(wx, wz);
     const bool geometry_changed = chunk->set_block(lx, ly, lz, type);
-    if (meta != 0) chunk->set_meta(lx, ly, lz, meta);
+    // Метаданные применяются ВСЕГДА, в том числе нулевые. Chunk::set_block у того же самого блока выходит
+    // сразу и метаданные не трогает, а при смене блока они уже сброшены. Раньше нулевые пропускались
+    // (if (meta != 0)), и "течение уровня 1 -> источник" (вода с двумя соседними источниками, правило
+    // бесконечного источника) не применялось: клетка оставалась течением, симуляция каждые 5 тиков заново
+    // решала сделать её источником, и так бесконечно. На каждом береговом чанке это были сотни правок в
+    // секунду, и каждая правка копировала чанк на запись на диск, помечала его изменённым, будила соседние
+    // жидкие клетки и срочно пересобирала меш чанка (на границе — и соседей).
+    const bool meta_changed = chunk->get_meta(lx, ly, lz) != meta;
+    if (meta_changed) chunk->set_meta(lx, ly, lz, meta);
     sync_block_entity(wx, wy, wz, old_type, type);
-    if (geometry_changed || meta != 0) request_urgent_mesh_rebuild(cx, cy, cz);
+    if (geometry_changed || meta_changed || meta != 0) request_urgent_mesh_rebuild(cx, cy, cz);
 
     // Правленая клетка видна мешам тех соседей, в чьей 3x3x3 окрестности она лежит: для граней —
     // шесть соседей, для AO — ещё рёбра и углы. Пересобираем каждого загруженного из них.
@@ -2675,14 +2780,24 @@ void Chunk_Manager::refresh_sunlight_height_column(int chunk_x, int chunk_z) {
         vertical_chunks[static_cast<size_t>(cy - Config::world_min_chunk_y)] = get_chunk(chunk_x, cy, chunk_z);
     }
 
+    if (has_ground && !column.generated_valid) {
+        for (int z = 0; z < Config::chunk_size; ++z) {
+            for (int x = 0; x < Config::chunk_size; ++x) {
+                const int wx = chunk_x * Config::chunk_size + x;
+                const int wz = chunk_z * Config::chunk_size + z;
+                column.generated[static_cast<size_t>(z) * Config::chunk_size + x] = static_cast<int16_t>(
+                    std::clamp(m_world_generator->get_height(wx, wz), empty_height, Config::world_max_y));
+            }
+        }
+        column.generated_valid = true;
+    }
+
     for (int z = 0; z < Config::chunk_size; ++z) {
         for (int x = 0; x < Config::chunk_size; ++x) {
             int generated_top = empty_height;
             int generated_surface_cy = std::numeric_limits<int>::min();
             if (has_ground) {
-                const int wx = chunk_x * Config::chunk_size + x;
-                const int wz = chunk_z * Config::chunk_size + z;
-                generated_top = std::clamp(m_world_generator->get_height(wx, wz), empty_height, Config::world_max_y);
+                generated_top = column.generated[static_cast<size_t>(z) * Config::chunk_size + x];
                 generated_surface_cy = floor_div_chunk(generated_top, Config::chunk_height);
             }
             // Когда чанк, содержащий сгенерированную поверхность, загружен, его карта

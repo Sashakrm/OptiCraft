@@ -15,6 +15,8 @@
 //   y: индекс UV-прямоугольника (15 бит)
 //   shaped: z = x0 | y0<<7 | z0<<14 | x1<<21, w = y1 | z1<<7 — бокс в 1/64 клетки (грань берётся из него)
 //   liquid: z = h0 | h1<<16, w = h2 | h3<<16 — высота угла c = fu + 2*fv, 16 бит (0..65535 = 0..1 клетки)
+//            y: к индексу прямоугольника добавлено (длина - 1) << 16 — верх воды дальних LOD-чанков сливается
+//            в полосу клеток по X (все четыре угла на одной высоте, один свет); у остальных граней 0
 layout(local_size_x = 64) in;
 
 layout(std430, binding = 0) readonly buffer Headers { uvec4 headers[]; };
@@ -171,6 +173,23 @@ uvec4 make_rec(int x, int y, int z, uint face, uint light, uint rect, uint zz, u
                  rect & 0x7FFFu, zz, ww);
 }
 
+// Слияние верхних граней воды в полосы по X (только дальние LOD-чанки, см. main). Состояние текущей
+// полосы лежит в глобальных переменных: одна инвокация разбирает одну строку клеток целиком.
+int g_run_x = 0;
+int g_run_len = 0;
+uint g_run_light = 0u;
+uint g_run_rect = 0u;
+uint g_run_height = 0u;
+
+void flush_top_run(uint handle, uint sec, int y, int z) {
+    if (g_run_len <= 0) return;
+    const uint hh = g_run_height | (g_run_height << 16u);
+    emit(handle, KIND_LIQUID, sec, uvec4(
+        uint(g_run_x) | (uint(y) << 5u) | (uint(z) << 10u) | (2u << 15u) | (g_run_light << 18u),
+        (g_run_rect & 0x7FFFu) | (uint(g_run_len - 1) << 16u), hh, hh));
+    g_run_len = 0;
+}
+
 // Высота поверхности жидкости в клетке — liquid_height в старом Chunk.cpp: если над клеткой та же
 // жидкость, она полная; иначе уровень amount/9 из метаданных (0 = источник, бит 3 = падающая вода).
 float liquid_height(uint hb, int x, int y, int z, uint id) {
@@ -208,6 +227,11 @@ void main() {
     const bool skip_flora = (info.w & 1u) != 0u;
     const uint sec = uint(y) >> 3u;
     if ((headers[hb].y & (1u << sec)) == 0u) return;
+    // Верх воды сливается в полосы по X только у дальних LOD-чанков: вблизи нужна волна на каждой клетке (её
+    // считает вершинный шейдер по мировой позиции вершины), а вдали она неразличима, зато плоская гладь
+    // океана — 1024 квада на секцию чанка — становится 32 квадами.
+    const bool merge_top = clamp(info.z, 1u, 4u) > 1u;
+    g_run_len = 0;
 
     for (int x = 0; x < 32; ++x) {
         const uint id = read_channel(hb, 0u, uint((y * 32 + z) * 32 + x));
@@ -264,6 +288,24 @@ void main() {
         }
 
         // --- Жидкость ---
+        // Сначала только видимость граней (шесть чтений соседей): клетка внутри толщи воды не даёт ни одной
+        // грани, и считать для неё высоты углов (до 16 чтений блоков плюс метаданные) незачем. Раньше высоты
+        // считались до проверки граней, и объём глубокого океана стоил мешеру столько же, сколько его поверхность.
+        uint visible = 0u;
+        for (int f = 0; f < 6; ++f) {                               // +X, -X, +Y, -Y, +Z, -Z
+            const bool pos = (f & 1) == 0;
+            if (!pos && positive_only) continue;
+            ivec3 n = cell;
+            n[f >> 1] += pos ? 1 : -1;
+            const uint nid = block_at(hb, n.x, n.y, n.z);
+            // Та же жидкость рядом: поверхности клеток совпадают по общим углам, стенок не нужно.
+            if (nid == id) continue;
+            // Грань видна, только если с той стороны воздух или прозрачный не жидкий блок.
+            if ((block_flags[nid] & FLAG_LIQUID_STATE) != 0u || (block_flags[nid] & FLAG_TRANSPARENT) == 0u) continue;
+            visible |= 1u << uint(f);
+        }
+        if (visible == 0u) continue;
+
         // Высоты поверхности в четырёх углах клетки: среднее по тем из четырёх клеток вокруг угла,
         // где та же жидкость (liquid_corner в старом Chunk.cpp). hc[cx][cz], cx/cz — смещение угла.
         float hc[2][2];
@@ -289,21 +331,30 @@ void main() {
         const uint h11 = height16(hc[1][1]);
 
         for (int f = 0; f < 6; ++f) {                               // +X, -X, +Y, -Y, +Z, -Z
-            const int axis = f >> 1;
-            const bool pos = (f & 1) == 0;
-            if (!pos && positive_only) continue;
+            if ((visible & (1u << uint(f))) == 0u) continue;
             ivec3 n = cell;
-            n[axis] += pos ? 1 : -1;
-            const uint nid = block_at(hb, n.x, n.y, n.z);
-            // Та же жидкость рядом: поверхности клеток совпадают по общим углам, стенок не нужно.
-            if (nid == id) continue;
-            // Грань видна, только если с той стороны воздух или прозрачный не жидкий блок.
-            if ((block_flags[nid] & FLAG_LIQUID_STATE) != 0u || (block_flags[nid] & FLAG_TRANSPARENT) == 0u) continue;
+            n[f >> 1] += (f & 1) == 0 ? 1 : -1;
             const uint rect = rect_lut[(id * 6u + uint(f)) * 256u] & 0x7FFFu;
             const uint light = light_at(hb, n.x, n.y, n.z);
             uint c0 = 0u, c1 = 0u, c2 = 0u, c3 = 0u;               // высоты углов fu + 2*fv
             if (f == 2) {                                           // верх: высота поверхности в углах
                 c0 = h00; c1 = h10; c2 = h01; c3 = h11;
+                // Плоская гладь продолжает полосу, если сосед слева в полосе той же жидкости имеет ту же высоту
+                // и тот же свет; любая другая клетка начинает новую полосу.
+                if (merge_top && c0 == c1 && c1 == c2 && c2 == c3) {
+                    if (g_run_len > 0 && g_run_x + g_run_len == x && g_run_height == c0 &&
+                        g_run_light == light && g_run_rect == rect) {
+                        ++g_run_len;
+                    } else {
+                        flush_top_run(handle, sec, y, z);
+                        g_run_x = x;
+                        g_run_len = 1;
+                        g_run_light = light;
+                        g_run_rect = rect;
+                        g_run_height = c0;
+                    }
+                    continue;
+                }
             } else if (f == 0) {                                    // +X: u вдоль Z
                 c2 = h10; c3 = h11;
             } else if (f == 1) {                                    // -X
@@ -316,4 +367,5 @@ void main() {
             emit(handle, KIND_LIQUID, sec, make_rec(x, y, z, uint(f), light, rect, c0 | (c1 << 16u), c2 | (c3 << 16u)));
         }
     }
+    flush_top_run(handle, sec, y, z);
 }

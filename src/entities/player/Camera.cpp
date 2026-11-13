@@ -2,8 +2,9 @@
 // Created by noktemor on 28.03.2026.
 //
 
+#include "utils/configs/Config_Camera.h"
+#include "utils/configs/Config_Player.h"
 #include "entities/player/Camera.h"
-#include "utils/Config.h"
 #include "math/Math_Helpers.h"
 
 #include <cmath>
